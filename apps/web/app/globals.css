@@ -1,0 +1,246 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------
+ * A+ TradePlay tokens. Dark is the default; light via data-theme.
+ * Values are "R G B" so Tailwind opacity modifiers work (bg-panel/80).
+ * ------------------------------------------------------------- */
+:root,
+[data-theme="dark"] {
+  --bg: 11 12 15;
+  --panel: 21 22 27;
+  --raised: 30 32 38;
+  --line: 38 40 48;
+  --card-line: 30 32 38;
+  --rail: 21 22 27;
+  --solid: 236 237 240;
+  --solid-ink: 11 12 15;
+  --ink: 236 237 240;
+  --mute: 139 144 154;
+  --up: 52 211 153;
+  --down: 251 113 133;
+  --warn: 255 138 76;
+  --accent: 242 193 78; /* A+ gold */
+  --accent-ink: 20 21 24;
+  --chart: 167 139 250; /* violet for curves */
+  --shadow: 0 0 0 0 transparent;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: 238 241 245;
+  --panel: 255 255 255;
+  --raised: 241 243 247;
+  --line: 229 231 235;
+  --card-line: 255 255 255;
+  --rail: 11 11 13;
+  --solid: 11 11 13;
+  --solid-ink: 255 255 255;
+  --ink: 18 19 22;
+  --mute: 107 114 128;
+  --up: 15 138 95;
+  --down: 200 48 77;
+  --warn: 194 65 12;
+  --accent: 154 111 0;
+  --accent-ink: 255 255 255;
+  --chart: 139 92 246;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 16px rgb(16 24 40 / 0.04);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  [data-theme="system"] {
+    --bg: 238 241 245;
+    --panel: 255 255 255;
+    --raised: 241 243 247;
+    --line: 229 231 235;
+    --card-line: 255 255 255;
+    --rail: 11 11 13;
+    --solid: 11 11 13;
+    --solid-ink: 255 255 255;
+    --ink: 18 19 22;
+    --mute: 107 114 128;
+    --up: 15 138 95;
+    --down: 200 48 77;
+    --warn: 194 65 12;
+    --accent: 154 111 0;
+    --accent-ink: 255 255 255;
+    --chart: 139 92 246;
+    --shadow: 0 1px 2px rgb(16 24 40 / 0.04), 0 4px 16px rgb(16 24 40 / 0.04);
+    color-scheme: light;
+  }
+}
+
+@theme inline {
+  --color-bg: rgb(var(--bg));
+  --color-panel: rgb(var(--panel));
+  --color-raised: rgb(var(--raised));
+  --color-line: rgb(var(--line));
+  --color-ink: rgb(var(--ink));
+  --color-mute: rgb(var(--mute));
+  --color-up: rgb(var(--up));
+  --color-down: rgb(var(--down));
+  --color-warn: rgb(var(--warn));
+  --color-accent: rgb(var(--accent));
+  --color-accent-ink: rgb(var(--accent-ink));
+  --color-rail: rgb(var(--rail));
+  --color-solid: rgb(var(--solid));
+  --color-solid-ink: rgb(var(--solid-ink));
+  --color-chart: rgb(var(--chart));
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-xl: 14px;
+  --radius-2xl: 22px;
+  --radius-3xl: 26px;
+}
+
+@layer base {
+  html, body { background: rgb(var(--bg)); color: rgb(var(--ink)); }
+  body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  button, [role="button"], summary { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible { outline: 2px solid rgb(var(--accent) / 0.7); outline-offset: 2px; border-radius: 6px; }
+  /* Grid items never force the page wider than the viewport. */
+  :where(.grid) > * { min-width: 0; }
+  ::selection { background: rgb(var(--accent) / 0.3); }
+  input, textarea, select { font: inherit; }
+}
+
+/* Numbers: mono with tabular figures everywhere they matter. */
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+@utility card {
+  border-radius: var(--radius-2xl);
+  border: 1px solid rgb(var(--card-line));
+  background: rgb(var(--panel));
+  box-shadow: var(--shadow);
+}
+
+/* High-contrast tile (black in light theme) — status cards, to-do icons */
+@utility solid-card {
+  border-radius: var(--radius-3xl);
+  background: rgb(var(--rail));
+  color: #F3F4F6;
+}
+
+@utility label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(var(--mute));
+}
+
+@utility input {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgb(var(--line));
+  background: rgb(var(--raised) / 0.6);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: rgb(var(--ink));
+  outline: none;
+  transition: border-color 0.15s;
+  &::placeholder { color: rgb(var(--mute) / 0.6); }
+  &:focus { border-color: rgb(var(--accent) / 0.6); }
+}
+
+@utility btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 38px;
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: opacity 0.15s, background-color 0.15s, border-color 0.15s, transform 0.05s;
+  &:active:not(:disabled) { transform: translateY(1px); }
+  &:disabled { opacity: 0.4; }
+}
+
+@utility btn-primary {
+  @apply btn;
+  background: rgb(var(--solid));
+  color: rgb(var(--solid-ink));
+  &:hover:not(:disabled) { opacity: 0.9; }
+}
+
+@utility btn-accent {
+  @apply btn;
+  background: rgb(var(--accent));
+  color: rgb(var(--accent-ink));
+  font-weight: 600;
+  &:hover:not(:disabled) { opacity: 0.9; }
+}
+
+@utility btn-ghost {
+  @apply btn;
+  border: 1px solid rgb(var(--line));
+  background: rgb(var(--panel));
+  &:hover:not(:disabled) { background: rgb(var(--raised)); }
+}
+
+@utility btn-danger {
+  @apply btn;
+  background: rgb(var(--down));
+  color: white;
+  font-weight: 600;
+}
+
+@utility chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  border: 1px solid rgb(var(--line));
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+/* Subtle gold glow used on the coach surfaces. */
+@utility coach {
+  border-radius: var(--radius-2xl);
+  border: 1px solid rgb(var(--chart) / 0.25);
+  background:
+    radial-gradient(120% 120% at 100% 0%, rgb(var(--chart) / 0.10), transparent 60%),
+    rgb(var(--panel));
+  box-shadow: var(--shadow);
+}
+
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgb(var(--down) / 0.5); } 100% { box-shadow: 0 0 0 10px rgb(var(--down) / 0); } }
+@utility recording { animation: pulse-ring 1.2s ease-out infinite; }
+
+/* ---------------------------------------------------------------
+ * Touch / mobile ergonomics
+ * ------------------------------------------------------------- */
+html { -webkit-tap-highlight-color: transparent; }
+a, button, [role="button"], input, select, textarea, label, summary { touch-action: manipulation; }
+/* iOS zooms into inputs under 16px — keep form text at 16px on touch screens */
+@media (pointer: coarse) {
+  input, textarea, select { font-size: 16px !important; }
+}
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+/* Space reserved above the floating mobile nav */
+@utility pb-nav {
+  padding-bottom: calc(7rem + env(safe-area-inset-bottom));
+}
+@keyframes sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@utility sheet-in { animation: sheet-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Round AI voice button */
+@keyframes voice-bar { 0%, 100% { height: 4px; } 50% { height: 16px; } }
+@keyframes voice-ring { 0% { box-shadow: 0 0 0 0 rgb(var(--down) / 0.45); } 100% { box-shadow: 0 0 0 12px rgb(var(--down) / 0); } }
+.voice-bar { height: 4px; animation: voice-bar 0.9s ease-in-out infinite; }
+.voice-ring { animation: voice-ring 1.3s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .voice-bar, .voice-ring { animation: none; height: 10px; } }
