@@ -1,4 +1,4 @@
-# A+ Tradeplay — Feature Spec v2.1
+# A+ Tradeplay — Feature Spec v2.2
 **25 Oct 2026 · closed, invite-only service · replaces ZekeAI spec v1.0**
 
 Inputs: *A+ Trading Edge — Copilot Configuration Spec* (PDF), pre-design research brief (25 Oct 2026), owner decisions below.
@@ -61,11 +61,20 @@ Next.js on Vercel · Supabase (Postgres + RLS by role, Auth + TOTP, Realtime, Va
 ## 7. Open items
 FundedIN firm identity · real Telegram plan prices · data/news vendors · legal opinion on investor model · per-firm confirmation of copy rules
 
-## 8. Build status (25 Oct 2026)
-- **Repo** `akhilmonanilkumar/aplus-tradeplay` — pnpm monorepo: `packages/engine` (34 tests), `apps/web` (Next.js 16, React 19, Tailwind 4, Geist + Geist Mono), `supabase/migrations`.
-- **Design** — the A+ TradePlay journal design system (soft bento, floating icon rail, gold accent, violet curves, light/dark/system via cookie). No descriptive filler text in the UI.
-- **Supabase** — new project `siuolrkuljeopkefvjhp` (not the trade-journal project). Staff need an aal2 (TOTP) session; investors read only their own rows. The first user to sign in becomes owner (`claim_owner`).
-- **Owner app routes** — / Command · /copilot · /calculator · /copy · /accounts · /investors · /payouts · /telegram · /trades · /analytics · /settings
-- **Investor routes** — /me · /me/accounts · /me/trades. Investors are invited by email from Investors → Invite (needs `SUPABASE_SERVICE_ROLE_KEY` on Vercel).
-- **Deploy** — new Vercel project `aplus-tradeplay` (root `apps/web`) replaces the journal on tradeplay.cloud. The old journal project is kept for rollback or a later subdomain.
-- **Not yet built** — live venue execution worker, TradingView chart and webhooks, the Telegram bot, the AI bias/outlook, and the news feed.
+## 8. Edge v1.1 — refined from the Trade Finder Pro master guide
+- **Method:** direction (HTF) → location (fresh POI in the correct half) → execution (liquidity sweep + 5M body-close shift, in London Q / NY Q, news clear, ≥3R to a real target, structural stop).
+- **Gate:** 7 boxes. HTF vs 15M disagreement = *wait* (not fail). Price outside the HTF dealing range = fail (structure breaking). Grade **A** = exactly one soft miss (no liquidity story, POI didn't break structure, quality concern, or non-A+ model) → base risk or skip. Two soft misses = no trade.
+- **Automatic no-trade:** daily cap hit, emotional, volatile/illiquid, shift ran away without pullback, random stop, mid-range, outside window, news window.
+- **Entry models:** A market shift → pullback (default) · B flip zone · C sweep → OB → FVG · D institutional precision (first tap swept) · E gold sweep (aggressive only if enabled, capped at A) · F Asia sweep (London window) · G counter-trend scalp (advanced, never A+) · H sniper/fractal (advanced, never A+) · I post-news (waits 30 min).
+- **Daily bias (5 steps):** HTF range → premium/discount → liquidity & magnet (PDH/PDL/EQH/EQL) → narrative → target + invalidation ("bias is wrong if price closes and holds beyond …"). No invalidation = no bias.
+- **Risk:** 0.5% base; A+ 1% only after 100 proven trades; daily loss cap 2%; challenge daily profit cap 1%; drawdown pause 8%; personal prop limits = half the firm's; equity throttle halves risk >3% below peak; prop buffer: one stop ≤ 50% of remaining daily room.
+- **Review:** compliance %, risk deviation, rule of 100 (change rules after 100 trades or 3 months, never before 30), if-then diagnosis.
+
+## 9. Build status (25 Oct 2026)
+- **Repo** `akhilmonanilkumar/aplus-tradeplay` — pnpm monorepo: `packages/engine` (63 tests), `apps/web` (Next.js 16), `supabase/migrations`.
+- **Design** — every App Design board rebuilt as a working screen (owner: Command, Copilot, Setups, Bias, Orders, Copy Engine, Accounts, Risk, Funded Challenges, Connections, Investors, Subscriptions, Broadcast, Payouts & Audit, Analytics, Journal, Discipline & Mood, News, Alerts, Settings; investor: Overview, My accounts, Insights, Trade log). Branding only from the A+ journal: gold accent, A+ mark, Geist fonts, soft radii, pill buttons; 4 accents × light/dark.
+- **Copilot chart** — Lightweight Charts with engine overlays; BTCUSDT.P = Binance mark price, gold = PAXG/USDT proxy (labelled) with a TradingView OANDA:XAUUSD tab.
+- **Supabase** — project `siuolrkuljeopkefvjhp`; staff need aal2 (TOTP); LIVE mode and payout approval need a fresh code; venue keys go to Supabase Vault (never withdrawal).
+- **Deploy** — Vercel project `aplus-tradeplay` (root `apps/web`, region bom1) replaces the journal on tradeplay.cloud.
+- **Env still to add on Vercel** — `SUPABASE_SERVICE_ROLE_KEY` (invites, TradingView webhook), `ANTHROPIC_API_KEY` (copilot agent answers).
+- **Not yet built** — execution worker (venue adapters, fills, reconciler), Telegram bot, calendar/news API feed, licensed XAUUSD feed.
