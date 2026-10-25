@@ -6,11 +6,37 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import type { Session } from "@supabase/supabase-js";
 import { configured, supabase } from "@/lib/supabase";
 import type { Role } from "@/lib/types";
-import { Logo, Mark } from "@/components/Brand";
+import { Logo } from "@/components/Brand";
 import { Icon } from "@/components/ui";
 import MfaGate from "@/components/MfaGate";
 
-type Me = { session: Session; role: Role; investorId: string | null; name: string };
+export type Settings = {
+  mode: "PAPER" | "LIVE";
+  kill_switch: boolean;
+  aggressive_entry_allowed: boolean;
+  counter_trend_allowed: boolean;
+  advanced_models_allowed: boolean;
+  equity_throttle: boolean;
+  prop_buffer: boolean;
+  auto_modes: Record<string, "Off" | "Paper" | "Confirm" | "Auto">;
+  webhook_token: string;
+  broadcast: { vip: boolean; free: boolean; instruments: Record<string, boolean>; events: Record<string, boolean> };
+  news_block_minutes: number;
+  news_medium_gold: boolean;
+  quiet_from: string;
+  quiet_to: string;
+};
+type Me = {
+  session: Session;
+  role: Role;
+  investorId: string | null;
+  name: string;
+  isStaff: boolean;
+  settings: Settings | null;
+  updateSettings: (patch: Partial<Settings>) => Promise<string | null>;
+  /** Fresh TOTP verification before a sensitive action; returns an error message or null. */
+  stepUp: (code: string) => Promise<string | null>;
+};
 const Ctx = createContext<Me | null>(null);
 export function useMe(): Me {
   const v = useContext(Ctx);
@@ -18,75 +44,100 @@ export function useMe(): Me {
   return v;
 }
 
-const I = {
-  home: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
-  copilot: "M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z",
-  calc: "M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM8 7h8M8 12h2M14 12h2M8 16h2M14 16h2",
-  copy: "M8 8h11v11H8zM5 16V5h11",
-  accounts: "M3 7h18v12H3zM3 11h18M7 15h3",
-  investors: "M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M22 19v-1a4 4 0 0 0-3-3.9M16 4.1a3 3 0 0 1 0 5.8",
-  payouts: "M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
-  telegram: "M21 4L3 11l6 2 2 6 3-4 5 4z",
-  journal: "M4 6h16M4 12h16M4 18h10",
-  analytics: "M4 20V10M10 20V4M16 20v-7M22 20H2",
-  settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z",
-  out: "M15 4h4v16h-4M10 17l5-5-5-5M15 12H3",
-  menu: "M4 6h16M4 12h16M4 18h16",
-};
+type NavItem = { h?: string; href?: string; l?: string; tl?: string; i?: string; cnt?: string };
 
-const STAFF_NAV = [
-  { href: "/", label: "Command", icon: I.home },
-  { href: "/copilot", label: "Copilot", icon: I.copilot },
-  { href: "/calculator", label: "Size", icon: I.calc },
-  { href: "/copy", label: "Copy engine", icon: I.copy },
-  { href: "/accounts", label: "Accounts", icon: I.accounts },
-  { href: "/investors", label: "Investors", icon: I.investors },
-  { href: "/payouts", label: "Payouts", icon: I.payouts },
-  { href: "/telegram", label: "Telegram", icon: I.telegram },
-  { href: "/trades", label: "Journal", icon: I.journal },
-  { href: "/analytics", label: "Analytics", icon: I.analytics },
-  { href: "/settings", label: "Settings", icon: I.settings },
+const OWNER_NAV: NavItem[] = [
+  { h: "Trade" },
+  { href: "/", l: "Command Center", tl: "Home", i: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" },
+  { href: "/copilot", l: "Live Copilot", tl: "Copilot", i: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z", cnt: "copilot" },
+  { href: "/setups", l: "Setups & Intel", i: "M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5" },
+  { href: "/bias", l: "AI Bias Report", i: "M6 3h9l4 4v14H6zM9 12h7M9 16h5M9 8h3" },
+  { href: "/orders", l: "Orders & Risk Calc", tl: "Orders", i: "M6 3h12v18H6zM9 7h6M9 11h1M14 11h1M9 15h1M14 15h1" },
+  { h: "Copy & Accounts" },
+  { href: "/copy", l: "Copy Engine", tl: "Copy", i: "M8 8h11v11H8zM5 16V5h11", cnt: "mode" },
+  { href: "/accounts", l: "Accounts", i: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 13h2", cnt: "accounts" },
+  { href: "/risk", l: "Risk Manager", i: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" },
+  { href: "/prop", l: "Funded Challenges", i: "M8 4h8v5a4 4 0 0 1-8 0zM8 6H4a3 3 0 0 0 4 4M16 6h4a3 3 0 0 1-4 4M12 13v4M8 21h8" },
+  { href: "/connections", l: "Connections", i: "M9 3v5M15 3v5M7 8h10v4a5 5 0 0 1-10 0zM12 17v4" },
+  { h: "Business" },
+  { href: "/investors", l: "Investors", tl: "Investors", i: "M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21a7 7 0 0 1 14 0M17 3.5a4 4 0 0 1 0 7M22 21a7 7 0 0 0-4-6.3", cnt: "investors" },
+  { href: "/subscriptions", l: "Subscriptions", i: "M4 6h16v12H4zM4 10h16M8 15h3" },
+  { href: "/broadcast", l: "Signal Broadcast", i: "M22 3L11 13M22 3l-7 18-4-8-8-4z" },
+  { href: "/admin", l: "Payouts & Audit", i: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z", cnt: "payouts" },
+  { h: "Insights" },
+  { href: "/analytics", l: "Analytics", i: "M4 20V10M10 20V4M16 20v-7M2 20h20" },
+  { href: "/journal", l: "Journal", i: "M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM5 17a3 3 0 0 1 3-3h11" },
+  { href: "/discipline", l: "Discipline & Mood", i: "M3 12h4l2-5 4 10 2-5h6" },
+  { href: "/news", l: "News & Calendar", i: "M4 6h16v15H4zM4 10h16M8 3v4M16 3v4" },
+  { h: "System" },
+  { href: "/alerts", l: "Alerts", i: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4", cnt: "alerts" },
+  { href: "/settings", l: "Settings", i: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4" },
+  { h: "Investor app" },
+  { href: "/me", l: "Preview as investor", i: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
 ];
-const STAFF_MOBILE = ["/", "/copilot", "/calculator", "/copy"];
 
-const INVESTOR_NAV = [
-  { href: "/me", label: "Overview", icon: I.home },
-  { href: "/me/accounts", label: "Accounts", icon: I.accounts },
-  { href: "/me/trades", label: "Trades", icon: I.journal },
+const INVESTOR_NAV: NavItem[] = [
+  { h: "Your money" },
+  { href: "/me", l: "Overview", tl: "Overview", i: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" },
+  { href: "/me/accounts", l: "My accounts", tl: "Accounts", i: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 13h2" },
+  { href: "/me/insights", l: "Insights & AI outlook", tl: "Insights", i: "M4 20V10M10 20V4M16 20v-7M2 20h20" },
+  { href: "/me/trades", l: "Trade log", tl: "Trades", i: "M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM5 17a3 3 0 0 1 3-3h11" },
 ];
+
+const TITLES: Record<string, string> = Object.fromEntries(
+  [...OWNER_NAV, ...INVESTOR_NAV].filter((n) => n.href).map((n) => [n.href!, n.l!]),
+);
+TITLES["/me"] = "Overview";
 
 const PUBLIC = [/^\/login/];
+const THEMES = ["gold", "ocean", "ember", "violet"] as const;
+type Accent = (typeof THEMES)[number];
 
-export type Theme = "dark" | "light" | "system";
-function ThemeToggle({ rail = false }: { rail?: boolean }) {
-  const [theme, set] = useState<Theme>("dark");
+function setCookie(k: string, v: string) {
+  document.cookie = `${k}=${v}; path=/; max-age=31536000; samesite=lax${location.protocol === "https:" ? "; secure" : ""}`;
+}
+
+function useLook() {
+  const [dark, setDark] = useState(true);
+  const [accent, setAccent] = useState<Accent>("gold");
   useEffect(() => {
-    const t = document.documentElement.dataset.theme as Theme | undefined;
-    if (t) set(t);
+    const c = document.documentElement.classList;
+    setDark(!c.contains("light"));
+    setAccent((THEMES.find((t) => c.contains(`t-${t}`)) ?? "gold") as Accent);
   }, []);
-  const next: Theme = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
-  const apply = () => {
-    document.documentElement.dataset.theme = next;
-    document.cookie = `theme=${next}; path=/; max-age=31536000; samesite=lax${location.protocol === "https:" ? "; secure" : ""}`;
-    set(next);
-  };
-  const icon =
-    theme === "dark" ? "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"
-    : theme === "light" ? "M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z"
-    : "M4 5h16v11H4zM8 20h8M12 16v4";
+  const apply = useCallback((d: boolean, a: Accent) => {
+    const c = document.documentElement.classList;
+    c.remove("dark", "light", ...THEMES.map((t) => `t-${t}`));
+    c.add(d ? "dark" : "light", `t-${a}`);
+    setCookie("mode", d ? "dark" : "light");
+    setCookie("accent", a);
+    setDark(d);
+    setAccent(a);
+  }, []);
+  return { dark, accent, setDark: (d: boolean) => apply(d, accent), setAccent: (a: Accent) => apply(dark, a) };
+}
+
+function Look() {
+  const { dark, accent, setDark, setAccent } = useLook();
   return (
-    <button onClick={apply} aria-label={`Theme: ${theme}`} title={`Theme: ${theme}`} className={rail ? "grid h-11 w-11 place-items-center rounded-[14px] text-[#9AA0AA] hover:bg-white/10 hover:text-white" : "grid h-10 w-10 place-items-center rounded-full bg-panel text-mute hover:text-ink"}>
-      <Icon d={icon} className={rail ? "h-5 w-5" : "h-4 w-4"} />
-    </button>
+    <>
+      <div className="tsw hide-m" role="group" aria-label="Colour theme">
+        {THEMES.map((t) => <button key={t} className={`sw sw-${t}${t === accent ? " on" : ""}`} aria-label={`Use ${t} theme`} onClick={() => setAccent(t)} />)}
+      </div>
+      <button className="mode" onClick={() => setDark(!dark)} aria-label={`Switch to ${dark ? "light" : "dark"} mode`}>
+        <Icon d={dark ? "M12 4V2M12 22v-2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M5.6 18.4l-1.4 1.4M19.8 4.2l-1.4 1.4M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z" : "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"} className="h-3.5 w-3.5" />
+        <span className="hide-m">{dark ? "Light" : "Dark"} mode</span>
+      </button>
+    </>
   );
 }
 
 function Splash({ text, action }: { text: string; action?: React.ReactNode }) {
   return (
-    <div className="grid min-h-screen place-items-center px-6">
-      <div className="flex flex-col items-center gap-4 text-center">
+    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+      <div className="col" style={{ alignItems: "center", gap: 14, textAlign: "center" }}>
         <Logo className="h-12 w-12" />
-        <p className="text-sm text-mute">{text}</p>
+        <p className="muted" style={{ fontSize: 13 }}>{text}</p>
         {action}
       </div>
     </div>
@@ -116,15 +167,45 @@ async function resolveRole(session: Session): Promise<{ role: Role | null; inves
   return { role, investorId, name: name || session.user.email?.split("@")[0] || "" };
 }
 
+function initials(name: string) {
+  return name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join("") || "A";
+}
+
+function Sidebar({ items, active, sub, counts, onNavigate }: { items: NavItem[]; active: (h: string) => boolean; sub: string; counts: Record<string, string>; onNavigate?: () => void }) {
+  return (
+    <aside className="side">
+      <div className="brand"><Logo /><div><b>A+ Tradeplay</b><small>{sub}</small></div></div>
+      {items.map((n, i) =>
+        n.h ? <div key={i} className="nav-h">{n.h}</div> : (
+          <Link key={n.href} href={n.href!} onClick={onNavigate} className={`nav-i${active(n.href!) ? " on" : ""}`} aria-current={active(n.href!) ? "page" : undefined}>
+            <Icon d={n.i!} />
+            <span>{n.l}</span>
+            {n.cnt && counts[n.cnt] ? <span className="cnt">{counts[n.cnt]}</span> : null}
+          </Link>
+        ),
+      )}
+      <div style={{ flex: 1 }} />
+      <button className="nav-i" style={{ background: "none", border: 0 }} onClick={() => supabase.auth.signOut()}>
+        <Icon d="M15 4h4v16h-4M10 17l5-5-5-5M15 12H3" /><span>Sign out</span>
+      </button>
+    </aside>
+  );
+}
+
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const [me, setMe] = useState<Me | null>(null);
+  const [base, setBase] = useState<Omit<Me, "settings" | "updateSettings" | "isStaff" | "stepUp"> | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [counts, setCounts] = useState<Record<string, string>>({});
   const [denied, setDenied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aal2, setAal2] = useState<boolean | null>(null);
-  const [more, setMore] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const [confirmLive, setConfirmLive] = useState(false);
+  const [stepCode, setStepCode] = useState("");
+  const [stepErr, setStepErr] = useState<string | null>(null);
   const isPublic = PUBLIC.some((r) => r.test(pathname));
 
   useEffect(() => {
@@ -140,27 +221,69 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!session) { setMe(null); return; }
+    if (!session) { setBase(null); return; }
     let live = true;
     resolveRole(session)
       .then((r) => {
         if (!live) return;
         if (!r.role) return setDenied(true);
-        setMe({ session, role: r.role, investorId: r.investorId, name: r.name });
+        setBase({ session, role: r.role, investorId: r.investorId, name: r.name });
       })
       .catch((e: Error) => live && setError(e.message));
     checkAal();
     return () => { live = false; };
   }, [session, checkAal]);
 
-  useEffect(() => setMore(false), [pathname]);
+  const isStaff = base?.role === "owner" || base?.role === "admin";
 
-  const isInvestor = me?.role === "investor";
+  const loadStaff = useCallback(async () => {
+    const today = new Date(Date.now() - 18 * 3_600_000).toISOString();
+    const [s, a, i, p, al, sig] = await Promise.all([
+      supabase.from("app_settings").select("*").maybeSingle(),
+      supabase.from("trading_accounts").select("id", { count: "exact", head: true }).eq("active", true),
+      supabase.from("investors").select("id", { count: "exact", head: true }),
+      supabase.from("payouts").select("id", { count: "exact", head: true }).eq("status", "pending"),
+      supabase.from("alert_log").select("id", { count: "exact", head: true }).eq("read", false),
+      supabase.from("signals").select("id", { count: "exact", head: true }).eq("state", "ARMED").gte("created_at", today),
+    ]);
+    if (s.data) setSettings(s.data as Settings);
+    setCounts({
+      accounts: a.count ? String(a.count) : "",
+      investors: i.count ? String(i.count) : "",
+      payouts: p.count ? String(p.count) : "",
+      alerts: al.count ? String(al.count) : "",
+      copilot: sig.count ? "GO" : "",
+      mode: (s.data as Settings | null)?.mode === "LIVE" ? "LIVE" : "PAPER",
+    });
+  }, []);
+
   useEffect(() => {
-    if (!me) return;
-    if (isInvestor && !pathname.startsWith("/me")) router.replace("/me");
-    if (!isInvestor && pathname.startsWith("/me")) router.replace("/");
-  }, [me, isInvestor, pathname, router]);
+    if (isStaff && aal2) loadStaff();
+  }, [isStaff, aal2, loadStaff, pathname]);
+
+  useEffect(() => setMenu(false), [pathname]);
+
+  useEffect(() => {
+    if (!base) return;
+    if (!isStaff && !pathname.startsWith("/me")) router.replace("/me");
+  }, [base, isStaff, pathname, router]);
+
+  /** Step-up: a fresh TOTP verification right before a sensitive change. */
+  const stepUp = useCallback(async (code: string) => {
+    const f = await supabase.auth.mfa.listFactors();
+    const totp = f.data?.totp.find((x) => x.status === "verified");
+    if (!totp) return "No verified authenticator";
+    const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId: totp.id, code });
+    return error ? error.message : null;
+  }, []);
+
+  const updateSettings = useCallback(async (patch: Partial<Settings>) => {
+    const { data, error } = await supabase.from("app_settings").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", 1).select("*").single();
+    if (error) return error.message;
+    setSettings(data as Settings);
+    loadStaff();
+    return null;
+  }, [loadStaff]);
 
   if (isPublic) return <>{children}</>;
   if (!configured) return <Splash text="Supabase environment variables are missing." />;
@@ -169,97 +292,86 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") window.location.replace("/login");
     return <Splash text="Redirecting…" />;
   }
-  const signOut = <button className="btn-ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>;
+  const signOut = <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>;
   if (error) return <Splash text={error} action={signOut} />;
   if (denied) return <Splash text="This login has no access yet." action={signOut} />;
-  if (!me || aal2 === null) return <Splash text="Loading…" />;
-  if (!isInvestor && !aal2) return <MfaGate onDone={checkAal} />;
+  if (!base || aal2 === null) return <Splash text="Loading…" />;
+  if (isStaff && !aal2) return <MfaGate onDone={checkAal} />;
 
-  const nav = isInvestor ? INVESTOR_NAV : STAFF_NAV;
-  const mobile = isInvestor ? nav : nav.filter((n) => STAFF_MOBILE.includes(n.href));
-  const overflow = isInvestor ? [] : nav.filter((n) => !STAFF_MOBILE.includes(n.href));
+  const investorView = pathname.startsWith("/me");
+  const items = investorView ? INVESTOR_NAV : OWNER_NAV;
+  const sideItems = investorView && isStaff ? [...INVESTOR_NAV, { h: "Owner" }, { href: "/", l: "Back to owner console", i: "M15 18l-6-6 6-6" }] : items;
   const active = (href: string) => (href === "/" || href === "/me" ? pathname === href : pathname.startsWith(href));
-  const today = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", timeZone: "Asia/Kolkata" });
+  const title = investorView && pathname === "/me" ? `Hi ${base.name.split(/[\s._-]/)[0]}` : TITLES[pathname] ?? TITLES["/" + pathname.split("/")[1]] ?? "A+ Tradeplay";
+  const tabs = items.filter((n) => n.tl);
+  const me: Me = { ...base, isStaff, settings, updateSettings, stepUp };
+  const live = settings?.mode === "LIVE";
 
   return (
     <Ctx.Provider value={me}>
-      <div className="min-h-screen md:p-4">
-        <div className="flex min-h-[calc(100vh-2rem)] gap-5">
-          <aside className="sticky top-4 hidden h-[calc(100vh-2rem)] w-[76px] shrink-0 flex-col items-center gap-1.5 overflow-y-auto no-scrollbar rounded-[26px] bg-rail py-4 md:flex">
-            <Link href={isInvestor ? "/me" : "/"} className="mb-3 grid h-11 w-11 shrink-0 place-items-center" aria-label="A+ Tradeplay">
-              <Mark className="h-9 w-9" />
-            </Link>
-            <nav className="flex flex-col items-center gap-1.5" aria-label="Main">
-              {nav.map((n) => (
-                <Link key={n.href} href={n.href} aria-label={n.label} aria-current={active(n.href) ? "page" : undefined}
-                  className={`group relative grid h-11 w-11 shrink-0 place-items-center rounded-[14px] transition ${active(n.href) ? "bg-[#F3F4F6] text-[#0B0B0D]" : "text-[#9AA0AA] hover:bg-white/10 hover:text-white"}`}>
-                  <Icon d={n.icon} className="h-5 w-5" />
-                  <span className="pointer-events-none absolute left-full z-50 ml-3 whitespace-nowrap rounded-lg bg-solid px-2.5 py-1 text-xs font-medium text-solid-ink opacity-0 shadow-lg transition group-hover:opacity-100">{n.label}</span>
-                </Link>
-              ))}
-            </nav>
-            <div className="flex-1" />
-            <ThemeToggle rail />
-            <button onClick={() => supabase.auth.signOut()} aria-label="Sign out" className="grid h-11 w-11 shrink-0 place-items-center rounded-[14px] text-[#9AA0AA] hover:bg-white/10 hover:text-white">
-              <Icon d={I.out} className="h-5 w-5" />
-            </button>
-          </aside>
-
-          <div className="flex min-w-0 flex-1 flex-col">
-            <header className="sticky top-0 z-20 flex items-center justify-between gap-3 bg-bg/85 px-4 pb-2.5 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-xl md:static md:bg-transparent md:px-2 md:py-1 md:backdrop-blur-none">
-              <Link href={isInvestor ? "/me" : "/"} className="flex items-center gap-2 md:hidden">
-                <Logo className="h-8 w-8" />
-                <span className="text-[15px] font-semibold tracking-tight">Tradeplay</span>
-              </Link>
-              <div className="hidden text-sm text-mute md:block">{today}</div>
-              <div className="flex items-center gap-2">
-                <div className="md:hidden"><ThemeToggle /></div>
-                <div className="flex h-10 items-center gap-2.5 rounded-full bg-panel pl-1.5 pr-4 shadow-[var(--shadow)]">
-                  <span className="grid h-7 w-7 place-items-center rounded-full bg-accent text-xs font-semibold text-accent-ink">{me.name.slice(0, 1).toUpperCase()}</span>
-                  <span className="hidden text-sm sm:inline">{me.name}</span>
-                  <span className="label hidden sm:inline">{me.role}</span>
-                </div>
-              </div>
-            </header>
-            <main className="pb-nav mx-auto w-full max-w-[1400px] flex-1 px-4 pt-3 sm:px-6 md:px-2 md:pb-10">{children}</main>
+      <div className="shell">
+        <Sidebar items={sideItems} active={active} sub={investorView ? "Investor app" : "Owner console"} counts={counts} />
+        {menu && (
+          <div className="sheet">
+            <div className="scrim" onClick={() => setMenu(false)} />
+            <Sidebar items={sideItems} active={active} sub={investorView ? "Investor app" : "Owner console"} counts={counts} onNavigate={() => setMenu(false)} />
           </div>
-        </div>
-      </div>
-
-      <nav className={`fixed inset-x-3 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-30 grid ${isInvestor ? "grid-cols-4" : "grid-cols-5"} rounded-[22px] bg-rail px-1 shadow-2xl md:hidden`} aria-label="Main">
-        {mobile.map((n) => (
-          <Link key={n.href} href={n.href} aria-current={active(n.href) ? "page" : undefined} className={`flex min-h-[60px] flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition active:scale-95 ${active(n.href) ? "text-white" : "text-[#9AA0AA]"}`}>
-            {n.href === "/calculator" ? (
-              <span className="grid h-10 w-10 place-items-center rounded-full bg-[#F2C14E] text-[#141518] shadow-lg"><Icon d={n.icon} className="h-5 w-5" /></span>
-            ) : (
-              <span className={`grid h-8 w-12 place-items-center rounded-full transition ${active(n.href) ? "bg-white/15" : ""}`}><Icon d={n.icon} className="h-5 w-5" /></span>
-            )}
-            {n.href !== "/calculator" && n.label}
-          </Link>
-        ))}
-        {isInvestor ? (
-          <button onClick={() => supabase.auth.signOut()} className="flex min-h-[60px] flex-col items-center justify-center gap-0.5 text-[10px] font-medium text-[#9AA0AA]">
-            <span className="grid h-8 w-12 place-items-center"><Icon d={I.out} className="h-5 w-5" /></span>
-            Sign out
-          </button>
-        ) : (
-          <button onClick={() => setMore((v) => !v)} aria-expanded={more} className={`flex min-h-[60px] flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${more || overflow.some((n) => active(n.href)) ? "text-white" : "text-[#9AA0AA]"}`}>
-            <span className={`grid h-8 w-12 place-items-center rounded-full ${more ? "bg-white/15" : ""}`}><Icon d={I.menu} className="h-5 w-5" /></span>
-            More
-          </button>
         )}
-      </nav>
-      {more && <div className="fixed inset-0 z-20 md:hidden" onClick={() => setMore(false)} aria-hidden />}
-      {more && (
-        <div className="sheet-in card fixed inset-x-3 bottom-[calc(5.4rem+env(safe-area-inset-bottom))] z-30 grid grid-cols-2 gap-1 p-2 shadow-2xl md:hidden">
-          {overflow.map((n) => (
-            <Link key={n.href} href={n.href} className={`flex items-center gap-3 rounded-xl px-3 py-3.5 text-sm hover:bg-raised ${active(n.href) ? "bg-raised font-medium" : ""}`}>
-              <Icon d={n.icon} /> {n.label}
+        <main className="main">
+          <header className="top">
+            <button className="ibtn menu-btn" aria-label="Menu" onClick={() => setMenu(true)}><Icon d="M4 6h16M4 12h16M4 18h16" /></button>
+            <div><h1>{title}</h1></div>
+            <div className="sp" />
+            {isStaff && !investorView && settings && (
+              <button className={`live-pill ${live ? "live" : "paper"}`} onClick={() => (live ? updateSettings({ mode: "PAPER" }) : setConfirmLive(true))} title="Execution mode">
+                <span className="dot" />{settings.mode}
+              </button>
+            )}
+            <Look />
+            {isStaff && !investorView && settings && (
+              <button className={`btn danger sm hide-m${settings.kill_switch ? " pri" : ""}`} onClick={() => updateSettings({ kill_switch: !settings.kill_switch })} aria-pressed={settings.kill_switch} aria-label="Global kill switch">
+                <Icon d="M12 3v8M6.3 6.3a8 8 0 1 0 11.4 0" className="h-3.5 w-3.5" />{settings.kill_switch ? "Kill switch ON" : "Kill switch"}
+              </button>
+            )}
+            <div className="ava" aria-label={`Signed in as ${base.name}`} title={base.session.user.email ?? ""}>{initials(base.name)}</div>
+          </header>
+          <div className="content">
+            {isStaff && settings?.kill_switch && !investorView && (
+              <div className="banner down"><span className="dot" /><b>Kill switch is on.</b> No orders are sent to any account.</div>
+            )}
+            {children}
+          </div>
+        </main>
+        <nav className="tabbar" aria-label="Main">
+          {tabs.map((n) => (
+            <Link key={n.href} href={n.href!} className={active(n.href!) ? "on" : ""} aria-current={active(n.href!) ? "page" : undefined}>
+              <Icon d={n.i!} />{n.tl}
             </Link>
           ))}
-          <button onClick={() => supabase.auth.signOut()} className="col-span-2 flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-mute hover:bg-raised">
-            <Icon d={I.out} /> Sign out
-          </button>
+        </nav>
+      </div>
+
+      {confirmLive && (
+        <div className="modal" role="dialog" aria-modal="true" aria-label="Switch to LIVE">
+          <div className="card">
+            <div className="ch"><h3>Switch to LIVE execution?</h3></div>
+            <p className="muted" style={{ fontSize: 13 }}>Copy orders will be routed to real accounts on every enabled route.</p>
+            <div className="fld" style={{ marginTop: 14 }}>
+              <label htmlFor="step">Authenticator code</label>
+              <div className="inp"><input id="step" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={stepCode} onChange={(e) => setStepCode(e.target.value.replace(/\D/g, ""))} autoFocus /></div>
+            </div>
+            {stepErr && <p className="down" style={{ fontSize: 12.5, marginTop: 8 }}>{stepErr}</p>}
+            <div className="row" style={{ marginTop: 16, justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => { setConfirmLive(false); setStepCode(""); setStepErr(null); }}>Cancel</button>
+              <button className="btn sell" disabled={stepCode.length !== 6} onClick={async () => {
+                const e = await stepUp(stepCode);
+                if (e) return setStepErr(e);
+                const u = await updateSettings({ mode: "LIVE" });
+                if (u) return setStepErr(u);
+                setConfirmLive(false); setStepCode(""); setStepErr(null);
+              }}>Go LIVE</button>
+            </div>
+          </div>
         </div>
       )}
     </Ctx.Provider>

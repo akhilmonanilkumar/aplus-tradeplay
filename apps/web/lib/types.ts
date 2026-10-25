@@ -31,7 +31,7 @@ export interface TradingAccount {
   hwm: number | null;
   risk_pct: number;
   copy_policy: CopyPolicy;
-  firm_rules: { daily_loss_pct?: number; max_loss_pct?: number; profit_target_pct?: number; split?: number };
+  firm_rules: { daily_loss_pct?: number; max_loss_pct?: number; profit_target_pct?: number; split?: number; copy_rule?: string; multiplier?: number; skip_below_min?: boolean };
   is_live: boolean;
   active: boolean;
   created_at: string;
@@ -71,6 +71,11 @@ export interface Trade {
   rule_breaks: string[];
   review: string | null;
   mood: number | null;
+  grade: "A+" | "A" | "B" | "C" | null;
+  plan_followed: boolean | null;
+  emotion: string | null;
+  lesson: string | null;
+  risk_pct: number | null;
   opened_at: string;
   closed_at: string | null;
 }
@@ -106,3 +111,24 @@ export interface TgMember {
 }
 export interface TgEvent { id: number; tg_member_id: string | null; type: string; chat: "vip" | "free"; amount_inr: number | null; at: string }
 export interface TgPost { id: string; destination: string; kind: string; views: number | null; reactions: number | null; clicks: number | null; status: string; sent_at: string | null; created_at: string }
+
+export interface Signal {
+  id: string;
+  instrument: string;
+  side: "long" | "short";
+  model: string;
+  session_window: string | null;
+  entry: number;
+  stop: number;
+  target: number;
+  rr: number | null;
+  grade: string;
+  gate: { n: number; label: string; status: "pass" | "warn" | "fail" | "pending"; reason: string }[];
+  state: string;
+  created_at: string;
+}
+export interface Order { id: string; signal_id: string | null; account_id: string; client_order_id: string; action: string; side: string; qty: number; entry: number; stop: number; target: number | null; risk_amount: number | null; status: string; reasons: string[]; fill_price: number | null; latency_ms: number | null; created_at: string; filled_at: string | null }
+export interface NewsEvent { id: string; at: string; currency: string; title: string; impact: "high" | "medium" | "low"; instruments: string[]; actual: string | null; forecast: string | null; previous: string | null }
+export interface SetupZone { id: string; instrument: string; side: "long" | "short"; timeframe: string; kind: string; top: number; bottom: number; fresh: boolean; liquidity_story: boolean; created_bos: boolean; alert_set: boolean; status: string; note: string | null; created_at: string }
+export interface AlertLog { id: number; title: string; body: string | null; severity: "info" | "warn" | "critical"; read: boolean; at: string }
+export interface CopyRoute { id: string; instrument: string; master_account_id: string; target_account_id: string; risk_pct: number | null; symbol: string | null; enabled: boolean }

@@ -33,16 +33,18 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-const THEMES = new Set(["dark", "light", "system"]);
+const ACCENTS = new Set(["gold", "ocean", "ember", "violet"]);
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // Reading headers makes every page dynamic so the per-request CSP nonce (proxy.ts) applies.
   await headers();
-  const t = (await cookies()).get("theme")?.value ?? "dark";
-  const theme = THEMES.has(t) ? t : "dark";
+  const jar = await cookies();
+  const mode = jar.get("mode")?.value === "light" ? "light" : "dark";
+  const a = jar.get("accent")?.value ?? "gold";
+  const accent = ACCENTS.has(a) ? a : "gold";
   return (
-    <html lang="en" data-theme={theme} className={`${GeistSans.variable} ${GeistMono.variable}`}>
-      <body className="min-h-screen font-sans">
+    <html lang="en" className={`zk ${mode} t-${accent} ${GeistSans.variable} ${GeistMono.variable}`}>
+      <body>
         <Shell>{children}</Shell>
       </body>
     </html>

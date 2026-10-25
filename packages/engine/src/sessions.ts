@@ -24,6 +24,10 @@ export interface SessionWindow {
 export const LONDON_Q: SessionWindow = { id: 'london_q', name: 'London Q', start: { hour: 2, minute: 0 }, end: { hour: 5, minute: 0 }, tz: NY };
 export const NY_Q: SessionWindow = { id: 'ny_q', name: 'NY Q', start: { hour: 7, minute: 0 }, end: { hour: 10, minute: 0 }, tz: NY };
 export const EDGE_WINDOWS = [LONDON_Q, NY_Q] as const;
+/** Reference windows (not trade windows): Asia builds the range London sweeps; London close retraces. */
+export const ASIA_Q: SessionWindow = { id: 'asia_q', name: 'Asia', start: { hour: 20, minute: 0 }, end: { hour: 24, minute: 0 }, tz: NY };
+export const LONDON_CLOSE: SessionWindow = { id: 'london_close', name: 'London close', start: { hour: 10, minute: 0 }, end: { hour: 12, minute: 0 }, tz: NY };
+export const ALL_WINDOWS = [ASIA_Q, LONDON_Q, NY_Q, LONDON_CLOSE] as const;
 
 export interface ZonedParts {
   year: number;

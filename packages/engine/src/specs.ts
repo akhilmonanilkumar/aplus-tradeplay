@@ -18,4 +18,20 @@ export const EDGE_RULES = {
   stopAfterLosses: 2,
   setAndForgetFirstN: 30,
   midBandPct: 5,
+  /** Model I: wait this long after a high-impact release before trading the reaction. */
+  postNewsWaitMinutes: 30,
+  /** Personal guardrails (Trade Finder Pro §10–11), tighter than any firm's. */
+  dailyLossCapPct: 2,
+  challengeDailyProfitCapPct: 1,
+  maxDrawdownPausePct: 8,
+  baseRiskPct: 0.5,
+  aPlusRiskPct: 1,
+  /** Variable risk (A+ 1%, A 0.5%) only once this many trades prove it. */
+  variableRiskAfterTrades: 100,
+  /** Rule of 100: change the plan only after 100 trades or 3 months; 30 is the bare minimum. */
+  minTradesBeforeRuleChange: 100,
+  minTradesBareMinimum: 30,
+  aggressiveEntryAllowed: false,
+  counterTrendAllowed: false,
+  advancedModelsAllowed: false,
 } as const;

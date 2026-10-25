@@ -155,7 +155,9 @@ export function premiumDiscount(rangeLow: number, rangeHigh: number, price: numb
   const eq = (rangeLow + rangeHigh) / 2;
   const pos = ((price - rangeLow) / (rangeHigh - rangeLow)) * 100;
   const zone: Zone = Math.abs(pos - 50) <= midBandPct ? 'mid' : pos < 50 ? 'discount' : 'premium';
-  return { eq, pos, zone };
+  /** Price beyond the dealing range: the range no longer applies (structure is breaking). */
+  const outside: 'below' | 'above' | null = price < rangeLow ? 'below' : price > rangeHigh ? 'above' : null;
+  return { eq, pos, zone, outside };
 }
 
 /**
