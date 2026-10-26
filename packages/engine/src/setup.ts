@@ -1,4 +1,4 @@
-import { equalLevels, fairValueGaps, isSweep, marketShift, pivots, premiumDiscount, structureBreaks, atr, type Candle, type Trend } from './smc.js';
+import { equalLevels, fairValueGaps, isSweep, marketShift, pivots, premiumDiscount, swingStructure, atr, type Candle, type Trend } from './smc.js';
 import { orderBlocks, previousDayLevels, sessionRange } from './zones.js';
 import { ASIA_Q } from './sessions.js';
 
@@ -60,7 +60,7 @@ export interface AnalyzeOptions {
 
 /** Dealing range from the latest HTF break: origin of the BOS → extreme reached after it. */
 export function htfRange(c: readonly Candle[]): { low: number; high: number; trend: Trend | null } | null {
-  const { breaks, trend } = structureBreaks(c, 3, 3);
+  const { breaks, trend } = swingStructure(c, 3, 3);
   const b = breaks[breaks.length - 1];
   if (!b) return null;
   if (b.direction === 'up') {
@@ -78,7 +78,7 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
   const price = last?.c ?? 0;
   const now = opts.now ?? (last ? last.t + 1 : Date.now());
   const hr = htf.length > 20 ? htfRange(htf) : null;
-  const poiTrend = poi.length > 20 ? structureBreaks(poi, 3, 3).trend : null;
+  const poiTrend = poi.length > 20 ? swingStructure(poi, 3, 3).trend : null;
   const pd = hr && hr.high > hr.low ? premiumDiscount(hr.low, hr.high, price) : null;
   const pdl = previousDayLevels(poi, now);
   const asiaRaw = sessionRange(poi, ASIA_Q, now - 12 * 3_600_000);

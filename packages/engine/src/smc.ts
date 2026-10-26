@@ -50,8 +50,9 @@ export interface StructureBreak {
 }
 
 /**
- * Break of structure / change of character using candle BODY closes through the last
- * confirmed swing. BOS continues the current trend; CHoCH is the first break against it.
+ * Internal structure: BOS / CHoCH on candle BODY closes through the last confirmed swing,
+ * however minor. Used where every break counts (order blocks that broke structure); the
+ * trend of a frame comes from `swingStructure`, which respects the protected levels.
  */
 export function structureBreaks(candles: readonly Candle[], left = 3, right = 3): { breaks: StructureBreak[]; trend: Trend | null } {
   const piv = pivots(candles, left, right);
@@ -79,6 +80,75 @@ export function structureBreaks(candles: readonly Candle[], left = 3, right = 3)
     }
   }
   return { breaks, trend };
+}
+
+/**
+ * SMC swing structure (the trend the HTF and POI frames report). The trend only changes on a
+ * body close through the protected level: in an uptrend the strong low the last bullish break
+ * started from, in a downtrend the strong high the last bearish break started from. Closes
+ * through minor swings inside a leg are internal structure and do not flip the trend. A
+ * continuation BOS needs a body close beyond the leg's extreme swing (the highest swing high
+ * since the last break in an uptrend), which moves the protected level to the pullback that
+ * preceded it. Before the first break, the first close through any confirmed swing sets it.
+ */
+export function swingStructure(candles: readonly Candle[], left = 3, right = 3): {
+  breaks: StructureBreak[];
+  trend: Trend | null;
+  /** Level whose body-close break would be the next CHoCH (strong low in an uptrend, strong high in a downtrend). */
+  protectedLevel: { price: number; index: number } | null;
+} {
+  const piv = [...pivots(candles, left, right)].sort((a, b) => a.confirmedAt - b.confirmedAt);
+  const breaks: StructureBreak[] = [];
+  let trend: Trend | null = null;
+  let protect: { price: number; index: number } | null = null;
+  let lastHigh: Pivot | null = null, lastLow: Pivot | null = null;
+  // Extreme swing of the current leg (pivots formed at or after the last break).
+  let legHigh: Pivot | null = null, legLow: Pivot | null = null;
+  let lastBreak = -1;
+  let pi = 0;
+
+  const lowest = (from: number, to: number) => { let k = from; for (let x = from; x <= to; x++) if (candles[x]!.l < candles[k]!.l) k = x; return { price: candles[k]!.l, index: k }; };
+  const highest = (from: number, to: number) => { let k = from; for (let x = from; x <= to; x++) if (candles[x]!.h > candles[k]!.h) k = x; return { price: candles[k]!.h, index: k }; };
+  const breakUp = (j: number, level: number, from: number) => {
+    breaks.push({ kind: trend === 'down' ? 'CHoCH' : 'BOS', direction: 'up', index: j, level, pivotIndex: from });
+    trend = 'up';
+    protect = lowest(from, j);
+    lastBreak = j; legHigh = null; legLow = null;
+  };
+  const breakDown = (j: number, level: number, from: number) => {
+    breaks.push({ kind: trend === 'up' ? 'CHoCH' : 'BOS', direction: 'down', index: j, level, pivotIndex: from });
+    trend = 'down';
+    protect = highest(from, j);
+    lastBreak = j; legHigh = null; legLow = null;
+  };
+
+  for (let j = 0; j < candles.length; j++) {
+    while (pi < piv.length && piv[pi]!.confirmedAt <= j) {
+      const p = piv[pi]!;
+      if (p.kind === 'high') {
+        lastHigh = p;
+        if (p.index >= lastBreak && (!legHigh || p.price > legHigh.price)) legHigh = p;
+      } else {
+        lastLow = p;
+        if (p.index >= lastBreak && (!legLow || p.price < legLow.price)) legLow = p;
+      }
+      pi++;
+    }
+    const c = candles[j]!.c;
+    if (trend === null) {
+      if (lastHigh && c > lastHigh.price && j > lastHigh.index) breakUp(j, lastHigh.price, lastHigh.index);
+      else if (lastLow && c < lastLow.price && j > lastLow.index) breakDown(j, lastLow.price, lastLow.index);
+    } else if (trend === 'up') {
+      const pr = protect as { price: number; index: number } | null;
+      if (pr && c < pr.price) breakDown(j, pr.price, pr.index);
+      else if (legHigh && c > legHigh.price && j > legHigh.index) breakUp(j, legHigh.price, legHigh.index);
+    } else {
+      const pr = protect as { price: number; index: number } | null;
+      if (pr && c > pr.price) breakUp(j, pr.price, pr.index);
+      else if (legLow && c < legLow.price && j > legLow.index) breakDown(j, legLow.price, legLow.index);
+    }
+  }
+  return { breaks, trend, protectedLevel: protect };
 }
 
 /** Liquidity sweep: wick through a level and close back on the original side. */

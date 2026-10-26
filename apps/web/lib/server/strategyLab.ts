@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  ASIA_Q, INSTRUMENTS, LONDON_Q, NY_Q, TF_MS, runSessionModel, scanSignals, simulate,
+  ASIA_Q, INSTRUMENTS, LONDON_Q, NY, NY_Q, TF_MS, runSessionModel, scanSignals, simulate, structureBreaks, swingStructure, zonedParts,
   type InstrumentId, type ScanTfs, type SessionModelParams, type StrategyParams, type Tf,
 } from "@aplus/engine";
 import { loadHistory } from "@/lib/server/feeds";
@@ -54,6 +54,29 @@ function row(id: string, label: string, trades: { signalAt: number; rNet: number
   const late = trades.filter((t) => t.signalAt >= mid).reduce((a, t) => a + t.rNet, 0);
   const pass = stats.n >= PASS.minTrades && (stats.profitFactor ?? 0) >= PASS.minPf && early > 0 && late > 0;
   return { id, label, trades: stats.n, winRate: r2(stats.winRate * 100), netR: r2(stats.netR), avgR: r2(stats.avgR), pf: stats.profitFactor !== null ? r2(stats.profitFactor) : null, maxDDR: r2(stats.maxDrawdownR), halves: [r2(early), r2(late)], pass };
+}
+
+const nyTime = (t: number) => { const p = zonedParts(t, NY); return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")} ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} NY`; };
+
+/** HTF and POI structure as the engine sees it now: swing (SMC, protected levels) next to internal. */
+export async function structureReport(id: InstrumentId) {
+  const def = INSTRUMENTS[id];
+  const frames = [def.htf, def.poi] as Tf[];
+  const out = await Promise.all(frames.map(async (tf) => {
+    const to = Date.now();
+    const set = await loadHistory(id, tf, to - (WARM[tf] ?? 15 * 86_400_000) * 2, to);
+    const c = set.candles.slice(-300);
+    const sw = swingStructure(c, 3, 3);
+    const internal = structureBreaks(c, 3, 3);
+    return {
+      tf, source: set.source, bars: c.length, lastClose: c[c.length - 1]?.c, lastBar: c.length ? nyTime(c[c.length - 1]!.t) : null,
+      swingTrend: sw.trend, internalTrend: internal.trend,
+      protectedLevel: sw.protectedLevel ? { price: sw.protectedLevel.price, at: nyTime(c[sw.protectedLevel.index]!.t) } : null,
+      swingBreaks: sw.breaks.slice(-6).map((b) => ({ kind: b.kind, dir: b.direction, level: b.level, at: nyTime(c[b.index]!.t) })),
+      internalBreaks: internal.breaks.slice(-6).map((b) => ({ kind: b.kind, dir: b.direction, level: b.level, at: nyTime(c[b.index]!.t) })),
+    };
+  }));
+  return { instrument: id, frames: out };
 }
 
 export async function strategyLab(id: InstrumentId, family: Family, days = 180) {
