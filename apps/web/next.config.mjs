@@ -15,6 +15,18 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   transpilePackages: ["@aplus/engine"],
+  async redirects() {
+    return [
+      { source: "/copilot", destination: "/desk/gold", permanent: false },
+      { source: "/setups", destination: "/desk/gold", permanent: false },
+      { source: "/orders", destination: "/desk/gold", permanent: false },
+      { source: "/news", destination: "/desk/gold", permanent: false },
+      { source: "/copy", destination: "/accounts", permanent: false },
+      { source: "/connections", destination: "/settings", permanent: false },
+      { source: "/subscriptions", destination: "/alerts", permanent: false },
+      { source: "/broadcast", destination: "/alerts", permanent: false },
+    ];
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "pnpm --dir ../../packages/engine build && next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@aplus/engine": "workspace:*",
@@ -15,7 +16,8 @@
     "lightweight-charts": "5.0.8",
     "next": "^16.4.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "server-only": "0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
@@ -24,6 +26,7 @@
     "@types/react-dom": "^19.0.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^4.3.3",
-    "typescript": "5.6.3"
+    "typescript": "5.6.3",
+    "vitest": "2.1.8"
   }
 }

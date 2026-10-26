@@ -1,19 +1,33 @@
 # A+ Tradeplay
 
-Private, invite-only trade copilot and managed copy-trading platform.
+Private desk for the firm's team: trade gold and bitcoin on one edge, manage own and investor accounts, and show investors how their money grows.
 
-- `packages/engine` — sizing (XAUUSD CFD, BTCUSDT.P perp, MCX Gold), A+ gate, sessions (NY-anchored, DST-safe), SMC structure, copy fan-out guard, fees (prop split, HWM), R statistics. `pnpm test`
-- `apps/web` — Next.js 16 owner app and investor portal (Supabase auth + RLS, TOTP required for staff).
-- `supabase/migrations` — schema, RLS, audit log, owner bootstrap.
+- `packages/engine` — instruments (XAUUSD CFD, XAUUSDT.P, BTCUSD CFD, BTCUSDT.P, BTCUSD spot), setup detector, A+ gate, sessions (NY-anchored, DST-safe), sizing, context analytics (OI regime, funding, basis, DXY, correlations, confluence), walk-forward backtester. `pnpm test`
+- `apps/web` — Next.js app: Dashboard, Gold / BTC desks, Gold / BTC labs, Autopilot, Accounts, Investors, P&L analytics, Telegram alerts, investor portal (`/me`). Market data, news, AI and Telegram run through server routes in `app/api`.
+- `supabase/migrations` — schema, RLS, audit log.
 
-## Env (`apps/web/.env.local`)
+## Data sources
 
-```
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=   # server only, for investor invites
-APP_URL=https://tradeplay.cloud
-```
+| What | Source | Key |
+|---|---|---|
+| BTCUSDT.P, XAUUSDT.P candles, ticks, funding, OI, L/S, taker flow, liquidations | Binance USDⓈ-M (Bybit / OKX fallback and cross-venue OI) | none |
+| BTCUSD spot / CFD reference | Coinbase (Kraken fallback); OANDA BTC_USD when keyed | none |
+| XAUUSD CFD | OANDA or Twelve Data; without a key the Binance XAU index (labelled approximate) | `OANDA_API_KEY` / `TWELVEDATA_API_KEY` |
+| Spot gold bid/ask | OANDA pricing, else Swissquote public quotes | optional |
+| DXY, US10Y, NQ, ES, silver, ETH, FX (correlations) | Yahoo Finance hourly | none |
+| Real yields · gold COT | FRED (DFII10) · CFTC disaggregated report | `FRED_API_KEY` · none |
+| Economic calendar · headlines | Forex Factory weekly export · Google News / CoinDesk / Cointelegraph / FXStreet RSS (+ Finnhub) | `FINNHUB_API_KEY` optional |
+| AI analyst, news read, reviews | OpenRouter | `OPENROUTER_API_KEY` |
+
+The TradingView tab on each desk embeds TradingView's own chart for the symbol set in Settings (your broker's feed). TradingView has no public market-data API; the engine chart uses the sources above.
+
+## Env
+
+See `apps/web/.env.example`.
+
+## Autopilot schedule
+
+`.github/workflows/autopilot.yml` calls `/api/autopilot/tick` every 5 minutes. Add repository secrets `AUTOPILOT_URL` and `AUTOPILOT_SECRET` (same value as the Vercel env var). Any external cron can call the same URL with `Authorization: Bearer $AUTOPILOT_SECRET`.
 
 ## Run
 
@@ -22,5 +36,3 @@ pnpm install
 pnpm test
 pnpm dev
 ```
-
-First signed-in user becomes owner (`claim_owner`). Investors are invited from Investors → Invite and land on `/me`.

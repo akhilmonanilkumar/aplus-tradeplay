@@ -12,12 +12,6 @@ import { Card, Chip, Empty, ErrorNote, Note, Seg, Table } from "@/components/ui"
 type Member = { user_id: string; role: string; display_name: string; created_at: string };
 type Audit = { id: number; at: string; actor: string | null; action: string; entity: string; entity_id: string | null };
 type Hook = { name: string; last_status: string | null; enabled: boolean };
-const RULE_POLICY: Record<string, { own: string; eval: string; investor: string }> = {
-  allowed: { own: "AUTO", eval: "AUTO", investor: "CONFIRM" },
-  own_only: { own: "AUTO", eval: "CONFIRM", investor: "BLOCKED" },
-  banned: { own: "MANUAL", eval: "MANUAL", investor: "BLOCKED" },
-};
-const PT: Record<string, "up" | "info" | "warn" | "down" | ""> = { AUTO: "up", CONFIRM: "info", MANUAL: "warn", PAPER: "", BLOCKED: "down" };
 
 function Health() {
   const [rows, setRows] = useState<{ n: string; ok: boolean | null; v: string }[]>([]);
@@ -115,7 +109,6 @@ export default function Admin() {
     const rule = a?.firm_rules?.copy_rule;
     return a && (rule === "banned" || rule === "own_only") ? `${a.venue}'s terms appear to restrict accounts run for a third party. Approve only after review.` : null;
   };
-  const venues = Array.from(new Set(accs.map((a) => a.venue)));
   const actor = (id: string | null) => (id ? (members.rows ?? []).find((m) => m.user_id === id)?.display_name || id.slice(0, 6) : "system");
 
   return (
@@ -153,19 +146,7 @@ export default function Admin() {
       </section>
 
       <section className="g12">
-        <div className="card flush s7" id="policy">
-          <div className="ch" style={{ padding: "14px 16px 0" }}><h3>Copy policy matrix</h3><span className="sp" /><span className="faint" style={{ fontSize: 12 }}>Default per firm copy rule · set per account in Accounts</span></div>
-          {venues.length === 0 ? <div style={{ padding: 16 }}><Empty>No venues yet</Empty></div> : (
-            <Table head={["Venue", "Master / sub", "Own eval", "Demo", "Investor-assigned"]}>
-              {venues.map((v) => {
-                const rule = accs.find((a) => a.venue === v && a.firm_rules?.copy_rule)?.firm_rules?.copy_rule ?? "allowed";
-                const p = v === "Breakout" ? { own: "MANUAL", eval: "MANUAL", investor: "MANUAL" } : RULE_POLICY[rule] ?? RULE_POLICY.allowed!;
-                return <tr key={v}><td><b style={{ fontWeight: 500 }}>{v}</b></td><td><Chip tone={PT[p.own]}>{p.own}</Chip></td><td><Chip tone={PT[p.eval]}>{p.eval}</Chip></td><td><Chip>PAPER</Chip></td><td><Chip tone={PT[p.investor]}>{p.investor}</Chip></td></tr>;
-              })}
-            </Table>
-          )}
-        </div>
-        <Card span={5} id="payouts" title="Payout approvals">
+        <Card span={12} id="payouts" title="Payout approvals">
           {pending.length === 0 && <span className="faint" style={{ fontSize: 12.5 }}>Nothing waiting.</span>}
           <div className="col" style={{ gap: 10 }}>
             {pending.map((p) => (

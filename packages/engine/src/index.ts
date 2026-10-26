@@ -13,3 +13,7 @@ export * from './bias.js';
 export * from './zones.js';
 export * from './risk.js';
 export * from './review.js';
+export * from './instruments.js';
+export * from './setup.js';
+export * from './context.js';
+export * from './backtest.js';

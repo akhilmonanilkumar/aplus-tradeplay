@@ -7,6 +7,7 @@ import type { Payout, Trade } from "@/lib/types";
 import { dateShort, money, num, pct } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Table } from "@/components/ui";
 import InvestorPicker from "@/components/InvestorPicker";
+import InvestorGrowth from "@/components/InvestorGrowth";
 
 type Wf = { k: string; v: string; p: number; c: string; tot?: boolean };
 function Waterfall({ rows }: { rows: Wf[] }) {
@@ -74,6 +75,8 @@ function Overview() {
             <div className="card s3"><div className="lbl">Current value · {d.accounts.length} account{d.accounts.length === 1 ? "" : "s"}</div><div className="kv lg" style={{ marginTop: 6 }}>{money(value)}</div><div className="faint" style={{ fontSize: 12 }}>open trades included</div></div>
             <div className="card s3"><div className="lbl">Accrued fee if closed today</div><div className="kv lg" style={{ marginTop: 6 }}>{money(accrued)}</div><div className="faint" style={{ fontSize: 12 }}>{managed.length ? `${pct(rate, 0)} × (value − HWM)` : "no managed account"}</div></div>
           </section>
+
+          <InvestorGrowth accounts={d.accounts} />
 
           <section className="g12">
             <Card span={6} title={lastHwm ? `${lastHwm.period} payout · ${acc(lastHwm.account_id ?? "")?.name ?? "managed"}` : "Managed account payout"} right={lastHwm ? status(lastHwm) : null}>

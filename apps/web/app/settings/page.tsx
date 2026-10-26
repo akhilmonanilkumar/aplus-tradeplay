@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRows } from "@/lib/useRows";
 import { useMe } from "@/components/Shell";
+import IntegrationsCard from "@/components/IntegrationsCard";
 import type { TradingAccount } from "@/lib/types";
 import { dateShort } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Note, Table, Toggle } from "@/components/ui";
@@ -99,7 +99,7 @@ export default function Settings() {
           <Srow t={me.session.user.email ?? "This device"} d="This device"><Chip tone="acc">Current</Chip></Srow>
           <Srow t="All other devices" d="Ends every other signed-in session"><button className="btn ghost sm" onClick={signOutOthers}>Sign out</button></Srow>
         </Card>
-        <Card span={6} title="API key vault" right={<Link className="btn sm" href="/connections">Add key</Link>}>
+        <Card span={6} title="Venue key vault" right={<Chip>Live execution · next release</Chip>}>
           {(creds.rows ?? []).length === 0 ? <Empty>No venue keys stored</Empty> : (
             <Table head={["Venue", "Key", "Permissions", "IP lock", "Rotated"]} right={[4]}>
               {(creds.rows ?? []).map((c) => (
@@ -109,6 +109,8 @@ export default function Settings() {
           )}
         </Card>
       </section>
+
+      <IntegrationsCard />
 
       <section className="g12">
         <Card span={7} title={<>Edge configuration {active && <Chip tone="acc">v{active.version}</Chip>}</>} right={<>
