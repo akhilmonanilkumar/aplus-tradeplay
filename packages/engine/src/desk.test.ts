@@ -195,6 +195,23 @@ describe('backtest', () => {
 });
 
 describe('setup detector', () => {
+  it('keeps the stop on the right side and at least a quarter 15M ATR away', () => {
+    const ltf = walk(12 * 24 * 12, Date.UTC(2026, 6, 6), TF_MS['5m'], 5, 4000);
+    const poi = agg(ltf, TF_MS['15m']), htf = agg(ltf, TF_MS['1h']);
+    let plans = 0;
+    for (let i = 400; i < ltf.length; i += 3) {
+      const T = ltf[i]!.t + TF_MS['5m'];
+      for (const side of ['long', 'short'] as const) {
+        const a = analyzeSetup(side, htf.filter((c) => c.t + TF_MS['1h'] <= T).slice(-300), poi.filter((c) => c.t + TF_MS['15m'] <= T).slice(-400), ltf.slice(i - 299, i + 1), { now: T, stopBuffer: () => 0.3 });
+        if (!a.suggest) continue;
+        plans++;
+        const risk = side === 'long' ? a.suggest.entry - a.suggest.stop : a.suggest.stop - a.suggest.entry;
+        expect(risk).toBeGreaterThanOrEqual(a.atr * 0.25 - 1e-9);
+      }
+    }
+    expect(plans).toBeGreaterThan(0);
+  });
+
   it('uses only the candles it is given and returns a coherent analysis', () => {
     const start = Date.UTC(2026, 6, 6);
     const ltf = walk(2000, start, TF_MS['5m'], 3, 60_000);

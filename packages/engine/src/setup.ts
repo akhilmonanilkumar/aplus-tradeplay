@@ -136,9 +136,15 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
   let after: SetupAnalysis['after'] = null;
   if (sweep && ms && ms.index !== null) {
     const ob = orderBlocks(ltf, 2, 2).filter((o) => o.direction === want && o.index >= sweep!.index - 3 && o.index <= ms.index!).pop();
-    const entry = ob ? (side === 'long' ? ob.top : ob.bottom) : ms.level;
+    let entry = ob ? (side === 'long' ? ob.top : ob.bottom) : ms.level;
+    // A zone beyond the sweep wick has no invalidation behind it: enter at the broken swing instead.
+    if (side === 'long' ? entry <= sweep.wick : entry >= sweep.wick) entry = ms.level;
     const buf = (opts.stopBuffer ?? (() => 0))(entry);
-    const stop = side === 'long' ? sweep.wick - buf : sweep.wick + buf;
+    let stop = side === 'long' ? sweep.wick - buf : sweep.wick + buf;
+    // Floor the risk at a quarter of the 15M ATR: a stop inside the noise is hit by spread alone
+    // and turns costs into several R.
+    const minRisk = Number.isFinite(a) ? a * 0.25 : 0;
+    if ((side === 'long' ? entry - stop : stop - entry) < minRisk) stop = side === 'long' ? entry - minRisk : entry + minRisk;
     // Nearest real level beyond the entry (ignoring noise within ¼R): never stretched to reach 3R.
     const pool = side === 'long'
       ? [{ v: pdl?.pdh, l: 'PDH' }, { v: hr?.high, l: 'Range high' }, { v: asia?.high, l: 'Asia high' }, ...liquidity.filter((x) => x.label === 'EQH').map((x) => ({ v: x.level, l: 'EQH' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '15M swing high' }))]

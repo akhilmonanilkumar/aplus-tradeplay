@@ -266,6 +266,8 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
 
   /** What a skipped order would have done: the backtester's fill rules, no caps or window close. */
   const counterfactual = (i: number, side: 'long' | 'short', entry: number, stop: number, target: number, costR: number): { outcome: SignalOutcome; rNet: number | null } => {
+    // A plan with the stop on the wrong side has no defined outcome.
+    if (side === 'long' ? stop >= entry || target <= entry : stop <= entry || target >= entry) return { outcome: 'pending', rNet: null };
     const after = ltf.slice(i + 1, i + 1 + 600);
     const rr = Math.abs(target - entry) / Math.abs(entry - stop);
     if (p.entryMode === 'shift_close') {
