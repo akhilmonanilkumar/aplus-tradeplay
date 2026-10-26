@@ -12,11 +12,11 @@ Private desk for the firm's team: trade gold and bitcoin on one edge, manage own
 |---|---|---|
 | BTCUSDT.P, XAUUSDT.P candles, ticks, funding, OI, L/S, taker flow, liquidations | Binance USDⓈ-M (Bybit / OKX fallback and cross-venue OI) | none |
 | BTCUSD spot / CFD reference | Coinbase (Kraken fallback); OANDA BTC_USD when keyed | none |
-| XAUUSD CFD | OANDA or Twelve Data; without a key the Binance XAU index (labelled approximate) | `OANDA_API_KEY` / `TWELVEDATA_API_KEY` |
+| XAUUSD CFD | Twelve Data (OANDA if keyed; not offered to Indian residents); without a key the Binance XAU index (labelled approximate) | `OANDA_API_KEY` / `TWELVEDATA_API_KEY` |
 | Spot gold bid/ask | OANDA pricing, else Swissquote public quotes | optional |
 | DXY, US10Y, NQ, ES, silver, ETH, FX (correlations) | Yahoo Finance hourly | none |
 | Real yields · gold COT | FRED (DFII10) · CFTC disaggregated report | `FRED_API_KEY` · none |
-| Economic calendar · headlines | Forex Factory weekly export · Google News / CoinDesk / Cointelegraph / FXStreet RSS (+ Finnhub) | `FINNHUB_API_KEY` optional |
+| Economic calendar · headlines | Forex Factory weekly export · Google News / CoinDesk / Cointelegraph RSS (+ Finnhub) | `FINNHUB_API_KEY` optional |
 | AI analyst, news read, reviews | OpenRouter | `OPENROUTER_API_KEY` |
 
 The TradingView tab on each desk embeds TradingView's own chart for the symbol set in Settings (your broker's feed). TradingView has no public market-data API; the engine chart uses the sources above.
