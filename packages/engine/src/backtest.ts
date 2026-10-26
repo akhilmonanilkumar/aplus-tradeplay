@@ -39,6 +39,8 @@ export interface StrategyParams {
   newsBlockMinutes: number;
   /** Box 2: enforce the premium/discount half of the HTF range. */
   requireCorrectHalf: boolean;
+  /** Box 1: trade in the HTF trend direction (false = counter-trend allowed; box 1 always passes). */
+  requireHtfTrend: boolean;
   /** Box 1: the 15M trend must agree with the HTF (false = HTF direction alone). */
   requireAlignment: boolean;
   /** Width of the no-trade band around equilibrium in % of the range (default: edge rule). */
@@ -65,6 +67,7 @@ export const DEFAULT_STRATEGY: StrategyParams = {
   costRate: null,
   newsBlockMinutes: 15,
   requireCorrectHalf: true,
+  requireHtfTrend: true,
   requireAlignment: true,
   midBandPct: null,
   entryMode: 'zone',
@@ -358,7 +361,7 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
         timing: { inWindow: true, newsClear, windowId },
         plan: { entry, stop, target, targetIsStructural: true, stopIsStructural: true },
         minRR: p.minRR, minStopPct, model: 'A', instrument: instrumentId,
-        config: { halfRequired: p.requireCorrectHalf, poiAlignRequired: p.requireAlignment },
+        config: { halfRequired: p.requireCorrectHalf, poiAlignRequired: p.requireAlignment, htfTrendRequired: p.requireHtfTrend },
       });
       const take = g.verdict === 'GO' || (p.allowGradeA && g.grade === 'A');
       const costR = costInR({ costRate }, entry, stop);

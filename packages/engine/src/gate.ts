@@ -59,6 +59,8 @@ export interface GateInput {
     postNewsWaitMinutes?: number;
     /** Box 1 needs the 15M to agree with the HTF (default true). False: HTF direction alone. */
     poiAlignRequired?: boolean;
+    /** Box 1 needs the trade in the HTF trend direction (default true). False: counter-trend allowed, box 1 always passes. */
+    htfTrendRequired?: boolean;
     /** Box 2 premium/discount rule (default true). False: the half is reported, not enforced. */
     halfRequired?: boolean;
   };
@@ -127,13 +129,15 @@ export function evaluateGate(g: GateInput): GateResult {
   // 1 — HTF and POI timeframe aligned with the trade
   {
     let status: BoxStatus, reason: string;
-    if (!g.htfTrend || !g.poiTfTrend) { status = 'pending'; reason = 'structure not established'; }
-    else if (g.htfTrend !== g.poiTfTrend && g.config?.poiAlignRequired !== false) { status = 'pending'; reason = `HTF ${g.htfTrend} vs 15M ${g.poiTfTrend} — wait for alignment`; }
+    const alignRequired = g.config?.poiAlignRequired !== false;
+    if (g.config?.htfTrendRequired === false) { status = 'pass'; reason = `HTF ${g.htfTrend ?? '—'} · 15M ${g.poiTfTrend ?? '—'} (trend not required)`; }
+    else if (!g.htfTrend || (alignRequired && !g.poiTfTrend)) { status = 'pending'; reason = 'structure not established'; }
+    else if (g.htfTrend !== g.poiTfTrend && alignRequired) { status = 'pending'; reason = `HTF ${g.htfTrend} vs 15M ${g.poiTfTrend} — wait for alignment`; }
     else if (g.htfTrend !== want) {
       if (model.counterTrend && cfg.counterTrend) { status = 'warn'; reason = `counter-trend ${g.side} (model ${modelId})`; softMisses.push('counter-trend'); }
       else { status = 'fail'; reason = `counter-trend ${g.side}`; }
     }
-    else { status = 'pass'; reason = `HTF ${g.htfTrend} · 15M ${g.poiTfTrend}${g.htfTrend !== g.poiTfTrend ? ' (15M not required)' : ''}`; }
+    else { status = 'pass'; reason = `HTF ${g.htfTrend} · 15M ${g.poiTfTrend ?? '—'}${g.htfTrend !== g.poiTfTrend ? ' (15M not required)' : ''}`; }
     boxes.push({ n: 1, id: 'htf_aligned', label: 'HTF aligned', status, reason });
   }
   // 2 — correct half of the range (mid-range = no trade)

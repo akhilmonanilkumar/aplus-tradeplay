@@ -169,7 +169,8 @@ export default function Lab() {
             <div className="between"><span style={{ fontSize: 12.5 }}>Take grade A (one soft miss)</span><Toggle on={p.allowGradeA} onChange={(v) => set("allowGradeA", v)} label="Allow grade A" /></div>
             <div className="between"><span style={{ fontSize: 12.5 }}>Require price in a 15M POI</span><Toggle on={p.requirePoi} onChange={(v) => set("requirePoi", v)} label="Require POI" /></div>
             <div className="between"><span style={{ fontSize: 12.5 }}>Require the correct half (premium / discount)</span><Toggle on={p.requireCorrectHalf} onChange={(v) => set("requireCorrectHalf", v)} label="Require correct half" /></div>
-            <div className="between"><span style={{ fontSize: 12.5 }}>Require 15M to agree with the HTF</span><Toggle on={p.requireAlignment} onChange={(v) => set("requireAlignment", v)} label="Require 15M alignment" /></div>
+            <div className="between"><span style={{ fontSize: 12.5 }}>Trade only with the HTF trend (no counter-trend)</span><Toggle on={p.requireHtfTrend} onChange={(v) => set("requireHtfTrend", v)} label="Require HTF trend" /></div>
+            <div className="between"><span style={{ fontSize: 12.5, opacity: p.requireHtfTrend ? 1 : 0.5 }}>…and the 15M trend must agree with the HTF</span><Toggle on={p.requireHtfTrend && p.requireAlignment} onChange={(v) => set("requireAlignment", v)} label="Require 15M alignment" /></div>
             <div className="between"><span className="lbl">Entry</span><Seg label="Entry" value={p.entryMode} onChange={(v) => set("entryMode", v)} options={[{ v: "zone", l: "Limit at zone" }, { v: "shift_close", l: "Shift close" }]} /></div>
             <div className="between"><span className="lbl">History</span><Seg label="Days" value={days} onChange={setDays} options={DAYS} /></div>
             <button className="btn pri block" onClick={run} disabled={!!status || !p.windows.length}>{status ? "Running…" : "Run backtest"}</button>

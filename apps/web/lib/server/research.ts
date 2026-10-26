@@ -16,6 +16,7 @@ export const VARIANTS: { id: string; label: string; params: Partial<StrategyPara
   { id: "gradeA", label: "+ grade A", params: { allowGradeA: true } },
   { id: "noHalf", label: "No premium/discount rule", params: { requireCorrectHalf: false } },
   { id: "htfOnly", label: "HTF trend only (15M may disagree)", params: { requireAlignment: false } },
+  { id: "noTrend", label: "Counter-trend allowed (no HTF trend rule)", params: { requireHtfTrend: false } },
   { id: "noPoi", label: "No 15M POI required", params: { requirePoi: false } },
   { id: "rr2", label: "Min R:R 2", params: { minRR: 2 } },
   { id: "shiftClose", label: "Enter at the shift close", params: { entryMode: "shift_close" } },

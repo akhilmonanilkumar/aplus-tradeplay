@@ -246,3 +246,25 @@ describe('copy engine sizing + guard', () => {
     expect(clientOrderId('sig-123456789', 'acc1')).not.toBe(clientOrderId('sig-123456789', 'acc2'));
   });
 });
+
+describe('gate box 1 switches', () => {
+  const base = {
+    side: 'short' as const, price: 105, range: { low: 90, high: 110 },
+    poi: { inside: true, fresh: true, trendAligned: true, liquidityStory: true, createdBos: true },
+    swept: true, shifted: true, timing: { inWindow: true, newsClear: true },
+    plan: { entry: 105, stop: 106, target: 100, targetIsStructural: true, stopIsStructural: true },
+  };
+  it('fails a counter-trend trade unless the HTF trend is not required', () => {
+    const on = evaluateGate({ ...base, htfTrend: 'up', poiTfTrend: 'up' });
+    expect(on.boxes[0]!.status).toBe('fail');
+    const noAlign = evaluateGate({ ...base, htfTrend: 'up', poiTfTrend: 'down', config: { poiAlignRequired: false } });
+    expect(noAlign.boxes[0]!.status).toBe('fail');
+    const off = evaluateGate({ ...base, htfTrend: 'up', poiTfTrend: 'up', config: { htfTrendRequired: false } });
+    expect(off.boxes[0]!.status).toBe('pass');
+    expect(off.verdict).toBe('GO');
+  });
+  it('does not wait for a 15M trend when alignment is not required', () => {
+    const g = evaluateGate({ ...base, htfTrend: 'down', poiTfTrend: null, config: { poiAlignRequired: false } });
+    expect(g.boxes[0]!.status).toBe('pass');
+  });
+});

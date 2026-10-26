@@ -188,6 +188,16 @@ describe('backtest', () => {
     for (const t of r.trades) if (t.outcome !== 'open') expect(t.rGross).toBeGreaterThanOrEqual(-1 - 1e-9);
   });
 
+  it('allows counter-trend setups only when the HTF trend is not required', () => {
+    const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
+    const htfKey = (r: ReturnType<typeof simulate>) => Object.keys(r.rejected).filter((k) => k.startsWith('HTF aligned'));
+    const alignOff = simulate('XAUUSD', data, scan, { requireAlignment: false });
+    expect(htfKey(alignOff).every((k) => k.includes('counter-trend'))).toBe(true);
+    const trendOff = simulate('XAUUSD', data, scan, { requireHtfTrend: false });
+    expect(htfKey(trendOff)).toEqual([]);
+    expect(trendOff.skipped.some((x) => x.fails.includes('HTF aligned'))).toBe(false);
+  });
+
   it('enters at the shift close in shift_close mode', () => {
     const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
     const r = simulate('XAUUSD', data, scan, { entryMode: 'shift_close', requirePoi: false, allowGradeA: true, requireCorrectHalf: false, minRR: 1.5 });
