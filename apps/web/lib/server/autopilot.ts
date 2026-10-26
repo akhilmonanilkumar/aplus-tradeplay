@@ -1,10 +1,10 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  ALL_WINDOWS, EDGE_WINDOWS, INSTRUMENTS, TF_MS, analyzeSetup, clientOrderId, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier,
+  ALL_WINDOWS, EDGE_WINDOWS, INSTRUMENTS, TF_MS, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
   sizePosition, stateFromSetup, type Candle, type GateResult, type InstrumentId, type SetupAnalysis,
 } from "@aplus/engine";
-import { loadCandles } from "@/lib/server/feeds";
+import { loadCandles, loadHistory } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
@@ -159,17 +159,20 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
         const allowA = cfg.filters?.allowGradeA === true;
         const tradeable = e.state === "ARMED" || (allowA && e.gate?.grade === "A" && !e.gate.blockers.length && e.gate.boxes.every((b) => b.status === "pass" || b.status === "warn"));
         let signalId: string | null = null;
-        if (tradeable && e.analysis.suggest && e.gate && (cfg.mode === "paper" || cfg.mode === "confirm" || cfg.mode === "auto")) {
-          if (settings?.kill_switch) action = "blocked: kill switch";
-          else {
-            const p = e.analysis.suggest;
-            const sig = await db.from("signals").insert({
-              instrument: cfg.instrument, side: e.side, model: "A", session_window: e.window, entry: p.entry, stop: p.stop, target: p.target,
-              rr: e.gate.rr, grade: e.gate.grade, gate: e.gate.boxes, state: "ARMED", edge_version: "3.0", source: "autopilot",
-            }).select("id").single();
-            if (sig.error) throw new Error(sig.error.message);
-            signalId = sig.data.id as string;
-            action = await queue(db, cfg, e, signalId);
+        // Every tradeable setup goes into the bot ledger (its outcome is tracked on candles);
+        // orders are only queued in the modes that trade, and never under the kill switch.
+        if (tradeable && e.analysis.suggest && e.gate) {
+          const p = e.analysis.suggest;
+          const sig = await db.from("signals").insert({
+            instrument: cfg.instrument, side: e.side, model: "A", session_window: e.window, entry: p.entry, stop: p.stop, target: p.target,
+            rr: e.gate.rr, grade: e.gate.grade, gate: e.gate.boxes, state: "ARMED", edge_version: "3.0", source: "autopilot",
+            outcome: "pending", meta: { mode: cfg.mode, targetLabel: p.targetLabel, dataSource: e.source, killSwitch: !!settings?.kill_switch },
+          }).select("id").single();
+          if (sig.error) throw new Error(sig.error.message);
+          signalId = sig.data.id as string;
+          action = "signal logged";
+          if (cfg.mode === "paper" || cfg.mode === "confirm" || cfg.mode === "auto") {
+            action = settings?.kill_switch ? "signal logged · kill switch: no orders" : await queue(db, cfg, e, signalId);
           }
         }
         if (cfg.events.includes(e.state) || (tradeable && cfg.events.includes("ARMED"))) {
@@ -199,7 +202,54 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
     }
   }
+
+  try {
+    const n = await trackSignals(db);
+    if (n) out.push({ instrument: "LEDGER", state: "TRACKED", action: `${n} signal outcome${n === 1 ? "" : "s"} updated` });
+  } catch (err) {
+    out.push({ instrument: "LEDGER", state: "ERROR", action: (err as Error).message });
+  }
   return { results: out, selector };
+}
+
+/**
+ * Bot ledger: resolve every open autopilot/selector signal against its entry-TF candles
+ * (fill, ran away, expired, then stop or target), independent of any account.
+ */
+async function trackSignals(db: SupabaseClient): Promise<number> {
+  const open = await db.from("signals").select("id, instrument, side, entry, stop, target, created_at, outcome")
+    .in("source", ["autopilot", "selector"]).in("outcome", ["pending", "filled"])
+    .gte("created_at", new Date(Date.now() - 7 * 86_400_000).toISOString()).limit(200);
+  if (open.error) throw new Error(open.error.message);
+  let updated = 0;
+  const byInst = new Map<InstrumentId, typeof open.data>();
+  for (const s of open.data ?? []) {
+    if (!(s.instrument in INSTRUMENTS)) continue;
+    byInst.set(s.instrument as InstrumentId, [...(byInst.get(s.instrument as InstrumentId) ?? []), s]);
+  }
+  for (const [id, list] of byInst) {
+    const def = INSTRUMENTS[id];
+    const tfMs = TF_MS[def.ltf];
+    const oldest = Math.min(...list.map((s) => Date.parse(s.created_at)));
+    let candles = (await loadCandles(id, def.ltf, 300)).candles;
+    if (!candles.length || candles[0]!.t > oldest - tfMs) candles = (await loadHistory(id, def.ltf, oldest - tfMs, Date.now())).candles;
+    for (const s of list) {
+      const plan = { side: s.side as "long" | "short", entry: Number(s.entry), stop: Number(s.stop), target: Number(s.target), createdAt: Date.parse(s.created_at) };
+      const r = resolveSignal(plan, candles, tfMs);
+      if (r.outcome === s.outcome) continue;
+      const cost = r.resultR !== null ? costInR(def, plan.entry, plan.stop) : 0;
+      const upd = await db.from("signals").update({
+        outcome: r.outcome,
+        filled_at: r.filledAt ? new Date(r.filledAt).toISOString() : null,
+        closed_at: r.closedAt ? new Date(r.closedAt).toISOString() : null,
+        exit_price: r.exit,
+        result_r: r.resultR,
+        net_r: r.resultR !== null ? Number((r.resultR - cost).toFixed(3)) : null,
+      }).eq("id", s.id).eq("outcome", s.outcome);
+      if (!upd.error) updated++;
+    }
+  }
+  return updated;
 }
 
 async function queue(db: SupabaseClient, cfg: AutopilotConfig, e: Evaluation, signalId: string): Promise<string> {

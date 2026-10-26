@@ -14,7 +14,7 @@ import SelectorCard from "@/components/SelectorCard";
 
 const MODES: { v: AutopilotMode; l: string; d: string }[] = [
   { v: "off", l: "Off", d: "Nothing runs" },
-  { v: "alerts", l: "Alerts", d: "Telegram on state changes" },
+  { v: "alerts", l: "Alerts", d: "Telegram on state changes; tradeable setups go to the Bot log" },
   { v: "paper", l: "Paper", d: "Alerts + paper orders filled on live candles" },
   { v: "confirm", l: "Confirm", d: "Alerts + orders that wait for your tap" },
   { v: "auto", l: "Auto", d: "Live adapters next release — acts as Confirm" },
@@ -62,7 +62,7 @@ export default function Autopilot() {
       {me.settings?.kill_switch && <Note tone="down">Kill switch is on: autopilot still evaluates and alerts, but creates no orders.</Note>}
       <Card title="How autopilot runs" right={<button className="btn pri sm" onClick={tick} disabled={busy}>{busy ? "Running…" : "Run a pass now"}</button>}>
         <p className="muted" style={{ fontSize: 12.5 }}>
-          Every 5 minutes a scheduler calls <span className="mono">/api/autopilot/tick</span> with <span className="mono">AUTOPILOT_SECRET</span>. Each pass runs the same detector and A+ gate as the desks on server-side candles, logs every state change below, sends Telegram on the events you pick, and in Paper mode fills and closes orders against live candles (stop checked before target). Nothing acts twice on the same state. The selector then ranks the same evaluations across both desks.
+          Every 5 minutes a scheduler calls <span className="mono">/api/autopilot/tick</span> with <span className="mono">AUTOPILOT_SECRET</span>. Each pass runs the same detector and A+ gate as the desks on server-side candles, logs every state change below, sends Telegram on the events you pick, and in Paper mode fills and closes orders against live candles (stop checked before target). Nothing acts twice on the same state. The selector then ranks the same evaluations across both desks. Every tradeable setup either of them finds is written to the <a href="/bot">Bot log</a>, where its fill, stop or target is tracked on candles.
         </p>
       </Card>
 

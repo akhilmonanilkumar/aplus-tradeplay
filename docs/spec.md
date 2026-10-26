@@ -103,3 +103,10 @@ Scope change from the owner: the platform is now the firm's own tool (team trade
 - **Execution layer:** `apps/web/lib/server/execution.ts` defines `TradeTicket` and `Executor`. Telegram is the only destination today; broker/prop-firm API or webhook adapters implement `Executor` and receive the same ticket.
 - **Preview:** `/api/autopilot/tick?preview=selector` (staff or `AUTOPILOT_SECRET`) and the Preview button score the board without acting.
 - **Settings:** `app_settings.integrations.selector` (no schema change), edited on the Autopilot page.
+
+## 12. Bot log and TradingView removal (26 Oct 2026)
+
+- **Bot ledger:** every tradeable setup the autopilot (any mode except Off) or the selector finds is written to `signals` with `source` = `autopilot` / `selector`, `meta` (mode, or score, score parts, context, edge and reasons) and `outcome`. Each pass resolves open bot signals on the instrument's entry-TF candles with the backtester's rules (`packages/engine/src/outcome.ts`): fill on touch, target before fill = ran away, no fill in 12 bars = expired, stop before target, same-bar target after the fill not counted. `result_r` is gross, `net_r` subtracts the instrument's round-trip cost in R. Migration `20261026150000_bot_ledger.sql`.
+- **Orders vs log:** orders are still created only in Paper / Confirm / Auto and never under the kill switch; the ledger records the signal either way, so the bot is measured independently of any account.
+- **Bot log page (`/bot`):** KPIs (signals, fill rate, win rate, net R, expectancy, profit factor, max drawdown, paper P&L, Telegram delivery), net-R equity curve, breakdowns by bot, instrument, session, side & grade and selector score bucket, and the full signal log with outcome, result, paper P&L and Telegram status.
+- **TradingView removed:** no embedded TradingView chart, chart-symbol settings or TradingView alert webhook. Charts still use TradingView's open-source Lightweight Charts library (attribution kept under the chart, as its licence requires).

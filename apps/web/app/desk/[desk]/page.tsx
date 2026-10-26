@@ -53,7 +53,6 @@ export default function DeskPage() {
 
   const [side, setSide] = useState<"long" | "short" | null>(null);
   const [model, setModel] = useState<ModelId>("A");
-  const [view, setView] = useState<"engine" | "tv">("engine");
   const [chartTf, setChartTf] = useState<"ltf" | "poi" | "htf">("ltf");
   const [show, setShow] = useState<Record<Overlay, boolean>>({ sessions: true, pd: true, pois: true, liq: true, struct: true, pos: true });
   const [ov, setOv] = useState({ inside: "auto" as Tri, swept: "auto" as Tri, shifted: "auto" as Tri });
@@ -152,7 +151,6 @@ export default function DeskPage() {
     { n: "SHIFTED", d: a?.shift?.t ? `Close through ${num(a.shift.level, def.digits)}` : "Waiting", t: a?.shift?.t ?? null, on: !!a?.shift?.t },
     { n: "ARMED", d: go ? "Gate GO" : a?.after?.ranAway ? "Ran away — no chase" : "—", t: go ? now : null, on: go },
   ];
-  const tvSymbol = me.settings?.integrations?.tv_symbols?.[inst] ?? def.tv;
   const chartCandles = market.data ? (chartTf === "ltf" ? market.data.ltf : chartTf === "poi" ? market.data.poi : market.data.htf) : [];
   const chartTfMs = TF_MS[chartTf === "ltf" ? def.ltf : chartTf === "poi" ? def.poi : def.htf];
   const price = live.last ?? market.data?.forming?.c ?? a?.price ?? null;
@@ -213,21 +211,15 @@ export default function DeskPage() {
         <section className="s8 col" style={{ gap: 16 }}>
           <div className="card flush">
             <div className="row" style={{ padding: "10px 12px", borderBottom: "1px solid var(--line)" }}>
-              <Seg label="Chart" value={view} onChange={setView} options={[{ v: "engine", l: "Engine" }, { v: "tv", l: "TradingView" }]} />
-              {view === "engine" && <Seg label="Timeframe" value={chartTf} onChange={setChartTf} options={[{ v: "ltf", l: def.ltf.toUpperCase() }, { v: "poi", l: def.poi.toUpperCase() }, { v: "htf", l: def.htf.toUpperCase() }]} />}
+              <Seg label="Timeframe" value={chartTf} onChange={setChartTf} options={[{ v: "ltf", l: def.ltf.toUpperCase() }, { v: "poi", l: def.poi.toUpperCase() }, { v: "htf", l: def.htf.toUpperCase() }]} />
               <span style={{ flex: 1 }} />
-              {view === "engine" && OVERLAYS.map((o) => (
+              {OVERLAYS.map((o) => (
                 <button key={o.id} type="button" className={`chip ${show[o.id] ? "acc" : ""}`} aria-pressed={show[o.id]} onClick={() => setShow({ ...show, [o.id]: !show[o.id] })}>{o.l}</button>
               ))}
             </div>
-            {view === "engine" ? (
-              market.data ? <DeskChart candles={chartCandles} forming={chartTf === "ltf" ? market.data.forming : null} tfMs={chartTfMs} live={price} analysis={a} show={show} plan={plan} side={tradeSide} digits={def.digits} markersOn={chartTf === "ltf"} /> : <div style={{ height: 520, display: "grid", placeItems: "center" }} className="faint">Loading candles…</div>
-            ) : (
-              <iframe title={`TradingView ${tvSymbol}`} style={{ width: "100%", height: 520, border: 0, display: "block" }}
-                src={`https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSymbol)}&interval=5&theme=${typeof document !== "undefined" && document.documentElement.classList.contains("light") ? "light" : "dark"}&style=1&timezone=Asia%2FKolkata&hide_side_toolbar=0&withdateranges=1&saveimage=0&studies=[]`} />
-            )}
+            {market.data ? <DeskChart candles={chartCandles} forming={chartTf === "ltf" ? market.data.forming : null} tfMs={chartTfMs} live={price} analysis={a} show={show} plan={plan} side={tradeSide} digits={def.digits} markersOn={chartTf === "ltf"} /> : <div style={{ height: 520, display: "grid", placeItems: "center" }} className="faint">Loading candles…</div>}
             <div className="between" style={{ padding: "8px 12px", borderTop: "1px solid var(--line)" }}>
-              <span className="faint" style={{ fontSize: 11 }}>{view === "engine" ? `Engine overlays on closed candles · ${market.data?.source ?? "…"} · forming bar from live ticks · TradingView Lightweight Charts™` : `TradingView widget · ${tvSymbol} (change in Settings)`}</span>
+              <span className="faint" style={{ fontSize: 11 }}>{`Engine overlays on closed candles · ${market.data?.source ?? "…"} · forming bar from live ticks · charts by TradingView Lightweight Charts™`}</span>
               <span className="faint mono" style={{ fontSize: 11 }}>{a?.range ? `range ${num(a.range.low, def.digits)} – ${num(a.range.high, def.digits)} · ${a.zone ?? ""} ${a.pos !== null ? `${a.pos.toFixed(0)}%` : ""}` : ""}</span>
             </div>
           </div>

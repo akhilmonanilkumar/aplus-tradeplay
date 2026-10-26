@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Telegram alerts (send-only). Every message — manual, autopilot or TradingView — is
+ * Telegram alerts (send-only). Every message — manual or autopilot — is
  * written to `telegram_alerts`, so the team has one log of what went out and when.
  */
 
@@ -20,7 +20,7 @@ export function chatsFrom(settingsChats: Chat[] | null | undefined): Chat[] {
 
 export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-export async function sendTelegram(db: SupabaseClient, msg: { text: string; chats: Chat[]; kind: string; instrument?: string | null; signalId?: string | null; source: "manual" | "autopilot" | "tradingview" | "system" }) {
+export async function sendTelegram(db: SupabaseClient, msg: { text: string; chats: Chat[]; kind: string; instrument?: string | null; signalId?: string | null; source: "manual" | "autopilot" | "system" }) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const results: { chat: string; ok: boolean; error?: string }[] = [];
   if (!msg.chats.length) return { results, error: "No Telegram chats configured" };

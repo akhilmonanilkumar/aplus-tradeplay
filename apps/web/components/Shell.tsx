@@ -19,7 +19,6 @@ export type Settings = {
   equity_throttle: boolean;
   prop_buffer: boolean;
   auto_modes: Record<string, "Off" | "Paper" | "Confirm" | "Auto">;
-  webhook_token: string;
   broadcast: { vip: boolean; free: boolean; instruments: Record<string, boolean>; events: Record<string, boolean> };
   news_block_minutes: number;
   news_medium_gold: boolean;
@@ -56,6 +55,7 @@ const OWNER_NAV: NavItem[] = [
   { href: "/lab/gold", l: "Gold lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
   { href: "/lab/btc", l: "BTC lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
   { href: "/autopilot", l: "Autopilot", i: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z", cnt: "autopilot" },
+  { href: "/bot", l: "Bot log", i: "M4 5h16M4 10h16M4 15h10M4 20h7M17 14l2 2 3-4" },
   { h: "Accounts" },
   { href: "/accounts", l: "Accounts", tl: "Accounts", i: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 13h2", cnt: "accounts" },
   { href: "/investors", l: "Investors", i: "M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21a7 7 0 0 1 14 0M17 3.5a4 4 0 0 1 0 7M22 21a7 7 0 0 0-4-6.3", cnt: "investors" },

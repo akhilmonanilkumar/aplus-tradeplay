@@ -184,6 +184,7 @@ export async function runSelector(db: SupabaseClient, deps: {
     const sig = await db.from("signals").insert({
       instrument: s.instrument, side: s.side, model: "A", session_window: s.window, entry: p.entry, stop: p.stop, target: p.target,
       rr: s.rr, grade: s.grade, gate: e.gate?.boxes ?? [], state: "ARMED", edge_version: "3.0", source: "selector",
+      outcome: "pending", meta: { score: s.score, parts: s.parts, context: s.context, edge: s.edge, why: why(s, edges.get(s.instrument)), targetLabel: p.targetLabel, dataSource: e.source },
     }).select("id").single();
     if (sig.error) { outcome.picks.push({ instrument: s.instrument, side: s.side, score: s.score, action: `error: ${sig.error.message}` }); continue; }
     const signalId = sig.data.id as string;
@@ -213,7 +214,7 @@ export async function runSelector(db: SupabaseClient, deps: {
     const sent = await telegramExecutor(db, deps.chats).submit(ticket);
     const action = [sent.ok ? "telegram sent" : `telegram failed: ${sent.error}`, paper ? `${sized.filter((a) => !a.blocked).length} paper orders` : deps.killSwitch ? "kill switch: no orders" : null].filter(Boolean).join(" · ");
     outcome.picks.push({ instrument: s.instrument, side: s.side, score: s.score, action });
-    pickDetail.push({ instrument: s.instrument, side: s.side, score: s.score, parts: s.parts, why: ticket.why, plan: { entry: p.entry, stop: p.stop, target: p.target, rr: s.rr }, action });
+    pickDetail.push({ signalId, instrument: s.instrument, side: s.side, score: s.score, parts: s.parts, why: ticket.why, plan: { entry: p.entry, stop: p.stop, target: p.target, rr: s.rr }, action });
   }
 
   // One log row per pass under "SELECTOR" (never under the instrument, whose rows drive the per-instrument

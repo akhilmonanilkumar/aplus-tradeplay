@@ -12,7 +12,7 @@ export function proxy(request: NextRequest) {
     `img-src 'self' data: blob: ${supabase}`,
     "font-src 'self' data:",
     `connect-src 'self' ${supabase} ${supabase.replace(/^https/, "wss")} wss://fstream.binance.com wss://stream.binance.com:9443 wss://ws-feed.exchange.coinbase.com`,
-    "frame-src https://s.tradingview.com https://www.tradingview.com",
+    "frame-src 'none'",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",

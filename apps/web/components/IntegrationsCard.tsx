@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { INSTRUMENT_IDS, INSTRUMENTS } from "@aplus/engine";
 import { staffGet } from "@/lib/market";
 import type { Integrations } from "@/lib/types";
 import { useMe } from "@/components/Shell";
-import { Card, Chip, Toggle } from "@/components/ui";
+import { Card, Chip } from "@/components/ui";
 
 type Status = { ai: { provider: string | null; model: string }; keys: Record<string, boolean> };
 
@@ -17,18 +16,15 @@ const KEYS: { k: string; what: string; where: string }[] = [
   { k: "TWELVEDATA_API_KEY", what: "Alternative XAU/USD feed", where: "twelvedata.com" },
   { k: "FRED_API_KEY", what: "10Y real yield (TIPS) for the gold desk", where: "fred.stlouisfed.org → API keys (free)" },
   { k: "FINNHUB_API_KEY", what: "Extra news headlines", where: "finnhub.io (free tier)" },
-  { k: "SUPABASE_SERVICE_ROLE_KEY", what: "Autopilot, TradingView webhook, investor invites", where: "Supabase → Project settings → API" },
+  { k: "SUPABASE_SERVICE_ROLE_KEY", what: "Autopilot, selector, investor invites", where: "Supabase → Project settings → API" },
   { k: "AUTOPILOT_SECRET", what: "Lets the 5-minute scheduler run the autopilot", where: "Any long random string" },
 ];
-
-const DEFAULT_TV: Record<string, string> = Object.fromEntries(INSTRUMENT_IDS.map((id) => [id, INSTRUMENTS[id].tv]));
 
 export default function IntegrationsCard() {
   const me = useMe();
   const [status, setStatus] = useState<Status | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const integ: Integrations = { tv_symbols: DEFAULT_TV, telegram_chats: [], tv_to_telegram: false, ai_model: null, ...(me.settings?.integrations ?? {}) };
-  const [tv, setTv] = useState<Record<string, string>>({ ...DEFAULT_TV, ...integ.tv_symbols });
+  const integ: Integrations = { telegram_chats: [], ai_model: null, ...(me.settings?.integrations ?? {}) };
   const [chat, setChat] = useState({ id: "", label: "" });
   const [model, setModel] = useState(integ.ai_model ?? "");
   const [saved, setSaved] = useState<string | null>(null);
@@ -38,7 +34,6 @@ export default function IntegrationsCard() {
     const e = await me.updateSettings({ integrations: { ...integ, ...patch } });
     setSaved(e ?? note);
   };
-  const hook = typeof window !== "undefined" && me.settings?.webhook_token ? `${location.origin}/api/hooks/tv/${me.settings.webhook_token}` : "";
 
   return (
     <section className="g12">
@@ -57,23 +52,8 @@ export default function IntegrationsCard() {
           <button className="btn sm" onClick={() => save({ ai_model: model.trim() || null })}>Save</button>
         </div>
       </Card>
-      <Card span={5} title="TradingView & Telegram">
-        <div className="lbl-u" style={{ marginBottom: 6 }}>Chart symbol per instrument (your broker's feed)</div>
-        {INSTRUMENT_IDS.map((id) => (
-          <div key={id} className="between" style={{ padding: "4px 0" }}>
-            <span style={{ fontSize: 12.5, width: 110 }}>{id}</span>
-            <div className="inp" style={{ height: 32, flex: 1 }}><input aria-label={`TradingView symbol for ${id}`} value={tv[id] ?? ""} onChange={(e) => setTv({ ...tv, [id]: e.target.value.toUpperCase() })} /></div>
-          </div>
-        ))}
-        <button className="btn sm" style={{ marginTop: 6 }} onClick={() => save({ tv_symbols: tv }, "Chart symbols saved")}>Save symbols</button>
-        {hook && (
-          <>
-            <div className="lbl-u" style={{ margin: "14px 0 6px" }}>TradingView alert webhook</div>
-            <div className="mono faint" style={{ fontSize: 11, wordBreak: "break-all", background: "var(--surface-2)", padding: 8, borderRadius: 10 }}>{hook}</div>
-            <div className="between" style={{ marginTop: 8 }}><span style={{ fontSize: 12.5 }}>Forward TradingView alerts to Telegram</span><Toggle on={integ.tv_to_telegram} onChange={(v) => save({ tv_to_telegram: v })} label="Forward TradingView alerts" /></div>
-          </>
-        )}
-        <div className="lbl-u" style={{ margin: "14px 0 6px" }}>Telegram chats</div>
+      <Card span={5} title="Telegram">
+        <div className="lbl-u" style={{ marginBottom: 6 }}>Telegram chats</div>
         {integ.telegram_chats.length === 0 && <p className="faint" style={{ fontSize: 12 }}>None saved here{status?.keys.TELEGRAM_CHAT_IDS ? " (TELEGRAM_CHAT_IDS is set in Vercel)" : ""}.</p>}
         {integ.telegram_chats.map((c) => (
           <div key={c.id} className="between" style={{ padding: "4px 0", fontSize: 12.5 }}>

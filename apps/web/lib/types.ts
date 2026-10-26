@@ -134,6 +134,14 @@ export interface Signal {
   gate: { n: number; label: string; status: "pass" | "warn" | "fail" | "pending"; reason: string }[];
   state: string;
   created_at: string;
+  source?: string;
+  meta?: { score?: number; parts?: Record<string, number>; context?: number | null; why?: string[]; mode?: string; targetLabel?: string; dataSource?: string } | null;
+  outcome?: "pending" | "filled" | "win" | "loss" | "expired" | "ran_away" | "cancelled" | null;
+  filled_at?: string | null;
+  closed_at?: string | null;
+  exit_price?: number | null;
+  result_r?: number | null;
+  net_r?: number | null;
 }
 export interface Order { id: string; signal_id: string | null; account_id: string; client_order_id: string; action: string; side: string; qty: number; entry: number; stop: number; target: number | null; risk_amount: number | null; status: string; reasons: string[]; fill_price: number | null; latency_ms: number | null; created_at: string; filled_at: string | null }
 export interface NewsEvent { id: string; at: string; currency: string; title: string; impact: "high" | "medium" | "low"; instruments: string[]; actual: string | null; forecast: string | null; previous: string | null }
@@ -149,4 +157,4 @@ export interface BacktestRow { id: string; strategy_id: string | null; instrumen
 export type AutopilotMode = "off" | "alerts" | "paper" | "confirm" | "auto";
 export interface AutopilotConfig { id: string; instrument: string; mode: AutopilotMode; strategy_id: string | null; account_ids: string[]; risk_pct: number; events: string[]; filters: { allowGradeA?: boolean }; updated_at: string }
 export interface AutopilotRun { id: number; at: string; instrument: string; side: string | null; state: string; grade: string | null; verdict: string | null; price: number | null; action: string | null; detail: Record<string, unknown> }
-export interface Integrations { tv_symbols: Record<string, string>; telegram_chats: { id: string; label: string }[]; tv_to_telegram: boolean; ai_model: string | null; selector?: Partial<SelectorConfig> }
+export interface Integrations { telegram_chats: { id: string; label: string }[]; ai_model: string | null; selector?: Partial<SelectorConfig> }

@@ -23,7 +23,7 @@ export default function SelectorCard({ runs, accounts, investors }: { runs: Auto
   const [busy, setBusy] = useState(false);
 
   const save = async (patch: Partial<SelectorConfig>) => {
-    const integ = me.settings?.integrations ?? { tv_symbols: {}, telegram_chats: [], tv_to_telegram: false, ai_model: null };
+    const integ = me.settings?.integrations ?? { telegram_chats: [], ai_model: null };
     const e = await me.updateSettings({ integrations: { ...integ, selector: { ...cfg, ...patch } } });
     setMsg(e);
   };

@@ -38,8 +38,6 @@ export interface InstrumentDef {
   sizing: SizingModel;
   /** Closed Friday 17:00 → Sunday 17:00 New York. */
   fxHours: boolean;
-  /** Default TradingView symbol for the visual chart; editable in Settings. */
-  tv: string;
   /** What the engine's candles represent. */
   priceBasis: string;
 }
@@ -55,35 +53,35 @@ export const INSTRUMENTS: Record<InstrumentId, InstrumentDef> = {
     htf: '1h', poi: '15m', ltf: '5m', digits: 2,
     stopBuffer: () => 0.3, costRate: 0.00008,
     sizing: { kind: 'cfd', spec: XAUUSD_DEFAULT, unit: 'lot' },
-    fxHours: true, tv: 'OANDA:XAUUSD', priceBasis: 'Spot gold mid (bid/ask average)',
+    fxHours: true, priceBasis: 'Spot gold mid (bid/ask average)',
   },
   'XAUUSDT.P': {
     id: 'XAUUSDT.P', desk: 'gold', label: 'XAUUSDT.P · perp', short: 'XAUUSDT.P', kind: 'perp',
     htf: '1h', poi: '15m', ltf: '5m', digits: 2,
     stopBuffer: (p) => p * 0.0001, costRate: 0.001,
     sizing: { kind: 'perp', spec: XAU_PERP, leverage: 10, unit: 'oz' },
-    fxHours: false, tv: 'BINANCE:XAUUSDT.P', priceBasis: 'Binance USDⓈ-M mark price',
+    fxHours: false, priceBasis: 'Binance USDⓈ-M mark price',
   },
   BTCUSD: {
     id: 'BTCUSD', desk: 'btc', label: 'BTCUSD · CFD', short: 'BTCUSD', kind: 'cfd',
     htf: '4h', poi: '15m', ltf: '5m', digits: 2,
     stopBuffer: (p) => p * 0.0005, minStopPct: 0.4, costRate: 0.0006,
     sizing: { kind: 'cfd', spec: BTC_CFD, unit: 'lot' },
-    fxHours: false, tv: 'BITSTAMP:BTCUSD', priceBasis: 'USD spot reference (broker CFD tracks it)',
+    fxHours: false, priceBasis: 'USD spot reference (broker CFD tracks it)',
   },
   'BTCUSDT.P': {
     id: 'BTCUSDT.P', desk: 'btc', label: 'BTCUSDT.P · perp', short: 'BTCUSDT.P', kind: 'perp',
     htf: '4h', poi: '15m', ltf: '5m', digits: 1,
     stopBuffer: (p) => p * 0.0005, minStopPct: 0.4, costRate: 0.001,
     sizing: { kind: 'perp', spec: BTCUSDT_PERP_DEFAULT, leverage: 10, unit: 'BTC' },
-    fxHours: false, tv: 'BINANCE:BTCUSDT.P', priceBasis: 'Binance USDⓈ-M mark price (stops trigger on mark)',
+    fxHours: false, priceBasis: 'Binance USDⓈ-M mark price (stops trigger on mark)',
   },
   'BTCUSD.SPOT': {
     id: 'BTCUSD.SPOT', desk: 'btc', label: 'BTCUSD · spot', short: 'BTC spot', kind: 'spot',
     htf: '4h', poi: '15m', ltf: '5m', digits: 2,
     stopBuffer: (p) => p * 0.0005, minStopPct: 0.4, costRate: 0.002,
     sizing: { kind: 'spot', spec: BTC_SPOT, unit: 'BTC' },
-    fxHours: false, tv: 'COINBASE:BTCUSD', priceBasis: 'Coinbase BTC-USD last trade',
+    fxHours: false, priceBasis: 'Coinbase BTC-USD last trade',
   },
 };
 

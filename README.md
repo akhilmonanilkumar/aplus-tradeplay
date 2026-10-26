@@ -19,11 +19,15 @@ Private desk for the firm's team: trade gold and bitcoin on one edge, manage own
 | Economic calendar · headlines | Forex Factory weekly export · Google News / CoinDesk / Cointelegraph RSS (+ Finnhub) | `FINNHUB_API_KEY` optional |
 | AI analyst, news read, reviews | OpenRouter | `OPENROUTER_API_KEY` |
 
-The TradingView tab on each desk embeds TradingView's own chart for the symbol set in Settings (your broker's feed). TradingView has no public market-data API; the engine chart uses the sources above.
+Desk charts are drawn from the sources above with TradingView's open-source Lightweight Charts library; there is no embedded TradingView chart or webhook.
 
 ## Env
 
 See `apps/web/.env.example`.
+
+## Bot log
+
+`/bot` lists every signal the autopilot and the selector produced, tracks each one's fill, stop or target on candles (with or without an account trading it), and shows the bot's performance: win rate, net R after costs, expectancy, profit factor, drawdown, equity curve and breakdowns by bot, instrument, session, side, grade and selector score.
 
 ## Best-opportunity selector
 
