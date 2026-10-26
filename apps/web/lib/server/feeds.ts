@@ -1,5 +1,5 @@
 import "server-only";
-import { INSTRUMENTS, TF_MS, type Candle, type InstrumentId, type Tf } from "@aplus/engine";
+import { INSTRUMENTS, TF_MS, isFxClosed, type Candle, type InstrumentId, type Tf } from "@aplus/engine";
 import { cached, errMsg, getJson } from "@/lib/server/http";
 
 /**
@@ -177,7 +177,7 @@ export async function loadCandles(id: InstrumentId, tf: Tf, limit = 300, prefer?
     const order = prefer ? [...chain.filter((p) => p.name === prefer), ...chain.filter((p) => p.name !== prefer)] : chain;
     for (const p of order) {
       try {
-        const rows = p.base && tf !== "1m" ? await fromBase(id, p, tf) : dedupe(await p.load(tf, { limit: limit + 1 }));
+        const rows = openHours(id, p.base && tf !== "1m" ? await fromBase(id, p, tf) : dedupe(await p.load(tf, { limit: limit + 1 })));
         if (rows.length < 10) throw new Error("too few candles");
         const now = Date.now();
         const closed = rows.filter((c) => c.t + TF_MS[tf] <= now);
@@ -211,7 +211,7 @@ async function fromBase(id: InstrumentId, p: Provider, tf: Tf): Promise<Candle[]
       if ((rows.at(-1)?.t ?? 0) < expected && hit) hit.until = Math.min(hit.until, Date.now() + 30_000);
     }, () => baseMemo.delete(key));
   }
-  const rows = await hit.v;
+  const rows = openHours(id, await hit.v);
   return tf === base ? rows : aggregate(rows, TF_MS[tf]);
 }
 
@@ -231,7 +231,7 @@ export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: nu
         end = older[0]!.t - 1;
         if (batch.length < page * 0.3) break;
       }
-      const closed = out.filter((c) => c.t >= from && c.t + TF_MS[tf] <= Math.min(to, Date.now()));
+      const closed = openHours(id, out).filter((c) => c.t >= from && c.t + TF_MS[tf] <= Math.min(to, Date.now()));
       if (closed.length < 50) throw new Error(`only ${closed.length} candles`);
       return { candles: closed, forming: null, source: p.name, approx: p.approx, note: p.note };
     } catch (e) {
@@ -239,6 +239,11 @@ export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: nu
     }
   }
   throw new Error(errors.join(" · "));
+}
+
+/** Drop bars printed while a CFD market is shut (weekend, daily break). Crypto trades 24/7. */
+function openHours(id: InstrumentId, rows: Candle[]): Candle[] {
+  return INSTRUMENTS[id].fxHours ? rows.filter((c) => !isFxClosed(c.t)) : rows;
 }
 
 function dedupe(rows: Candle[]): Candle[] {

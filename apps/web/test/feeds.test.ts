@@ -116,6 +116,18 @@ describe("candles", () => {
     expect(m5.source).toBe("Twelve Data XAU/USD");
   });
 
+  it("drops gold bars printed while the market is closed (weekend, daily break)", async () => {
+    process.env.TWELVEDATA_API_KEY = "td";
+    const b = bars(3000, 4100); // ~10 days of 5M bars, so a weekend is included
+    routes.push([/api\.twelvedata\.com\/time_series/, { status: "ok", values: b.map((x) => ({ datetime: new Date(x.t).toISOString().slice(0, 19).replace("T", " "), open: String(x.o), high: String(x.h), low: String(x.l), close: String(x.c) })) }]);
+    const { loadCandles } = await import("@/lib/server/feeds");
+    const { isFxClosed } = await import("@aplus/engine");
+    const r = await loadCandles("XAUUSD", "5m", 3000);
+    expect(b.some((x) => isFxClosed(x.t))).toBe(true);
+    expect(r.candles.some((c) => isFxClosed(c.t))).toBe(false);
+    expect(r.candles.length).toBe(b.slice(0, -1).filter((x) => !isFxClosed(x.t)).length);
+  });
+
   it("parses Coinbase (seconds, low/high/open/close order) and builds 4H from 1H", async () => {
     const H = 3_600_000;
     const lastOpen = Math.floor(Date.now() / H) * H;

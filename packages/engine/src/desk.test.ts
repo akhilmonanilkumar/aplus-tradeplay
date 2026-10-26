@@ -181,3 +181,17 @@ describe('setup detector', () => {
     }
   });
 });
+
+describe('gold market hours', () => {
+  it('treats the weekend and the daily 17:00 New York break as closed', async () => {
+    const { isFxClosed } = await import('./index.js');
+    // Oct 2026 is US daylight time: 17:00 NY = 21:00 UTC.
+    expect(isFxClosed(Date.UTC(2026, 9, 23, 20, 55))).toBe(false); // Fri 16:55 NY
+    expect(isFxClosed(Date.UTC(2026, 9, 23, 21, 0))).toBe(true);   // Fri 17:00 NY
+    expect(isFxClosed(Date.UTC(2026, 9, 24, 12, 0))).toBe(true);   // Saturday
+    expect(isFxClosed(Date.UTC(2026, 9, 25, 21, 30))).toBe(true);  // Sun 17:30 NY, before the open
+    expect(isFxClosed(Date.UTC(2026, 9, 25, 22, 0))).toBe(false);  // Sun 18:00 NY open
+    expect(isFxClosed(Date.UTC(2026, 9, 27, 21, 15))).toBe(true);  // Tue daily break
+    expect(isFxClosed(Date.UTC(2026, 9, 27, 22, 0))).toBe(false);  // Tue 18:00 NY
+  });
+});

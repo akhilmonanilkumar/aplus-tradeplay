@@ -139,3 +139,14 @@ export function isFxWeekend(now: number): boolean {
   if (p.weekday === 'Fri') return p.hour >= 17;
   return false;
 }
+
+/**
+ * Spot gold / FX CFD closed: the weekend (Fri 17:00 → Sun 17:00 New York) and the
+ * daily 17:00–18:00 New York maintenance break. Vendors that print bars while the
+ * market is shut fill them with stale quotes; those bars must not reach the engine.
+ */
+export function isFxClosed(t: number): boolean {
+  if (isFxWeekend(t)) return true;
+  const p = zonedParts(t, NY);
+  return p.hour === 17 && p.weekday !== 'Sat';
+}
