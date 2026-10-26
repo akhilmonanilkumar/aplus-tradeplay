@@ -21,6 +21,9 @@ export const VARIANTS: { id: string; label: string; params: Partial<StrategyPara
   { id: "shiftClose", label: "Enter at the shift close", params: { entryMode: "shift_close" } },
   { id: "loose", label: "Grade A + no half + HTF only + 2R", params: { allowGradeA: true, requireCorrectHalf: false, requireAlignment: false, minRR: 2 } },
   { id: "looseClose", label: "Loose + enter at shift close", params: { allowGradeA: true, requireCorrectHalf: false, requireAlignment: false, minRR: 2, entryMode: "shift_close" } },
+  { id: "trendCore", label: "Trend core: HTF + 15M aligned, sweep, shift, 1.5R (no POI / half)", params: { allowGradeA: true, requirePoi: false, requireCorrectHalf: false, minRR: 1.5 } },
+  { id: "trendCore2", label: "Trend core at 2R", params: { allowGradeA: true, requirePoi: false, requireCorrectHalf: false, minRR: 2 } },
+  { id: "trendCoreHtf", label: "Trend core, HTF only (15M may disagree)", params: { allowGradeA: true, requirePoi: false, requireCorrectHalf: false, requireAlignment: false, minRR: 1.5 } },
 ];
 
 const WARM: Record<string, number> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
@@ -65,11 +68,15 @@ export async function research(id: InstrumentId, opts: { days?: number; day?: st
   const variants = VARIANTS.map((v) => {
     const r = simulate(id, data, scan, v.params);
     const closed = r.trades.filter((t) => t.outcome !== "open");
+    // Stability check: the same rules on the earlier and the later half of the period.
+    const mid = (r.from + r.to) / 2;
+    const half = (early: boolean) => { const x = closed.filter((t) => (t.signalAt < mid) === early); return { n: x.length, netR: r2(x.reduce((a, t) => a + t.rNet, 0)) }; };
     return {
       id: v.id, label: v.label,
       trades: r.stats.n, winRate: r2(r.stats.winRate * 100), netR: r2(r.stats.netR), avgR: r2(r.stats.avgR),
       pf: r.stats.profitFactor !== null ? r2(r.stats.profitFactor) : null, maxDDR: r2(r.stats.maxDrawdownR),
       signals: r.signals, ranAway: r.cancelled.ranAway, expired: r.cancelled.expired + r.cancelled.windowClosed,
+      halves: [half(true), half(false)],
       day: {
         trades: closed.concat(r.trades.filter((t) => t.outcome === "open")).filter((t) => inDay(t.signalAt)).map((t) => ({
           at: hm(t.signalAt), side: t.side, window: t.window, entry: t.entry, stop: t.stop, target: t.target, plannedR: r2(t.plannedR), outcome: t.outcome, rNet: r2(t.rNet),
