@@ -20,7 +20,7 @@ const FEEDS: Record<"gold" | "btc", { name: string; url: string }[]> = {
 };
 
 /** Social chart posts, local retail price listings and currency-pair stories that aren't about the desk's market. */
-const NOISE = /chart image by|gold rate today|jewell?ery prices|per tola|\/10 ?gm|prediction market|\b(rupee|peso|pound|lira|dong|rand|naira|egp|iqd)\b.*\b(against|vs\.?)\b/i;
+const NOISE = /chart image by|gold rate today|jewell?ery prices|per tola|\/10 ?gm|prediction market|\b(sensex|nifty|mcx|sjc)\b|gold prices? in (india|egypt|pakistan|vietnam|uae)|domestic gold|on tradingview, \d{4}|\b(rupee|peso|pound|lira|dong|rand|naira|egp|iqd)\b.*\b(against|vs\.?)\b/i;
 
 /** Keyword pass for a first read; the desk's AI analyst gives the considered view. */
 const BULL = /\b(surge|soar|rall(y|ies)|jump|record high|all-time high|gain|climb|bull|inflow|rebound|rate cut|dovish|safe[- ]haven demand)\w*/i;
