@@ -9,9 +9,8 @@ const gnews = (q: string) => `https://news.google.com/rss/search?q=${encodeURICo
 
 const FEEDS: Record<"gold" | "btc", { name: string; url: string }[]> = {
   gold: [
-    { name: "Gold", url: gnews('("gold price" OR XAUUSD OR "spot gold" OR bullion) when:2d') },
-    { name: "Fed & dollar", url: gnews('("Federal Reserve" OR "Treasury yields" OR "US dollar" OR "rate cut") when:1d') },
-    { name: "FXStreet", url: "https://www.fxstreet.com/rss/news" },
+    { name: "Gold", url: gnews('("gold price" OR "gold prices" OR XAUUSD OR "spot gold" OR bullion) -jewellery -"gold rate today" when:2d') },
+    { name: "Fed & dollar", url: gnews('("Federal Reserve" OR FOMC OR Powell OR "Treasury yields" OR "dollar index" OR DXY OR "US inflation") when:1d') },
   ],
   btc: [
     { name: "Bitcoin", url: gnews("(bitcoin OR BTC) (price OR ETF OR futures) when:1d") },
@@ -19,6 +18,9 @@ const FEEDS: Record<"gold" | "btc", { name: string; url: string }[]> = {
     { name: "Cointelegraph", url: "https://cointelegraph.com/rss/tag/bitcoin" },
   ],
 };
+
+/** Social chart posts, local retail price listings and currency-pair stories that aren't about the desk's market. */
+const NOISE = /chart image by|gold rate today|jewell?ery prices|per tola|\/10 ?gm|prediction market|\b(rupee|peso|pound|lira|dong|rand|naira|egp|iqd)\b.*\b(against|vs\.?)\b/i;
 
 /** Keyword pass for a first read; the desk's AI analyst gives the considered view. */
 const BULL = /\b(surge|soar|rall(y|ies)|jump|record high|all-time high|gain|climb|bull|inflow|rebound|rate cut|dovish|safe[- ]haven demand)\w*/i;
@@ -35,7 +37,7 @@ function parseRss(xml: string, feed: string): Headline[] {
     let source = tag("source") || feed;
     // Google News appends " - Publisher" to titles.
     const m = title.match(/^(.*) - ([^-]{2,60})$/);
-    if (m && feed !== "FXStreet" && feed !== "CoinDesk" && feed !== "Cointelegraph") { title = m[1]!; source = m[2]!; }
+    if (m && feed !== "CoinDesk" && feed !== "Cointelegraph") { title = m[1]!; source = m[2]!; }
     const url = tag("link");
     const at = Date.parse(tag("pubDate")) || Date.now();
     const tone: Headline["tone"] = BULL.test(title) && !BEAR.test(title) ? "bullish" : BEAR.test(title) && !BULL.test(title) ? "bearish" : "neutral";
@@ -58,7 +60,7 @@ export function loadHeadlines(desk: "gold" | "btc"): Promise<{ items: Headline[]
     }
     const seen = new Set<string>();
     const items = lists.flat()
-      .filter((h) => Date.now() - h.at < 3 * 86_400_000)
+      .filter((h) => Date.now() - h.at < 3 * 86_400_000 && !NOISE.test(h.title))
       .sort((a, b) => b.at - a.at)
       .filter((h) => { const k = h.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 60); if (seen.has(k)) return false; seen.add(k); return true; })
       .slice(0, 40);

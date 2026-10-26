@@ -13,7 +13,13 @@ import { cached, errMsg, getJson } from "@/lib/server/http";
 
 export interface CandleSet { candles: Candle[]; forming: Candle | null; source: string; approx: boolean; note?: string }
 type Range = { limit: number; endTime?: number };
-type Provider = { name: string; approx: boolean; note?: string; enabled?: () => boolean; load: (tf: Tf, r: Range) => Promise<Candle[]> };
+type Provider = {
+  name: string; approx: boolean; note?: string; enabled?: () => boolean; load: (tf: Tf, r: Range) => Promise<Candle[]>;
+  /** Rate-limited vendors: fetch only this timeframe (once per bar) and aggregate the others from it. */
+  base?: Tf;
+  /** Bars per request when paging history. */
+  pageSize?: number;
+};
 
 const num = (x: unknown) => Number(x);
 const env = (k: string) => process.env[k]?.trim() || "";
@@ -137,7 +143,8 @@ const hasTd = () => !!env("TWELVEDATA_API_KEY");
 export const CHAINS: Record<InstrumentId, Provider[]> = {
   XAUUSD: [
     { name: "OANDA XAU/USD", approx: false, enabled: hasOanda, load: oanda("XAU_USD") },
-    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD") },
+    // Free tier: 8 requests/min, 800/day — one 5,000-bar 5M pull per bar close covers 5M, 15M and 1H.
+    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD"), base: "5m", pageSize: 5000 },
     { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA or Twelve Data key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
     { name: "PAXG/USDT proxy", approx: true, note: "1 PAXG ≈ 1 oz; trades at a small premium to spot", load: binanceSpot("PAXGUSDT") },
   ],
@@ -170,7 +177,7 @@ export async function loadCandles(id: InstrumentId, tf: Tf, limit = 300, prefer?
     const order = prefer ? [...chain.filter((p) => p.name === prefer), ...chain.filter((p) => p.name !== prefer)] : chain;
     for (const p of order) {
       try {
-        const rows = dedupe(await p.load(tf, { limit: limit + 1 }));
+        const rows = p.base && tf !== "1m" ? await fromBase(id, p, tf) : dedupe(await p.load(tf, { limit: limit + 1 }));
         if (rows.length < 10) throw new Error("too few candles");
         const now = Date.now();
         const closed = rows.filter((c) => c.t + TF_MS[tf] <= now);
@@ -184,11 +191,35 @@ export async function loadCandles(id: InstrumentId, tf: Tf, limit = 300, prefer?
   });
 }
 
+/**
+ * Base-timeframe pull for rate-limited vendors, cached until just after the next bar closes.
+ * If the vendor hasn't published the newest bar yet, retry in 30 s instead of waiting a full bar.
+ */
+const baseMemo = new Map<string, { until: number; v: Promise<Candle[]> }>();
+async function fromBase(id: InstrumentId, p: Provider, tf: Tf): Promise<Candle[]> {
+  const base = p.base!;
+  const ms = TF_MS[base];
+  const key = `${id}:${p.name}:${base}`;
+  const now = Date.now();
+  let hit = baseMemo.get(key);
+  if (!hit || now >= hit.until) {
+    const v = p.load(base, { limit: 5000 }).then(dedupe);
+    hit = { until: Math.floor(now / ms) * ms + ms + 8_000, v };
+    baseMemo.set(key, hit);
+    v.then((rows) => {
+      const expected = Math.floor(Date.now() / ms) * ms - ms; // open time of the last closed bar
+      if ((rows.at(-1)?.t ?? 0) < expected && hit) hit.until = Math.min(hit.until, Date.now() + 30_000);
+    }, () => baseMemo.delete(key));
+  }
+  const rows = await hit.v;
+  return tf === base ? rows : aggregate(rows, TF_MS[tf]);
+}
+
 /** Closed candles between `from` and `to`, paging backwards through the first provider that answers. */
 export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: number): Promise<CandleSet> {
   const errors: string[] = [];
-  const page = { "1m": 1000, "5m": 1000, "15m": 1000, "1h": 1000, "4h": 1000, "1d": 1000 }[tf];
   for (const p of CHAINS[id].filter((x) => !x.enabled || x.enabled())) {
+    const page = p.pageSize ?? 1000;
     try {
       const out: Candle[] = [];
       let end = Math.min(to, Date.now());

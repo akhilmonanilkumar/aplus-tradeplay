@@ -96,6 +96,26 @@ describe("candles", () => {
     expect(r.candles.at(-1)!.t).toBe(b.at(-2)!.t);
   });
 
+  it("builds 15M and 1H from one Twelve Data 5M pull (rate-limit budget)", async () => {
+    process.env.TWELVEDATA_API_KEY = "td";
+    const b = bars(600, 4100);
+    routes.push([/api\.twelvedata\.com\/time_series/, (url: string) => {
+      expect(url).toContain("interval=5min");
+      expect(url).toContain("outputsize=5000");
+      return { status: "ok", values: b.map((x) => ({ datetime: new Date(x.t).toISOString().slice(0, 19).replace("T", " "), open: String(x.o), high: String(x.h), low: String(x.l), close: String(x.c) })) };
+    }]);
+    const { loadCandles } = await import("@/lib/server/feeds");
+    const [m5, m15, h1] = await Promise.all([loadCandles("XAUUSD", "5m", 300), loadCandles("XAUUSD", "15m", 100), loadCandles("XAUUSD", "1h", 30)]);
+    expect(calls.filter((u) => u.includes("twelvedata")).length).toBe(1);
+    expect(m15.candles.every((c) => c.t % 900_000 === 0)).toBe(true);
+    expect(h1.candles.every((c) => c.t % 3_600_000 === 0)).toBe(true);
+    const hour = h1.candles.at(-1)!;
+    const inside = b.filter((x) => x.t >= hour.t && x.t < hour.t + 3_600_000);
+    expect(hour.h).toBe(Math.max(...inside.map((x) => x.h)));
+    expect(hour.o).toBe(inside[0]!.o);
+    expect(m5.source).toBe("Twelve Data XAU/USD");
+  });
+
   it("parses Coinbase (seconds, low/high/open/close order) and builds 4H from 1H", async () => {
     const H = 3_600_000;
     const lastOpen = Math.floor(Date.now() / H) * H;
