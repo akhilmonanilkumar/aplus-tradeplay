@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INSTRUMENTS, costInR, sizePosition, normalizeInstrument, pnlMultiplier,
   oiRegime, fundingState, syntheticDxy, pearson, correlation, contextScore, basisPct, fundingApr, sessionStats, emaTrend,
-  runBacktest, breakdown, analyzeSetup, TF_MS, type Candle,
+  runBacktest, scanSignals, simulate, skippedImpact, breakdown, analyzeSetup, TF_MS, type Candle,
 } from './index.js';
 
 /** Deterministic pseudo-random walk with trending swings so structure forms. */
@@ -165,6 +165,32 @@ describe('backtest', () => {
   it('only trades inside the chosen windows', () => {
     const r = runBacktest('XAUUSD', data, { allowGradeA: true, requirePoi: false, windows: ['ny_q'] });
     expect(r.trades.every((t) => t.window === 'ny_q')).toBe(true);
+  });
+
+  it('simulates rule variants on one scan and accounts for every signal', () => {
+    const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
+    const base = simulate('XAUUSD', data, scan);
+    expect(base).toEqual(runBacktest('XAUUSD', data));
+    for (const r of [base, simulate('XAUUSD', data, scan, { requireCorrectHalf: false, requireAlignment: false, minRR: 2, allowGradeA: true })]) {
+      const placed = r.trades.length + r.cancelled.ranAway + r.cancelled.expired + r.cancelled.windowClosed;
+      expect(r.skipped.length + placed).toBe(r.signals);
+      for (const s of r.skipped) expect(['win', 'loss'].includes(s.outcome) ? s.rNet !== null : s.rNet === null).toBe(true);
+    }
+    const loose = simulate('XAUUSD', data, scan, { requireCorrectHalf: false });
+    expect(Object.keys(loose.rejected).some((k) => k.startsWith('Correct half'))).toBe(false);
+    const impact = skippedImpact(base.skipped);
+    expect(impact.reduce((a, g) => a + g.n, 0)).toBe(base.skipped.length);
+  });
+
+  it('enters at the shift close in shift_close mode', () => {
+    const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
+    const r = simulate('XAUUSD', data, scan, { entryMode: 'shift_close', requirePoi: false, allowGradeA: true, requireCorrectHalf: false, minRR: 1.5 });
+    expect(r.cancelled).toEqual({ expired: 0, ranAway: 0, windowClosed: 0 });
+    for (const t of r.trades) {
+      const bar = ltf.find((c) => c.t + TF_MS['5m'] === t.signalAt)!;
+      expect(t.entryAt).toBe(t.signalAt);
+      expect(t.entry).toBe(bar.c);
+    }
   });
 });
 

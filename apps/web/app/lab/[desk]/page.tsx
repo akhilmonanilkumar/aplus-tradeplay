@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  DEFAULT_STRATEGY, DESKS, INSTRUMENTS, TF_MS, breakdown, breakevenWinRate,
+  DEFAULT_STRATEGY, DESKS, INSTRUMENTS, TF_MS, breakdown, breakevenWinRate, skippedImpact,
   type BacktestResult, type BacktestTrade, type DeskId, type InstrumentId, type StrategyParams,
 } from "@aplus/engine";
 import { supabase } from "@/lib/supabase";
@@ -100,6 +100,7 @@ export default function Lab() {
   const closed = useMemo(() => (res ? res.trades.filter((t) => t.outcome !== "open") : []), [res]);
   const curve = useMemo(() => { let s = 0; return [0, ...closed.map((t) => (s += t.rNet))]; }, [closed]);
   const by = (k: (t: BacktestTrade) => string) => (res ? breakdown(res.trades, k) : []);
+  const impact = useMemo(() => (res ? skippedImpact(res.skipped ?? []) : []), [res]);
 
   const saveStrategy = async (asNew: boolean) => {
     const row = { desk: deskId, instrument: inst, name: name.trim() || "Untitled", params: p, updated_at: new Date().toISOString() };
@@ -167,6 +168,9 @@ export default function Lab() {
             </div>
             <div className="between"><span style={{ fontSize: 12.5 }}>Take grade A (one soft miss)</span><Toggle on={p.allowGradeA} onChange={(v) => set("allowGradeA", v)} label="Allow grade A" /></div>
             <div className="between"><span style={{ fontSize: 12.5 }}>Require price in a 15M POI</span><Toggle on={p.requirePoi} onChange={(v) => set("requirePoi", v)} label="Require POI" /></div>
+            <div className="between"><span style={{ fontSize: 12.5 }}>Require the correct half (premium / discount)</span><Toggle on={p.requireCorrectHalf} onChange={(v) => set("requireCorrectHalf", v)} label="Require correct half" /></div>
+            <div className="between"><span style={{ fontSize: 12.5 }}>Require 15M to agree with the HTF</span><Toggle on={p.requireAlignment} onChange={(v) => set("requireAlignment", v)} label="Require 15M alignment" /></div>
+            <div className="between"><span className="lbl">Entry</span><Seg label="Entry" value={p.entryMode} onChange={(v) => set("entryMode", v)} options={[{ v: "zone", l: "Limit at zone" }, { v: "shift_close", l: "Shift close" }]} /></div>
             <div className="between"><span className="lbl">History</span><Seg label="Days" value={days} onChange={setDays} options={DAYS} /></div>
             <button className="btn pri block" onClick={run} disabled={!!status || !p.windows.length}>{status ? "Running…" : "Run backtest"}</button>
             {status && <p className="faint" style={{ fontSize: 12 }}>{status}</p>}
@@ -222,6 +226,23 @@ export default function Lab() {
             <Breakdown title="By NY hour" rows={by((t) => `${String(t.hourNy).padStart(2, "0")}:00`)} />
             <Breakdown title="By target" rows={by((t) => t.targetLabel)} />
           </div>
+          {impact.length > 0 && (
+            <Card title="Skipped setups · what they would have done" right={<Chip>same fill rules, no caps</Chip>}>
+              <Table head={["Blocked by", "Setups", "Would win", "Would lose", "No fill", "Net R if taken"]} right={[1, 2, 3, 4, 5]}>
+                {impact.slice(0, 12).map((g) => (
+                  <tr key={g.rules}>
+                    <td>{g.rules}</td>
+                    <td className="r mono">{g.n}</td>
+                    <td className="r mono up">{g.wins}</td>
+                    <td className="r mono down">{g.losses}</td>
+                    <td className="r mono faint">{g.noFill}</td>
+                    <td className={`r mono ${g.netR >= 0 ? "up" : "down"}`}>{fmtR(g.netR, 1)}</td>
+                  </tr>
+                ))}
+              </Table>
+              <p className="faint" style={{ fontSize: 11.5, marginTop: 6 }}>Positive net R on a row means that rule is filtering out winners over this period; negative means it is doing its job. Judge on 30+ setups, not a handful.</p>
+            </Card>
+          )}
           <Card title={`Trades · ${res.trades.length}`}>
             <Table head={["Signal (IST)", "Side", "Entry", "Stop", "Target", "Exit", "Planned", "Net R", "Window", "Sweep", "Grade"]} right={[2, 3, 4, 5, 6, 7]}>
               {[...res.trades].reverse().slice(0, 200).map((t) => (

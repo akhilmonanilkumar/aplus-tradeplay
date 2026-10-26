@@ -1,6 +1,7 @@
 import type { Candle } from './smc.js';
 import { analyzeSetup, type SetupAnalysis } from './setup.js';
 import { evaluateGate, type Grade } from './gate.js';
+import { resolveSignal, type SignalOutcome } from './outcome.js';
 import { ALL_WINDOWS, NY, isInWindow, windowOnDateOf, zonedParts } from './sessions.js';
 import { INSTRUMENTS, TF_MS, costInR, type InstrumentId } from './instruments.js';
 import { summarize, type RStats } from './stats.js';
@@ -34,6 +35,14 @@ export interface StrategyParams {
   /** Round-trip cost as a fraction of notional (default: instrument). */
   costRate: number | null;
   newsBlockMinutes: number;
+  /** Box 2: enforce the premium/discount half of the HTF range. */
+  requireCorrectHalf: boolean;
+  /** Box 1: the 15M trend must agree with the HTF (false = HTF direction alone). */
+  requireAlignment: boolean;
+  /** Width of the no-trade band around equilibrium in % of the range (default: edge rule). */
+  midBandPct: number | null;
+  /** zone = limit at the 5M zone that caused the shift (Model A); shift_close = enter at the shift bar close. */
+  entryMode: 'zone' | 'shift_close';
   riskPct: number;
   startBalance: number;
 }
@@ -52,6 +61,10 @@ export const DEFAULT_STRATEGY: StrategyParams = {
   minStopPct: null,
   costRate: null,
   newsBlockMinutes: 15,
+  requireCorrectHalf: true,
+  requireAlignment: true,
+  midBandPct: null,
+  entryMode: 'zone',
   riskPct: 0.5,
   startBalance: 10_000,
 };
@@ -96,6 +109,27 @@ export interface BacktestResult {
   /** Why gated signals were not taken: first failing box, blocker or grade. */
   rejected: Record<string, number>;
   cancelled: { expired: number; ranAway: number; windowClosed: number };
+  /** Every gated signal that was not taken, with what it would have done (counterfactual). */
+  skipped: SkippedSignal[];
+}
+
+export interface SkippedSignal {
+  t: number;
+  side: 'long' | 'short';
+  window: string;
+  /** First failing box / blocker / grade, digits masked (the `rejected` key). */
+  why: string;
+  /** Every rule that failed, for grouping. */
+  fails: string[];
+  grade: Grade;
+  entry: number;
+  stop: number;
+  target: number;
+  plannedR: number;
+  /** What the order would have done under the same fill rules (no caps, no window close). */
+  outcome: SignalOutcome;
+  /** Net R after costs when it would have filled and closed, else null. */
+  rNet: number | null;
 }
 
 export interface BacktestData {
@@ -113,19 +147,104 @@ function dayKey(t: number) {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
-export function runBacktest(instrumentId: InstrumentId, data: BacktestData, params: Partial<StrategyParams> = {}): BacktestResult {
+/** A shift bar inside a window where the detector produced a plan: what the gate is asked about. */
+export interface ScanCandidate {
+  i: number;
+  side: 'long' | 'short';
+  windowId: string;
+  a: Pick<SetupAnalysis, 'htfTrend' | 'poiTrend' | 'price' | 'range' | 'inside' | 'sweep' | 'suggest'>;
+}
+
+/** Where the detector stood at one window bar for one side (for day replays). */
+export interface ScanTrace {
+  t: number;
+  side: 'long' | 'short';
+  stage: 'no_structure' | 'no_sweep' | 'swept' | 'shifted' | 'shift_bar' | 'no_target';
+  sweep: string | null;
+  zone: string | null;
+  /** 0–100 position in the HTF range. */
+  pos: number | null;
+  htf: string | null;
+  m15: string | null;
+}
+
+export interface ScanResult {
+  candidates: ScanCandidate[];
+  trace: ScanTrace[];
+}
+
+/**
+ * Runs the detector at every closed entry-TF bar inside the windows, with only the candles closed
+ * by then. Independent of the gate and money rules, so one scan can be simulated under many.
+ */
+export function scanSignals(
+  instrumentId: InstrumentId,
+  data: BacktestData,
+  opts: { windows: string[]; sides: StrategyParams['sides']; sweepLookback: number; traceFrom?: number },
+): ScanResult {
+  const def = INSTRUMENTS[instrumentId];
+  const ltfMs = TF_MS[def.ltf], poiMs = TF_MS[def.poi], htfMs = TF_MS[def.htf];
+  const windows = opts.windows.map((id) => WINDOW_BY_ID.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
+  const sides: ('long' | 'short')[] = opts.sides === 'both' ? ['long', 'short'] : [opts.sides];
+  const { htf, poi, ltf } = data;
+  const candidates: ScanCandidate[] = [];
+  const trace: ScanTrace[] = [];
+  let hi = 0, pi = 0;
+  for (let i = WARM_BARS; i < ltf.length; i++) {
+    const bar = ltf[i]!;
+    const T = bar.t + ltfMs;
+    const win = windows.find((w) => isInWindow(bar.t, w));
+    if (!win) continue;
+    while (hi < htf.length && htf[hi]!.t + htfMs <= T) hi++;
+    while (pi < poi.length && poi[pi]!.t + poiMs <= T) pi++;
+    const tracing = opts.traceFrom !== undefined && bar.t >= opts.traceFrom;
+    if (hi < 30 || pi < 60) {
+      if (tracing) for (const side of sides) trace.push({ t: bar.t, side, stage: 'no_structure', sweep: null, zone: null, pos: null, htf: null, m15: null });
+      continue;
+    }
+    const H = htf.slice(Math.max(0, hi - 300), hi);
+    const P = poi.slice(Math.max(0, pi - 400), pi);
+    const L = ltf.slice(Math.max(0, i - 299), i + 1);
+    for (const side of sides) {
+      const a: SetupAnalysis = analyzeSetup(side, H, P, L, { now: T, stopBuffer: def.stopBuffer, sweepLookback: opts.sweepLookback });
+      const shiftBar = !!a.shift?.t && a.shift.t === bar.t;
+      if (tracing) {
+        const stage: ScanTrace['stage'] = !a.range ? 'no_structure' : !a.sweep ? 'no_sweep' : shiftBar ? (a.suggest ? 'shift_bar' : 'no_target') : a.shift?.t ? 'shifted' : 'swept';
+        trace.push({ t: bar.t, side, stage, sweep: a.sweep?.label ?? null, zone: a.inside?.label ?? null, pos: a.pos, htf: a.htfTrend, m15: a.poiTrend });
+      }
+      // Only the bar that printed the shift places an order (at that close).
+      if (!a.suggest || !shiftBar || !a.sweep || !a.range) continue;
+      candidates.push({ i, side, windowId: win.id, a: { htfTrend: a.htfTrend, poiTrend: a.poiTrend, price: a.price, range: a.range, inside: a.inside, sweep: a.sweep, suggest: a.suggest } });
+    }
+  }
+  return { candidates, trace };
+}
+
+const WARM_BARS = 300;
+
+/** Gate + order simulation over a scan, under one set of strategy rules. */
+export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: ScanResult, params: Partial<StrategyParams> = {}): BacktestResult {
   const def = INSTRUMENTS[instrumentId];
   const p: StrategyParams = { ...DEFAULT_STRATEGY, ...params };
-  const ltfMs = TF_MS[def.ltf], poiMs = TF_MS[def.poi], htfMs = TF_MS[def.htf];
-  const windows = p.windows.map((id) => WINDOW_BY_ID.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
-  const sides: ('long' | 'short')[] = p.sides === 'both' ? ['long', 'short'] : [p.sides];
+  const ltfMs = TF_MS[def.ltf];
+  const allowed = new Set(p.windows);
+  const sideOk = (s: 'long' | 'short') => p.sides === 'both' || p.sides === s;
   const costRate = p.costRate ?? def.costRate;
   const minStopPct = p.minStopPct ?? def.minStopPct;
   const news = [...(p.newsBlockMinutes > 0 ? data.news ?? [] : [])].sort((a, b) => a - b);
   const blockMs = p.newsBlockMinutes * 60_000;
+  const { ltf } = data;
 
-  const { htf, poi, ltf } = data;
+  const byBar = new Map<number, ScanCandidate[]>();
+  for (const c of scan.candidates) {
+    if (!allowed.has(c.windowId) || !sideOk(c.side)) continue;
+    const a = byBar.get(c.i) ?? [];
+    a.push(c);
+    byBar.set(c.i, a);
+  }
+
   const trades: BacktestTrade[] = [];
+  const skipped: SkippedSignal[] = [];
   const used = new Set<string>();
   const cancelled = { expired: 0, ranAway: 0, windowClosed: 0 };
   let signals = 0;
@@ -134,9 +253,6 @@ export function runBacktest(instrumentId: InstrumentId, data: BacktestData, para
   let open: (BacktestTrade & { beMoved: boolean; risk: number }) | null = null;
   const perDay = new Map<string, { trades: number; losses: number }>();
   const day = (t: number) => { const k = dayKey(t); let d = perDay.get(k); if (!d) { d = { trades: 0, losses: 0 }; perDay.set(k, d); } return d; };
-
-  let hi = 0, pi = 0;
-  const warm = 300;
 
   const closeTrade = (exit: number, at: number, i: number) => {
     const o = open!;
@@ -148,7 +264,22 @@ export function runBacktest(instrumentId: InstrumentId, data: BacktestData, para
     open = null;
   };
 
-  for (let i = warm; i < ltf.length; i++) {
+  /** What a skipped order would have done: the backtester's fill rules, no caps or window close. */
+  const counterfactual = (i: number, side: 'long' | 'short', entry: number, stop: number, target: number, costR: number): { outcome: SignalOutcome; rNet: number | null } => {
+    const after = ltf.slice(i + 1, i + 1 + 600);
+    const rr = Math.abs(target - entry) / Math.abs(entry - stop);
+    if (p.entryMode === 'shift_close') {
+      for (const c of after) {
+        if (side === 'long' ? c.l <= stop : c.h >= stop) return { outcome: 'loss', rNet: -1 - costR };
+        if (side === 'long' ? c.h >= target : c.l <= target) return { outcome: 'win', rNet: rr - costR };
+      }
+      return { outcome: 'filled', rNet: null };
+    }
+    const r = resolveSignal({ side, entry, stop, target, createdAt: ltf[i]!.t + ltfMs }, after, ltfMs, p.expiryBars);
+    return { outcome: r.outcome, rNet: r.resultR !== null ? r.resultR - costR : null };
+  };
+
+  for (let i = WARM_BARS; i < ltf.length; i++) {
     const bar = ltf[i]!;
     const T = bar.t + ltfMs; // close time of this bar
 
@@ -186,57 +317,60 @@ export function runBacktest(instrumentId: InstrumentId, data: BacktestData, para
       if (pending) continue;
     }
 
-    // 3 — look for a new setup at this bar close.
-    const win = windows.find((w) => isInWindow(bar.t, w));
-    if (!win) continue;
+    // 3 — act on a new setup at this bar close.
+    const cands = byBar.get(i);
+    if (!cands) continue;
     const d = day(bar.t);
-    const cap = d.trades >= p.maxTradesPerDay ? `trade cap ${p.maxTradesPerDay}` : d.losses >= p.stopAfterLosses ? `stopped after ${d.losses} losses` : null;
-    if (cap) continue;
-
-    while (hi < htf.length && htf[hi]!.t + htfMs <= T) hi++;
-    while (pi < poi.length && poi[pi]!.t + poiMs <= T) pi++;
-    if (hi < 30 || pi < 60) continue;
-    const H = htf.slice(Math.max(0, hi - 300), hi);
-    const P = poi.slice(Math.max(0, pi - 400), pi);
-    const L = ltf.slice(Math.max(0, i - 299), i + 1);
+    if (d.trades >= p.maxTradesPerDay || d.losses >= p.stopAfterLosses) continue;
 
     const newsClear = !news.some((n) => Math.abs(n - T) <= blockMs);
-    for (const side of sides) {
-      const a: SetupAnalysis = analyzeSetup(side, H, P, L, { now: T, stopBuffer: def.stopBuffer, sweepLookback: p.sweepLookback });
-      // Only act on the bar that printed the shift (an order is placed at that close).
-      if (!a.suggest || !a.shift?.t || a.shift.t !== bar.t || !a.sweep || !a.range) continue;
-      const key = `${side}:${a.sweep.t}`;
+    for (const { side, a, windowId } of cands) {
+      const sweep = a.sweep!, range = a.range!, plan = a.suggest!;
+      const key = `${side}:${sweep.t}`;
       if (used.has(key)) continue;
       used.add(key);
       signals++;
+      const entry = p.entryMode === 'shift_close' ? bar.c : plan.entry;
+      const { stop, target } = plan;
       const g = evaluateGate({
-        htfTrend: a.htfTrend, poiTfTrend: a.poiTrend, side, price: a.price, range: a.range,
+        htfTrend: a.htfTrend, poiTfTrend: a.poiTrend, side, price: a.price,
+        range: { ...range, ...(p.midBandPct !== null ? { midBandPct: p.midBandPct } : {}) },
         poi: p.requirePoi
           ? { inside: !!a.inside, fresh: a.inside?.fresh ?? false, trendAligned: true, liquidityStory: a.inside?.liquidityStory ?? false, createdBos: a.inside?.createdBos ?? true }
           : { inside: true, fresh: true, trendAligned: true, liquidityStory: true, createdBos: true },
         swept: true, shifted: true,
-        timing: { inWindow: true, newsClear, windowId: win.id },
-        plan: { ...a.suggest, targetIsStructural: true, stopIsStructural: true },
+        timing: { inWindow: true, newsClear, windowId },
+        plan: { entry, stop, target, targetIsStructural: true, stopIsStructural: true },
         minRR: p.minRR, minStopPct, model: 'A', instrument: instrumentId,
+        config: { halfRequired: p.requireCorrectHalf, poiAlignRequired: p.requireAlignment },
       });
       const take = g.verdict === 'GO' || (p.allowGradeA && g.grade === 'A');
+      const costR = costInR({ costRate }, entry, stop);
+      const plannedR = Math.abs(target - entry) / Math.abs(entry - stop);
       if (!take) {
-        const fail = g.boxes.find((b) => b.status === 'fail');
-        const why = g.blockers[0] ?? (fail ? `${fail.label}: ${fail.reason.replace(/[\d.,]+/g, '#')}` : g.grade === 'A' ? 'grade A (one soft miss)' : `${g.grade.toLowerCase()}: ${g.waitingFor[0] ?? ''}`);
+        const mask = (x: string) => x.replace(/[\d.,]+/g, '#');
+        const failing = g.boxes.filter((b) => b.status === 'fail' || b.status === 'pending');
+        const fail = failing.find((b) => b.status === 'fail');
+        const why = g.blockers[0] ?? (fail ? `${fail.label}: ${mask(fail.reason)}` : g.grade === 'A' ? 'grade A (one soft miss)' : `${g.grade.toLowerCase()}: ${g.waitingFor[0] ?? ''}`);
         rejected[why] = (rejected[why] ?? 0) + 1;
+        const fails = [...g.blockers, ...failing.map((b) => b.label), ...(g.grade === 'A' ? g.softMisses.map((m) => `soft: ${m}`) : [])];
+        skipped.push({ t: T, side, window: windowId, why, fails, grade: g.grade, entry, stop, target, plannedR, ...counterfactual(i, side, entry, stop, target, costR) });
         continue;
       }
-      const { entry, stop, target } = a.suggest;
       const nyH = zonedParts(T, NY);
-      pending = {
-        side, signalAt: T, entry, stop, target,
-        plannedR: Math.abs(target - entry) / Math.abs(entry - stop),
-        costR: costInR({ costRate }, entry, stop),
-        grade: g.grade, window: win.id, sweep: a.sweep.label, targetLabel: a.suggest.targetLabel,
+      const base = {
+        side, signalAt: T, entry, stop, target, plannedR, costR,
+        grade: g.grade, window: windowId, sweep: sweep.label, targetLabel: plan.targetLabel,
         zone: a.inside?.label ?? '—', weekday: nyH.weekday, hourNy: nyH.hour,
-        createdIdx: i,
-        windowEnd: windowOnDateOf(bar.t, win).endUtc,
       };
+      if (p.entryMode === 'shift_close') {
+        // Market entry at the shift close: in the trade from the next bar.
+        open = { ...base, entryAt: T, exitAt: null, exit: null, rGross: 0, rNet: 0, outcome: 'open', beMoved: false, risk: Math.abs(entry - stop) };
+        d.trades++;
+      } else {
+        const win = WINDOW_BY_ID.get(windowId)!;
+        pending = { ...base, createdIdx: i, windowEnd: windowOnDateOf(bar.t, win).endUtc };
+      }
       break;
     }
   }
@@ -248,7 +382,7 @@ export function runBacktest(instrumentId: InstrumentId, data: BacktestData, para
 
   const closed = trades.filter((t) => t.outcome !== 'open');
   let bal = p.startBalance, peak = bal, mdd = 0;
-  const equity = [{ t: ltf[warm]?.t ?? 0, v: bal }];
+  const equity = [{ t: ltf[WARM_BARS]?.t ?? 0, v: bal }];
   for (const t of closed) {
     bal *= 1 + (p.riskPct / 100) * t.rNet;
     peak = Math.max(peak, bal);
@@ -270,7 +404,29 @@ export function runBacktest(instrumentId: InstrumentId, data: BacktestData, para
     signals,
     rejected,
     cancelled,
+    skipped,
   };
+}
+
+export function runBacktest(instrumentId: InstrumentId, data: BacktestData, params: Partial<StrategyParams> = {}): BacktestResult {
+  const p: StrategyParams = { ...DEFAULT_STRATEGY, ...params };
+  return simulate(instrumentId, data, scanSignals(instrumentId, data, { windows: p.windows, sides: p.sides, sweepLookback: p.sweepLookback }), p);
+}
+
+/** Skipped signals grouped by the rules that blocked them, with what taking them would have returned. */
+export function skippedImpact(skipped: readonly SkippedSignal[]): { rules: string; n: number; wins: number; losses: number; noFill: number; netR: number }[] {
+  const m = new Map<string, { rules: string; n: number; wins: number; losses: number; noFill: number; netR: number }>();
+  for (const s of skipped) {
+    const rules = s.fails.length ? s.fails.join(' + ') : s.why;
+    const g = m.get(rules) ?? { rules, n: 0, wins: 0, losses: 0, noFill: 0, netR: 0 };
+    g.n++;
+    if (s.outcome === 'win') g.wins++;
+    else if (s.outcome === 'loss') g.losses++;
+    else g.noFill++;
+    g.netR += s.rNet ?? 0;
+    m.set(rules, g);
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n);
 }
 
 /** Group closed trades by a key and summarise each group in net R. */

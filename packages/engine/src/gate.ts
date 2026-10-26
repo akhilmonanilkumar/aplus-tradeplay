@@ -57,6 +57,10 @@ export interface GateInput {
     counterTrendAllowed?: boolean;
     advancedModelsAllowed?: boolean;
     postNewsWaitMinutes?: number;
+    /** Box 1 needs the 15M to agree with the HTF (default true). False: HTF direction alone. */
+    poiAlignRequired?: boolean;
+    /** Box 2 premium/discount rule (default true). False: the half is reported, not enforced. */
+    halfRequired?: boolean;
   };
 }
 
@@ -124,12 +128,12 @@ export function evaluateGate(g: GateInput): GateResult {
   {
     let status: BoxStatus, reason: string;
     if (!g.htfTrend || !g.poiTfTrend) { status = 'pending'; reason = 'structure not established'; }
-    else if (g.htfTrend !== g.poiTfTrend) { status = 'pending'; reason = `HTF ${g.htfTrend} vs 15M ${g.poiTfTrend} — wait for alignment`; }
+    else if (g.htfTrend !== g.poiTfTrend && g.config?.poiAlignRequired !== false) { status = 'pending'; reason = `HTF ${g.htfTrend} vs 15M ${g.poiTfTrend} — wait for alignment`; }
     else if (g.htfTrend !== want) {
       if (model.counterTrend && cfg.counterTrend) { status = 'warn'; reason = `counter-trend ${g.side} (model ${modelId})`; softMisses.push('counter-trend'); }
       else { status = 'fail'; reason = `counter-trend ${g.side}`; }
     }
-    else { status = 'pass'; reason = `HTF ${g.htfTrend} · 15M ${g.poiTfTrend}`; }
+    else { status = 'pass'; reason = `HTF ${g.htfTrend} · 15M ${g.poiTfTrend}${g.htfTrend !== g.poiTfTrend ? ' (15M not required)' : ''}`; }
     boxes.push({ n: 1, id: 'htf_aligned', label: 'HTF aligned', status, reason });
   }
   // 2 — correct half of the range (mid-range = no trade)
@@ -138,7 +142,8 @@ export function evaluateGate(g: GateInput): GateResult {
     const pd = premiumDiscount(g.range.low, g.range.high, ref, g.range.midBandPct ?? EDGE_RULES.midBandPct);
     const ok = !pd.outside && ((g.side === 'long' && pd.zone === 'discount') || (g.side === 'short' && pd.zone === 'premium'));
     const reason = pd.outside ? `${fmt(ref)} ${pd.outside} the range — structure breaking` : pd.zone === 'mid' ? `${fmt(ref)} mid-range (EQ ${fmt(pd.eq)})` : `${fmt(ref)} in ${pd.zone} (EQ ${fmt(pd.eq)})`;
-    boxes.push({ n: 2, id: 'correct_half', label: 'Correct half', status: ok ? 'pass' : 'fail', reason });
+    const required = g.config?.halfRequired !== false;
+    boxes.push({ n: 2, id: 'correct_half', label: 'Correct half', status: ok || !required ? 'pass' : 'fail', reason: ok || required ? reason : `${reason} (not required)` });
   }
   // 3 — inside a high-probability POI
   {
