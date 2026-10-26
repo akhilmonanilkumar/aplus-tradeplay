@@ -4,7 +4,7 @@ import { useState } from "react";
 import { EDGE_RULES, canChangeRules, diagnose, guardrails, personalLimits, summarize } from "@aplus/engine";
 import { supabase } from "@/lib/supabase";
 import { useRows } from "@/lib/useRows";
-import { drawdown, rooms } from "@/lib/copy";
+import { drawdown, rooms } from "@/lib/accounts";
 import { istDay, riskAmount, todayIst } from "@/lib/derive";
 import type { Order, Signal, Trade, TradingAccount } from "@/lib/types";
 import { money, num, pct } from "@/lib/fmt";

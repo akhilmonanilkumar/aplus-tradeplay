@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense } from "react";
-import { rooms } from "@/lib/copy";
+import { rooms } from "@/lib/accounts";
 import { useInvestor } from "@/lib/useInvestor";
 import { dateShort, money, num, pct } from "@/lib/fmt";
 import { Bar, Card, Chip, Empty, ErrorNote } from "@/components/ui";

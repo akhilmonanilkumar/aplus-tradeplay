@@ -1,0 +1,21 @@
+name: Autopilot tick
+
+# Runs one autopilot pass every 5 minutes (GitHub may delay scheduled runs by a few minutes).
+# Repository secrets: AUTOPILOT_URL (e.g. https://tradeplay.cloud) and AUTOPILOT_SECRET.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call /api/autopilot/tick
+        env:
+          URL: ${{ secrets.AUTOPILOT_URL }}
+          SECRET: ${{ secrets.AUTOPILOT_SECRET }}
+        run: |
+          if [ -z "$URL" ] || [ -z "$SECRET" ]; then echo "AUTOPILOT_URL / AUTOPILOT_SECRET not set"; exit 0; fi
+          curl -fsS --max-time 90 -H "Authorization: Bearer $SECRET" "$URL/api/autopilot/tick"

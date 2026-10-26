@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { EDGE_RULES } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
-import { rooms } from "@/lib/copy";
+import { rooms } from "@/lib/accounts";
 import { istDay } from "@/lib/derive";
 import type { PropPurchase, Trade, TradingAccount } from "@/lib/types";
 import { money, num, pct } from "@/lib/fmt";

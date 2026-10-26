@@ -1,5 +1,5 @@
 import { fairValueGaps, isSweep, structureBreaks, type Candle, type Trend } from './smc.js';
-import { windowOnDateOf, zonedParts, NY, type SessionWindow } from './sessions.js';
+import { tzOffsetMinutes, windowOnDateOf, NY, type SessionWindow } from './sessions.js';
 
 export interface OrderBlock {
   direction: Trend;
@@ -65,11 +65,24 @@ export function sessionRange(candles: readonly Candle[], w: SessionWindow, onDat
 }
 
 /** Previous trading day's high / low. Gold and FX roll at 17:00 New York. */
+const nyOffsetByHour = new Map<number, number>();
+/** New York UTC offset (minutes) at `t`, cached per clock hour — DST only changes on the hour. */
+function nyOffset(t: number): number {
+  const h = Math.floor(t / 3_600_000);
+  let o = nyOffsetByHour.get(h);
+  if (o === undefined) {
+    if (nyOffsetByHour.size > 50_000) nyOffsetByHour.clear();
+    o = tzOffsetMinutes(h * 3_600_000, NY);
+    nyOffsetByHour.set(h, o);
+  }
+  return o;
+}
+
 export function previousDayLevels(candles: readonly Candle[], now: number, rollHour = 17): { pdh: number; pdl: number } | null {
+  // 17:00 NY becomes midnight; the key is the NY calendar day of the shifted instant.
   const dayKey = (t: number) => {
-    const shifted = t + (24 - rollHour) * 3_600_000; // 17:00 NY becomes midnight
-    const p = zonedParts(shifted, NY);
-    return `${p.year}-${p.month}-${p.day}`;
+    const shifted = t + (24 - rollHour) * 3_600_000;
+    return Math.floor((shifted + nyOffset(shifted) * 60_000) / 86_400_000);
   };
   const today = dayKey(now);
   const keys = Array.from(new Set(candles.map((c) => dayKey(c.t)))).filter((k) => k !== today);

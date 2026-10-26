@@ -1,46 +1,43 @@
-import type { Candle } from "@aplus/engine";
+import { INSTRUMENTS, INSTRUMENT_IDS, type Candle, type InstrumentId, type Tf } from "@aplus/engine";
+import { supabase } from "@/lib/supabase";
 
-export type Tf = "5m" | "15m" | "1h" | "4h";
-export const INSTRUMENT_TF: Record<string, { htf: Tf; poi: Tf; ltf: Tf; label: string }> = {
-  XAUUSD: { htf: "1h", poi: "15m", ltf: "5m", label: "1H · 15M · 5M" },
-  "BTCUSDT.P": { htf: "4h", poi: "15m", ltf: "5m", label: "4H · 15M · 5M · mark price" },
-};
+export type { Tf };
+export const INSTRUMENT_TF: Record<string, { htf: Tf; poi: Tf; ltf: Tf; label: string }> = Object.fromEntries(
+  INSTRUMENT_IDS.map((id) => {
+    const d = INSTRUMENTS[id];
+    return [id, { htf: d.htf, poi: d.poi, ltf: d.ltf, label: `${d.htf.toUpperCase()} · ${d.poi.toUpperCase()} · ${d.ltf.toUpperCase()}` }];
+  }),
+);
 
-/** Public feeds the browser can reach. Gold uses PAXG/USDT (1 token = 1 oz) as a labelled proxy. */
-export const FEED: Record<string, { source: string; url: (tf: Tf, limit: number) => string; tv: string }> = {
-  "BTCUSDT.P": {
-    source: "Binance USDⓈ-M · mark price",
-    url: (tf, limit) => `https://fapi.binance.com/fapi/v1/markPriceKlines?symbol=BTCUSDT&interval=${tf}&limit=${limit}`,
-    tv: "BINANCE:BTCUSDT.P",
-  },
-  XAUUSD: {
-    source: "PAXG/USDT proxy · Binance spot",
-    url: (tf, limit) => `https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=${tf}&limit=${limit}`,
-    tv: "OANDA:XAUUSD",
-  },
-};
+export interface CandleSet { candles: Candle[]; forming: Candle | null; source: string; approx: boolean; note?: string }
 
-const TF_MS: Record<Tf, number> = { "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000 };
-
-/** Closed candles only (the forming bar is dropped), so overlays never repaint. */
-export async function fetchCandles(instrument: string, tf: Tf, limit = 300, signal?: AbortSignal): Promise<Candle[]> {
-  const f = FEED[instrument];
-  if (!f) throw new Error(`no feed for ${instrument}`);
-  const res = await fetch(f.url(tf, limit + 1), { signal, cache: "no-store" });
-  if (!res.ok) throw new Error(`${f.source}: HTTP ${res.status}`);
-  const rows = (await res.json()) as (string | number)[][];
-  const now = Date.now();
-  return rows
-    .map((r) => ({ t: Number(r[0]), o: Number(r[1]), h: Number(r[2]), l: Number(r[3]), c: Number(r[4]), v: Number(r[5] ?? 0) }))
-    .filter((c) => c.t + TF_MS[tf] <= now);
+/** GET a JSON API route; throws the route's error message. */
+export async function api<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(path, { signal, cache: "no-store" });
+  const j = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+  return j;
 }
 
-/** Last traded / mark price (includes the forming bar). */
-export async function fetchLast(instrument: string, signal?: AbortSignal): Promise<number | null> {
-  const f = FEED[instrument];
-  if (!f) return null;
-  const res = await fetch(f.url("5m", 1), { signal, cache: "no-store" });
-  if (!res.ok) return null;
-  const rows = (await res.json()) as (string | number)[][];
-  return rows.length ? Number(rows[rows.length - 1]![4]) : null;
+/** POST to a staff-only API route with the signed-in user's token. */
+export async function staffPost<T>(path: string, body: unknown): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${data.session?.access_token ?? ""}` }, body: JSON.stringify(body) });
+  const j = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+  return j;
 }
+
+export async function staffGet<T>(path: string): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const res = await fetch(path, { headers: { authorization: `Bearer ${data.session?.access_token ?? ""}` }, cache: "no-store" });
+  const j = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+  return j;
+}
+
+export const fetchCandles = (i: InstrumentId | string, tf: Tf, limit = 300, signal?: AbortSignal) =>
+  api<CandleSet>(`/api/market/candles?i=${encodeURIComponent(i)}&tf=${tf}&limit=${limit}`, signal);
+
+export const fetchHistory = (i: InstrumentId, tf: Tf, from: number, to: number) =>
+  api<CandleSet>(`/api/market/history?i=${encodeURIComponent(i)}&tf=${tf}&from=${from}&to=${to}`);

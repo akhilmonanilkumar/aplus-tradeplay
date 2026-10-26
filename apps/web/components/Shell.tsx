@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { configured, supabase } from "@/lib/supabase";
-import type { Role } from "@/lib/types";
+import type { Integrations, Role } from "@/lib/types";
 import { Logo } from "@/components/Brand";
 import { Icon } from "@/components/ui";
 import MfaGate from "@/components/MfaGate";
@@ -25,6 +25,7 @@ export type Settings = {
   news_medium_gold: boolean;
   quiet_from: string;
   quiet_to: string;
+  integrations: Integrations | null;
 };
 type Me = {
   session: Session;
@@ -47,30 +48,27 @@ export function useMe(): Me {
 type NavItem = { h?: string; href?: string; l?: string; tl?: string; i?: string; cnt?: string };
 
 const OWNER_NAV: NavItem[] = [
-  { h: "Trade" },
-  { href: "/", l: "Command Center", tl: "Home", i: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" },
-  { href: "/copilot", l: "Live Copilot", tl: "Copilot", i: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z", cnt: "copilot" },
-  { href: "/setups", l: "Setups & Intel", i: "M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5" },
-  { href: "/bias", l: "AI Bias Report", i: "M6 3h9l4 4v14H6zM9 12h7M9 16h5M9 8h3" },
-  { href: "/orders", l: "Orders & Risk Calc", tl: "Orders", i: "M6 3h12v18H6zM9 7h6M9 11h1M14 11h1M9 15h1M14 15h1" },
-  { h: "Copy & Accounts" },
-  { href: "/copy", l: "Copy Engine", tl: "Copy", i: "M8 8h11v11H8zM5 16V5h11", cnt: "mode" },
-  { href: "/accounts", l: "Accounts", i: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 13h2", cnt: "accounts" },
-  { href: "/risk", l: "Risk Manager", i: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" },
-  { href: "/prop", l: "Funded Challenges", i: "M8 4h8v5a4 4 0 0 1-8 0zM8 6H4a3 3 0 0 0 4 4M16 6h4a3 3 0 0 1-4 4M12 13v4M8 21h8" },
-  { href: "/connections", l: "Connections", i: "M9 3v5M15 3v5M7 8h10v4a5 5 0 0 1-10 0zM12 17v4" },
-  { h: "Business" },
-  { href: "/investors", l: "Investors", tl: "Investors", i: "M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21a7 7 0 0 1 14 0M17 3.5a4 4 0 0 1 0 7M22 21a7 7 0 0 0-4-6.3", cnt: "investors" },
-  { href: "/subscriptions", l: "Subscriptions", i: "M4 6h16v12H4zM4 10h16M8 15h3" },
-  { href: "/broadcast", l: "Signal Broadcast", i: "M22 3L11 13M22 3l-7 18-4-8-8-4z" },
-  { href: "/admin", l: "Payouts & Audit", i: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z", cnt: "payouts" },
-  { h: "Insights" },
-  { href: "/analytics", l: "Analytics", i: "M4 20V10M10 20V4M16 20v-7M2 20h20" },
+  { h: "Overview" },
+  { href: "/", l: "Dashboard", tl: "Home", i: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" },
+  { h: "Desks" },
+  { href: "/desk/gold", l: "Gold desk", tl: "Gold", i: "M4 15l3-8h10l3 8zM2 19h20M9 7l1-3h4l1 3", cnt: "gold" },
+  { href: "/desk/btc", l: "BTC desk", tl: "BTC", i: "M9 4v16M13 4v3M13 17v3M7 7h7a3 3 0 0 1 0 6H7M7 13h8a3 3 0 0 1 0 6H7", cnt: "btc" },
+  { href: "/lab/gold", l: "Gold lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
+  { href: "/lab/btc", l: "BTC lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
+  { href: "/autopilot", l: "Autopilot", i: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z", cnt: "autopilot" },
+  { h: "Accounts" },
+  { href: "/accounts", l: "Accounts", tl: "Accounts", i: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 13h2", cnt: "accounts" },
+  { href: "/investors", l: "Investors", i: "M9 11a4 4 0 1 0 0-8a4 4 0 1 0 0 8zM2 21a7 7 0 0 1 14 0M17 3.5a4 4 0 0 1 0 7M22 21a7 7 0 0 0-4-6.3", cnt: "investors" },
+  { href: "/analytics", l: "P&L analytics", tl: "P&L", i: "M4 20V10M10 20V4M16 20v-7M2 20h20" },
+  { href: "/risk", l: "Risk manager", i: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" },
+  { href: "/prop", l: "Funded challenges", i: "M8 4h8v5a4 4 0 0 1-8 0zM8 6H4a3 3 0 0 0 4 4M16 6h4a3 3 0 0 1-4 4M12 13v4M8 21h8" },
+  { h: "Review" },
   { href: "/journal", l: "Journal", i: "M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM5 17a3 3 0 0 1 3-3h11" },
-  { href: "/discipline", l: "Discipline & Mood", i: "M3 12h4l2-5 4 10 2-5h6" },
-  { href: "/news", l: "News & Calendar", i: "M4 6h16v15H4zM4 10h16M8 3v4M16 3v4" },
+  { href: "/bias", l: "Daily bias", i: "M6 3h9l4 4v14H6zM9 12h7M9 16h5M9 8h3" },
+  { href: "/discipline", l: "Discipline & mood", i: "M3 12h4l2-5 4 10 2-5h6" },
   { h: "System" },
-  { href: "/alerts", l: "Alerts", i: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4", cnt: "alerts" },
+  { href: "/alerts", l: "Telegram alerts", i: "M22 3L11 13M22 3l-7 18-4-8-8-4z", cnt: "alerts" },
+  { href: "/admin", l: "Payouts & audit", i: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z", cnt: "payouts" },
   { href: "/settings", l: "Settings", i: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4" },
   { h: "Investor app" },
   { href: "/me", l: "Preview as investor", i: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z" },
@@ -238,22 +236,25 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
   const loadStaff = useCallback(async () => {
     const today = new Date(Date.now() - 18 * 3_600_000).toISOString();
-    const [s, a, i, p, al, sig] = await Promise.all([
+    const [s, a, i, p, al, ap, sig] = await Promise.all([
       supabase.from("app_settings").select("*").maybeSingle(),
       supabase.from("trading_accounts").select("id", { count: "exact", head: true }).eq("active", true),
       supabase.from("investors").select("id", { count: "exact", head: true }),
       supabase.from("payouts").select("id", { count: "exact", head: true }).eq("status", "pending"),
-      supabase.from("alert_log").select("id", { count: "exact", head: true }).eq("read", false),
-      supabase.from("signals").select("id", { count: "exact", head: true }).eq("state", "ARMED").gte("created_at", today),
+      supabase.from("telegram_alerts").select("id", { count: "exact", head: true }).gte("at", today),
+      supabase.from("autopilot_config").select("mode").neq("mode", "off"),
+      supabase.from("signals").select("instrument").eq("state", "ARMED").gte("created_at", today),
     ]);
     if (s.data) setSettings(s.data as Settings);
+    const armed = new Set((sig.data ?? []).map((x) => x.instrument as string));
     setCounts({
       accounts: a.count ? String(a.count) : "",
       investors: i.count ? String(i.count) : "",
       payouts: p.count ? String(p.count) : "",
       alerts: al.count ? String(al.count) : "",
-      copilot: sig.count ? "GO" : "",
-      mode: (s.data as Settings | null)?.mode === "LIVE" ? "LIVE" : "PAPER",
+      autopilot: ap.data?.length ? `${ap.data.length} on` : "",
+      gold: armed.has("XAUUSD") || armed.has("XAUUSDT.P") ? "GO" : "",
+      btc: armed.has("BTCUSDT.P") || armed.has("BTCUSD") || armed.has("BTCUSD.SPOT") ? "GO" : "",
     });
   }, []);
 
@@ -355,7 +356,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         <div className="modal" role="dialog" aria-modal="true" aria-label="Switch to LIVE">
           <div className="card">
             <div className="ch"><h3>Switch to LIVE execution?</h3></div>
-            <p className="muted" style={{ fontSize: 13 }}>Copy orders will be routed to real accounts on every enabled route.</p>
+            <p className="muted" style={{ fontSize: 13 }}>Orders from the desks and autopilot are treated as real: paper fills stop and every ticket needs execution on the account.</p>
             <div className="fld" style={{ marginTop: 14 }}>
               <label htmlFor="step">Authenticator code</label>
               <div className="inp"><input id="step" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={stepCode} onChange={(e) => setStepCode(e.target.value.replace(/\D/g, ""))} autoFocus /></div>

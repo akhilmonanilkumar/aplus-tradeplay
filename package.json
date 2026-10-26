@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter @aplus/engine build && pnpm --filter web build",
-    "test": "pnpm --filter @aplus/engine test",
+    "test": "pnpm --filter @aplus/engine test && pnpm --filter web test",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm --filter web lint"
   },

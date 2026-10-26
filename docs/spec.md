@@ -78,3 +78,16 @@ FundedIN firm identity · real Telegram plan prices · data/news vendors · lega
 - **Deploy** — Vercel project `aplus-tradeplay` (root `apps/web`, region bom1) replaces the journal on tradeplay.cloud.
 - **Env still to add on Vercel** — `SUPABASE_SERVICE_ROLE_KEY` (invites, TradingView webhook), `ANTHROPIC_API_KEY` (copilot agent answers).
 - **Not yet built** — execution worker (venue adapters, fills, reconciler), Telegram bot, calendar/news API feed, licensed XAUUSD feed.
+
+## 10. v3 — internal desk (26 Oct 2026)
+Scope change from the owner: the platform is now the firm's own tool (team trades, manages own and investor accounts); SaaS, subscriptions, copy trading and connections are parked for a later release. No Indian markets.
+
+- **Instruments:** XAUUSD CFD, XAUUSDT.P, BTCUSD CFD, BTCUSDT.P, BTCUSD spot — one registry (`packages/engine/src/instruments.ts`) with timeframes, stop buffers, minimum stop, cost model and sizing per instrument.
+- **Navigation:** Dashboard · Gold desk · BTC desk · Gold lab · BTC lab · Autopilot · Accounts · Investors · P&L analytics · Risk · Funded challenges · Journal · Daily bias · Discipline · Telegram alerts · Payouts & audit · Settings. Retired routes redirect.
+- **Desks** (replace Live Copilot): engine chart (closed-candle overlays + forming bar from live ticks) and TradingView tab, A+ gate, trade timeline, order & risk per account (owner-tagged), confluence score, derivatives positioning (funding, OI with ΔOI × price regime over 1h/4h/24h/7d, L/S, taker flow, basis, cross-venue OI, live liquidations), DXY / yields / cross-asset correlations (+ real yields, COT for gold), session analysis, news with AI read, economic calendar with ±15 min blocks, AI desk analyst.
+- **Labs:** walk-forward backtest per pair in a web worker (no look-ahead, stop-before-target, costs in R), strategy save/load, run history, rejection breakdown, "use for autopilot".
+- **Autopilot:** per instrument Off / Alerts / Paper / Confirm / Auto; server pass every 5 min via `/api/autopilot/tick`; state changes logged; Telegram on chosen events; paper orders filled and closed on live candles. Auto acts as Confirm until venue adapters ship.
+- **Accounts & investors:** owner tag (Own / investor), instruments per account, cash-flow ledger, automatic balance snapshots → growth curves for staff and investors; money P&L analytics by owner, account, pair, session, weekday, hour, side, model.
+- **Telegram:** send-only, every message logged (`telegram_alerts`).
+- **AI:** OpenRouter gateway, model configurable; narrative only.
+- **Not yet built:** live venue execution adapters (Binance, Delta, cTrader/MT5), historical economic calendar for backtests, licensed tick feed for spot gold beyond OANDA.

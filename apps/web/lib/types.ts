@@ -34,6 +34,10 @@ export interface TradingAccount {
   firm_rules: { daily_loss_pct?: number; max_loss_pct?: number; profit_target_pct?: number; split?: number; copy_rule?: string; multiplier?: number; skip_below_min?: boolean };
   is_live: boolean;
   active: boolean;
+  instruments: string[];
+  tags: string[];
+  broker_account: string | null;
+  notes: string | null;
   created_at: string;
 }
 
@@ -76,6 +80,8 @@ export interface Trade {
   emotion: string | null;
   lesson: string | null;
   risk_pct: number | null;
+  source: string;
+  funding: number | null;
   opened_at: string;
   closed_at: string | null;
 }
@@ -132,3 +138,13 @@ export interface NewsEvent { id: string; at: string; currency: string; title: st
 export interface SetupZone { id: string; instrument: string; side: "long" | "short"; timeframe: string; kind: string; top: number; bottom: number; fresh: boolean; liquidity_story: boolean; created_bos: boolean; alert_set: boolean; status: string; note: string | null; created_at: string }
 export interface AlertLog { id: number; title: string; body: string | null; severity: "info" | "warn" | "critical"; read: boolean; at: string }
 export interface CopyRoute { id: string; instrument: string; master_account_id: string; target_account_id: string; risk_pct: number | null; symbol: string | null; enabled: boolean }
+
+export interface Snapshot { id: number; account_id: string; at: string; balance: number; equity: number; note: string | null }
+export interface CashFlow { id: string; account_id: string; kind: "deposit" | "withdrawal" | "fee" | "payout" | "adjustment"; amount: number; at: string; note: string | null }
+export interface TelegramAlert { id: number; at: string; chat_id: string; chat_label: string | null; kind: string; instrument: string | null; text: string; status: "sent" | "failed"; telegram_message_id: number | null; error: string | null; signal_id: string | null; source: string }
+export interface Strategy { id: string; desk: "gold" | "btc"; instrument: string; name: string; params: Record<string, unknown>; notes: string | null; created_at: string; updated_at: string }
+export interface BacktestRow { id: string; strategy_id: string | null; instrument: string; from_ts: string; to_ts: string; params: Record<string, unknown>; stats: Record<string, number | null>; summary: Record<string, unknown>; source: string | null; created_at: string }
+export type AutopilotMode = "off" | "alerts" | "paper" | "confirm" | "auto";
+export interface AutopilotConfig { id: string; instrument: string; mode: AutopilotMode; strategy_id: string | null; account_ids: string[]; risk_pct: number; events: string[]; filters: { allowGradeA?: boolean }; updated_at: string }
+export interface AutopilotRun { id: number; at: string; instrument: string; side: string | null; state: string; grade: string | null; verdict: string | null; price: number | null; action: string | null; detail: Record<string, unknown> }
+export interface Integrations { tv_symbols: Record<string, string>; telegram_chats: { id: string; label: string }[]; tv_to_telegram: boolean; ai_model: string | null }

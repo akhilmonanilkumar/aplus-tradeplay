@@ -1,12 +1,9 @@
-import { MCX_MULTIPLIER, maxDrawdownPct } from "@aplus/engine";
+import { maxDrawdownPct, pnlMultiplier } from "@aplus/engine";
 import type { Trade, TradingAccount } from "@/lib/types";
 
 /** Contract multiplier: money per 1.0 price move per 1.0 of size. */
 export function multiplier(instrument: string): number {
-  if (instrument === "XAUUSD") return 100; // 1.00 lot = 100 oz
-  if (instrument === "GOLDM") return MCX_MULTIPLIER.GOLDM;
-  if (instrument === "GOLD") return MCX_MULTIPLIER.GOLD;
-  return 1; // linear perps: qty in coin
+  return pnlMultiplier(instrument); // XAUUSD CFD: 1.00 lot = 100 oz; perps/spot: qty in coin
 }
 
 /** Money lost if the stop is hit. */
@@ -29,8 +26,8 @@ export function inGroup(a: Pick<TradingAccount, "type">, g: Group) {
  * Daily equity for a group over the last `days`, rebuilt from current equity
  * minus later closed P&L (USD accounts only).
  */
-export function equitySeries(accounts: TradingAccount[], trades: Trade[], g: Group, days = 30) {
-  const acc = accounts.filter((a) => a.currency !== "INR" && inGroup(a, g));
+export function equitySeries(accounts: TradingAccount[], trades: Trade[], g: Group | ((a: TradingAccount) => boolean), days = 30) {
+  const acc = accounts.filter((a) => a.currency !== "INR" && (typeof g === "function" ? g(a) : inGroup(a, g)));
   const ids = new Set(acc.map((a) => a.id));
   const now = acc.reduce((s, a) => s + Number(a.equity), 0);
   const byDay = new Map<string, number>();
