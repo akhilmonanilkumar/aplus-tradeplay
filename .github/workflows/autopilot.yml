@@ -1,11 +1,17 @@
 name: Autopilot tick
 
 # Runs one autopilot pass every 5 minutes (GitHub may delay scheduled runs by a few minutes).
-# Repository secrets: AUTOPILOT_URL (e.g. https://tradeplay.cloud) and AUTOPILOT_SECRET.
+# Repository secrets: AUTOPILOT_URL (e.g. https://www.tradeplay.cloud) and AUTOPILOT_SECRET.
+# A manual run can pass a query, e.g. "preview=selector" to score the selector board without acting.
 on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      query:
+        description: "Optional query string (preview=selector scores the board without acting)"
+        required: false
+        default: ""
 
 jobs:
   tick:
@@ -16,6 +22,7 @@ jobs:
         env:
           URL: ${{ secrets.AUTOPILOT_URL }}
           SECRET: ${{ secrets.AUTOPILOT_SECRET }}
+          QUERY: ${{ inputs.query }}
         run: |
           if [ -z "$URL" ] || [ -z "$SECRET" ]; then echo "AUTOPILOT_URL / AUTOPILOT_SECRET not set"; exit 0; fi
-          curl -fsS --max-time 90 -H "Authorization: Bearer $SECRET" "$URL/api/autopilot/tick"
+          curl -fsS --max-time 90 -H "Authorization: Bearer $SECRET" "$URL/api/autopilot/tick${QUERY:+?$QUERY}"

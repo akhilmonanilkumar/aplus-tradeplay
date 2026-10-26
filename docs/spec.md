@@ -91,3 +91,15 @@ Scope change from the owner: the platform is now the firm's own tool (team trade
 - **Telegram:** send-only, every message logged (`telegram_alerts`).
 - **AI:** OpenRouter gateway, model configurable; narrative only.
 - **Not yet built:** live venue execution adapters (Binance, Delta, cTrader/MT5), historical economic calendar for backtests, licensed tick feed for spot gold beyond OANDA.
+
+## 11. Best-opportunity selector (26 Oct 2026)
+
+- **What it does:** each autopilot pass evaluates every instrument in its universe, keeps only setups the A+ gate passes (grade A optional), scores them 0–100 and sends the best trade per underlying (gold, BTC) to Telegram as one trade ticket with size per account. Engine: `packages/engine/src/selector.ts`; server: `apps/web/lib/server/selector.ts`.
+- **Score:** gate quality 40 (A+ 40, A 28) · R:R 15 (2R→0, 5R→full) · confluence 20 (dollar, yields, NQ, funding, OI regime, taker flow, top-trader L/S, COT; −100…+100 mapped linearly) · recent edge 15 · timing 10 (London/NY killzone 10, other window 5) · −4 per caution flag (max −12).
+- **Recent edge:** the same walk-forward backtester run on the last 21 days per instrument, refreshed about daily (one instrument per pass), stored in `backtests` with `strategy_id` null and `summary.kind = 'edge'`. Few trades shrink the edge to neutral; a proven negative edge (≥ 8 trades, < −0.25R) rejects the instrument.
+- **Hard rejects:** gate not GO, confluence ≤ −40, negative proven edge, score below the minimum.
+- **Exposure rules:** one pick per desk; a desk is busy while a selector order is pending or a selector trade is open, and for the cooldown after a pick; daily cap per IST day.
+- **Tracking:** with paper tracking on, each pick queues paper orders on the chosen accounts; fills and closes go to Telegram and into P&L analytics.
+- **Execution layer:** `apps/web/lib/server/execution.ts` defines `TradeTicket` and `Executor`. Telegram is the only destination today; broker/prop-firm API or webhook adapters implement `Executor` and receive the same ticket.
+- **Preview:** `/api/autopilot/tick?preview=selector` (staff or `AUTOPILOT_SECRET`) and the Preview button score the board without acting.
+- **Settings:** `app_settings.integrations.selector` (no schema change), edited on the Autopilot page.

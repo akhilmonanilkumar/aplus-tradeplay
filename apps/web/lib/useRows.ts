@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type Q = { table: string; select?: string; order?: string; ascending?: boolean; limit?: number; eq?: [string, string | number | boolean] };
+type Q = { table: string; select?: string; order?: string; ascending?: boolean; limit?: number; eq?: [string, string | number | boolean]; notNull?: string };
 
 /** Load rows from one table (RLS decides what the signed-in user can see). */
 export function useRows<T>(q: Q) {
@@ -13,6 +13,7 @@ export function useRows<T>(q: Q) {
   const load = useCallback(async () => {
     let query = supabase.from(q.table).select(q.select ?? "*");
     if (q.eq) query = query.eq(q.eq[0], q.eq[1]);
+    if (q.notNull) query = query.not(q.notNull, "is", null);
     if (q.order) query = query.order(q.order, { ascending: q.ascending ?? false });
     if (q.limit) query = query.limit(q.limit);
     const { data, error } = await query;

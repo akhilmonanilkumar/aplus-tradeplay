@@ -7,6 +7,7 @@ import {
 import { loadCandles } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
+import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 
 /**
  * Autopilot: runs the same detector + A+ gate as the desks on the server, on a schedule.
@@ -16,6 +17,8 @@ import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/tel
  *   paper    alerts + paper orders on ARMED, filled and closed against live candles
  *   confirm  alerts + orders waiting for a one-tap confirm in the app
  *   auto     reserved for live venue adapters; until those ship it behaves like confirm
+ * The best-opportunity selector (lib/server/selector.ts) runs after the per-instrument pass
+ * on the same evaluations and is configured separately.
  */
 
 export type Mode = "off" | "alerts" | "paper" | "confirm" | "auto";
@@ -90,20 +93,45 @@ function stateMessage(e: Evaluation, mode: Mode): string {
   return lines.join("\n");
 }
 
-/** One autopilot pass over every enabled instrument. Idempotent: only state changes act. */
-export async function tick(db: SupabaseClient): Promise<{ instrument: string; state: string; action: string }[]> {
+/** Settings, chats and a per-pass evaluation memo shared by the instrument loop and the selector. */
+async function passContext(db: SupabaseClient) {
   const [cfgRes, setRes, calendar] = await Promise.all([
     db.from("autopilot_config").select("*"),
     db.from("app_settings").select("*").eq("id", 1).single(),
     loadCalendar().catch(() => ({ items: [] as CalEvent[] })),
   ]);
   if (cfgRes.error) throw new Error(cfgRes.error.message);
-  const settings = setRes.data as { kill_switch: boolean; mode: string; integrations?: { telegram_chats?: Chat[] }; counter_trend_allowed?: boolean; advanced_models_allowed?: boolean; news_block_minutes?: number } | null;
+  const settings = setRes.data as { kill_switch: boolean; mode: string; integrations?: { telegram_chats?: Chat[]; selector?: unknown }; counter_trend_allowed?: boolean; advanced_models_allowed?: boolean; news_block_minutes?: number } | null;
   const chats = chatsFrom(settings?.integrations?.telegram_chats);
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  // One evaluation per instrument and filter set per pass; the selector reuses the per-instrument ones.
+  const memo = new Map<string, Promise<Evaluation>>();
+  const evalFor = (id: InstrumentId, filters?: AutopilotConfig["filters"]) => {
+    const k = `${id}:${JSON.stringify({ w: filters?.windows ?? null, rr: filters?.minRR ?? null })}`;
+    if (!memo.has(k)) {
+      memo.set(k, (async () => {
+        const bias = await db.from("bias_reports").select("allowed").eq("instrument", id).eq("report_date", today).maybeSingle();
+        return evaluate(id, { bias: (bias.data?.allowed as "long" | "short" | null) ?? null, calendar: calendar.items, filters, settings: settings ?? undefined });
+      })());
+    }
+    return memo.get(k)!;
+  };
+  return { configs: (cfgRes.data ?? []) as AutopilotConfig[], settings, chats, evalFor };
+}
+
+/** Score the selector board without acting: no signals, orders, Telegram or log rows. */
+export async function previewSelector(db: SupabaseClient): Promise<SelectorOutcome> {
+  const { settings, chats, evalFor } = await passContext(db);
+  const cfg = selectorConfig(settings?.integrations?.selector);
+  return runSelector(db, { config: { ...cfg, enabled: true }, evalFor: (id) => evalFor(id), chats, killSwitch: true, dryRun: true });
+}
+
+/** One autopilot pass over every enabled instrument. Idempotent: only state changes act. */
+export async function tick(db: SupabaseClient): Promise<{ results: { instrument: string; state: string; action: string }[]; selector: SelectorOutcome | null }> {
+  const { configs, settings, chats, evalFor } = await passContext(db);
   const out: { instrument: string; state: string; action: string }[] = [];
 
-  for (const cfg of (cfgRes.data ?? []) as AutopilotConfig[]) {
+  for (const cfg of configs) {
     if (cfg.mode === "off") {
       // Still fill and close manual paper orders from the desks.
       try {
@@ -120,8 +148,7 @@ export async function tick(db: SupabaseClient): Promise<{ instrument: string; st
       continue;
     }
     try {
-      const bias = await db.from("bias_reports").select("allowed").eq("instrument", cfg.instrument).eq("report_date", today).maybeSingle();
-      const e = await evaluate(cfg.instrument, { bias: (bias.data?.allowed as "long" | "short" | null) ?? null, calendar: calendar.items, filters: cfg.filters, settings: settings ?? undefined });
+      const e = await evalFor(cfg.instrument, cfg.filters);
       const last = await db.from("autopilot_runs").select("state, side, detail").eq("instrument", cfg.instrument).order("at", { ascending: false }).limit(1).maybeSingle();
       const planKey = e.analysis.suggest ? `${e.analysis.suggest.entry}:${e.analysis.suggest.stop}:${e.analysis.suggest.target}` : null;
       const prev = last.data as { state: string; side: string; detail: { plan?: string | null } } | null;
@@ -161,7 +188,18 @@ export async function tick(db: SupabaseClient): Promise<{ instrument: string; st
       out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message });
     }
   }
-  return out;
+
+  const sel = selectorConfig(settings?.integrations?.selector);
+  let selector: SelectorOutcome | null = null;
+  if (sel.enabled && sel.universe.length) {
+    try {
+      selector = await runSelector(db, { config: sel, evalFor: (id) => evalFor(id), chats, killSwitch: !!settings?.kill_switch });
+    } catch (err) {
+      await db.from("autopilot_runs").insert({ instrument: "SELECTOR", state: "ERROR", action: "error", detail: { error: (err as Error).message } });
+      out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
+    }
+  }
+  return { results: out, selector };
 }
 
 async function queue(db: SupabaseClient, cfg: AutopilotConfig, e: Evaluation, signalId: string): Promise<string> {
@@ -190,7 +228,8 @@ async function managePaper(db: SupabaseClient, cfg: AutopilotConfig, ltf: Candle
   const def = INSTRUMENTS[cfg.instrument];
   const tfMs = TF_MS[def.ltf];
   const notes: string[] = [];
-  const pend = await db.from("orders").select("*, signals!inner(instrument, model, session_window, rr)").eq("action", "PAPER").eq("status", "queued").eq("signals.instrument", cfg.instrument);
+  const pend = await db.from("orders").select("*, signals!inner(instrument, model, session_window, rr, grade, source)").eq("action", "PAPER").eq("status", "queued").eq("signals.instrument", cfg.instrument);
+  const filledSignals = new Set<string>();
   for (const o of pend.data ?? []) {
     const created = Date.parse(o.created_at);
     const bars = ltf.filter((c) => c.t + tfMs > created);
@@ -202,16 +241,20 @@ async function managePaper(db: SupabaseClient, cfg: AutopilotConfig, ltf: Candle
       if (!upd.data?.length) continue;
       await db.from("trades").insert({
         account_id: o.account_id, signal_id: o.signal_id, instrument: cfg.instrument, side: o.side, model: o.signals.model, session_window: o.signals.session_window,
-        qty: o.qty, entry: o.entry, stop: o.stop, target: o.target, planned_r: o.signals.rr, grade: "A+", source: "paper", risk_pct: cfg.risk_pct,
+        qty: o.qty, entry: o.entry, stop: o.stop, target: o.target, planned_r: o.signals.rr, grade: o.signals.grade === "A" ? "A" : "A+", source: "paper", risk_pct: cfg.risk_pct,
         opened_at: new Date(Math.max(fillBar.t, created)).toISOString(),
       });
+      if (o.signals.source === "selector" && o.signal_id && !filledSignals.has(o.signal_id)) {
+        filledSignals.add(o.signal_id);
+        await sendTelegram(db, { text: `📥 <b>${escapeHtml(cfg.instrument)} filled</b>\n${long ? "Long" : "Short"} ${fmt(Number(o.entry))} · SL ${fmt(Number(o.stop))} · TP ${fmt(Number(o.target))} · paper`, chats, kind: "FILLED", instrument: cfg.instrument, signalId: o.signal_id, source: "autopilot" });
+      }
       notes.push("paper fill");
     } else if (ranAway || bars.length >= 12) {
       await db.from("orders").update({ status: "cancelled", reasons: [...(o.reasons ?? []), ranAway ? "ran away before fill" : "expired"] }).eq("id", o.id).eq("status", "queued");
       notes.push("paper cancel");
     }
   }
-  const open = await db.from("trades").select("*").eq("instrument", cfg.instrument).eq("source", "paper").is("exit", null);
+  const open = await db.from("trades").select("*, signals(source)").eq("instrument", cfg.instrument).eq("source", "paper").is("exit", null);
   for (const t of open.data ?? []) {
     const opened = Date.parse(t.opened_at);
     const long = t.side === "long";
@@ -231,7 +274,7 @@ async function managePaper(db: SupabaseClient, cfg: AutopilotConfig, ltf: Candle
         if (acc.data && !acc.data.is_live) {
           await db.from("trading_accounts").update({ balance: Number(acc.data.balance) + gross - fees, equity: Number(acc.data.equity) + gross - fees }).eq("id", t.account_id);
         }
-        if (cfg.events.includes("CLOSED")) {
+        if (cfg.events.includes("CLOSED") || (t.signals as { source?: string } | null)?.source === "selector") {
           await sendTelegram(db, { text: `${r > 0 ? "✅" : "❌"} <b>${escapeHtml(cfg.instrument)} closed ${r > 0 ? "+" : ""}${r.toFixed(2)}R</b>\n${long ? "Long" : "Short"} ${fmt(Number(t.entry))} → ${fmt(exit)} · ${escapeHtml(acc.data?.name ?? "")} · paper`, chats, kind: "CLOSED", instrument: cfg.instrument, signalId: t.signal_id, source: "autopilot" });
         }
         notes.push(`closed ${r.toFixed(2)}R`);

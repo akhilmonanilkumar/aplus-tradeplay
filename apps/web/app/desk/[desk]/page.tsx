@@ -3,13 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
-  DESKS, EDGE_WINDOWS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, contextScore, evaluateGate, guardrails, isFxWeekend, isInWindow,
-  oiRegime, stateFromSetup, type DeskId, type GateInput, type InstrumentId, type ModelId,
+  DESKS, EDGE_WINDOWS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, evaluateGate, guardrails, isFxWeekend, isInWindow,
+  stateFromSetup, type DeskId, type GateInput, type InstrumentId, type ModelId,
 } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import { useMarket } from "@/lib/useMarket";
 import { useLive } from "@/lib/useLive";
 import { useApi } from "@/lib/useApi";
+import { confluence } from "@/lib/confluence";
 import { staffPost } from "@/lib/market";
 import { analyze, type Zone } from "@/lib/analyze";
 import { istDay, todayIst } from "@/lib/derive";
@@ -133,20 +134,7 @@ export default function DeskPage() {
 
   // context & confluence
   const d = derivs.data, m = macro.data;
-  const dxy = m?.series.find((s) => s.id === "dxy"), y10 = m?.series.find((s) => s.id === "us10y"), nq = m?.series.find((s) => s.id === "nq");
-  const w4 = d?.oi.windows.find((w) => w.label === "4h");
-  const conf = contextScore({
-    desk: deskId, side: tradeSide,
-    dxy: dxy ? { dir: dxy.trend, chg24h: dxy.chg24h } : null,
-    us10yBp24h: y10?.chgBp24h ?? null,
-    nq: nq ? { dir: nq.trend } : null,
-    funding: d?.funding.last ?? null,
-    oi: w4 && w4.oiChg !== null && w4.priceChg !== null ? { regime: oiRegime(w4.priceChg, w4.oiChg) } : null,
-    takerRatio: d?.taker.length ? d.taker.slice(-4).reduce((s, x) => s + x.buy, 0) / Math.max(1e-9, d.taker.slice(-4).reduce((s, x) => s + x.sell, 0)) : null,
-    topLs: d?.ls.top.at(-1)?.ratio ?? null,
-    cotZ: m?.cot?.z ?? null,
-    corrDxy: dxy?.corr30d ?? null,
-  });
+  const conf = confluence(deskId, tradeSide, d, m);
 
   const notes: { t: number; title: string; body: string }[] = [];
   if (gate && a) {

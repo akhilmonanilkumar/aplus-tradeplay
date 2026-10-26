@@ -60,7 +60,8 @@ export default function Lab() {
   const worker = useRef<Worker | null>(null);
 
   const strategies = useRows<Strategy>({ table: "strategies", eq: ["desk", deskId], order: "updated_at" });
-  const runs = useRows<BacktestRow>({ table: "backtests", select: "id,strategy_id,instrument,from_ts,to_ts,params,stats,summary,source,created_at", order: "created_at", limit: 30 });
+  // Saved lab runs always carry a strategy; strategy-less rows are the selector's daily edge measurements.
+  const runs = useRows<BacktestRow>({ table: "backtests", select: "id,strategy_id,instrument,from_ts,to_ts,params,stats,summary,source,created_at", notNull: "strategy_id", order: "created_at", limit: 30 });
   useEffect(() => { setInst(desk.primary); setRes(null); setStratId(null); }, [deskId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => worker.current?.terminate(), []);
 

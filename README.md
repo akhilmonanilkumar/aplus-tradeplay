@@ -25,9 +25,13 @@ The TradingView tab on each desk embeds TradingView's own chart for the symbol s
 
 See `apps/web/.env.example`.
 
+## Best-opportunity selector
+
+On the Autopilot page. Each pass scores every live setup that passes the A+ gate (gate quality, R:R, dollar/yields/funding/OI/flow confluence, the edge's last-3-weeks walk-forward result on that instrument, timing) and sends the best trade per underlying to Telegram with size per account; optional paper tracking reports fills and results. "Preview board" scores without acting. Details: `docs/spec.md` §11.
+
 ## Autopilot schedule
 
-`.github/workflows/autopilot.yml` calls `/api/autopilot/tick` every 5 minutes. Add repository secrets `AUTOPILOT_URL` and `AUTOPILOT_SECRET` (same value as the Vercel env var). Any external cron can call the same URL with `Authorization: Bearer $AUTOPILOT_SECRET`.
+`.github/workflows/autopilot.yml` calls `/api/autopilot/tick` every 5 minutes. Add repository secrets `AUTOPILOT_URL` and `AUTOPILOT_SECRET` (same value as the Vercel env var). Any external cron can call the same URL with `Authorization: Bearer $AUTOPILOT_SECRET`. A manual run with the input `preview=selector` scores the selector board without acting.
 
 ## Run
 

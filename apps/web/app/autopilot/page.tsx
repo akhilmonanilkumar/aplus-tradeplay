@@ -10,6 +10,7 @@ import type { AutopilotConfig, AutopilotMode, AutopilotRun, Investor, Order, Str
 import { money, num, timeShort } from "@/lib/fmt";
 import { useMe } from "@/components/Shell";
 import { Card, Chip, Empty, ErrorNote, Note, Seg, Table, Toggle } from "@/components/ui";
+import SelectorCard from "@/components/SelectorCard";
 
 const MODES: { v: AutopilotMode; l: string; d: string }[] = [
   { v: "off", l: "Off", d: "Nothing runs" },
@@ -23,7 +24,7 @@ const EVENTS = ["IN_POI", "SWEPT", "SHIFTED", "ARMED", "CLOSED"];
 export default function Autopilot() {
   const me = useMe();
   const cfg = useRows<AutopilotConfig>({ table: "autopilot_config", order: "instrument", ascending: true });
-  const runs = useRows<AutopilotRun>({ table: "autopilot_runs", order: "at", limit: 60 });
+  const runs = useRows<AutopilotRun>({ table: "autopilot_runs", order: "at", limit: 120 });
   const accounts = useRows<TradingAccount>({ table: "trading_accounts", order: "created_at", ascending: true });
   const investors = useRows<Investor>({ table: "investors", select: "id,name", order: "name", ascending: true });
   const strategies = useRows<Strategy>({ table: "strategies", select: "id,name,instrument", order: "updated_at" });
@@ -38,8 +39,10 @@ export default function Autopilot() {
   const tick = async () => {
     setBusy(true);
     try {
-      const r = await staffPost<{ results: { instrument: string; state: string; action: string }[] }>("/api/autopilot/tick", {});
-      setMsg({ ok: true, t: r.results.length ? r.results.map((x) => `${x.instrument}: ${x.state}${x.action !== "none" ? ` (${x.action})` : ""}`).join(" · ") : "Nothing enabled" });
+      const r = await staffPost<{ results: { instrument: string; state: string; action: string }[]; selector: { picks: { instrument: string; side: string; score: number }[]; ranked: unknown[] } | null }>("/api/autopilot/tick", {});
+      const parts = r.results.map((x) => `${x.instrument}: ${x.state}${x.action !== "none" ? ` (${x.action})` : ""}`);
+      if (r.selector) parts.push(r.selector.picks.length ? `Selector picked ${r.selector.picks.map((p) => `${p.instrument} ${p.side} ${p.score}/100`).join(", ")}` : `Selector: no trade (${r.selector.ranked.length} scanned)`);
+      setMsg({ ok: true, t: parts.length ? parts.join(" · ") : "Nothing enabled" });
       runs.reload(); pending.reload();
     } catch (e) { setMsg({ ok: false, t: (e as Error).message }); }
     setBusy(false);
@@ -59,9 +62,11 @@ export default function Autopilot() {
       {me.settings?.kill_switch && <Note tone="down">Kill switch is on: autopilot still evaluates and alerts, but creates no orders.</Note>}
       <Card title="How autopilot runs" right={<button className="btn pri sm" onClick={tick} disabled={busy}>{busy ? "Running…" : "Run a pass now"}</button>}>
         <p className="muted" style={{ fontSize: 12.5 }}>
-          Every 5 minutes a scheduler calls <span className="mono">/api/autopilot/tick</span> with <span className="mono">AUTOPILOT_SECRET</span>. Each pass runs the same detector and A+ gate as the desks on server-side candles, logs every state change below, sends Telegram on the events you pick, and in Paper mode fills and closes orders against live candles (stop checked before target). Nothing acts twice on the same state.
+          Every 5 minutes a scheduler calls <span className="mono">/api/autopilot/tick</span> with <span className="mono">AUTOPILOT_SECRET</span>. Each pass runs the same detector and A+ gate as the desks on server-side candles, logs every state change below, sends Telegram on the events you pick, and in Paper mode fills and closes orders against live candles (stop checked before target). Nothing acts twice on the same state. The selector then ranks the same evaluations across both desks.
         </p>
       </Card>
+
+      <SelectorCard runs={runs.rows ?? []} accounts={accounts.rows ?? []} investors={investors.rows ?? []} />
 
       <section className="g12">
         {(cfg.rows ?? []).map((c) => {

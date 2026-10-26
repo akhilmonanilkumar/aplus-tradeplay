@@ -1,3 +1,5 @@
+import type { SelectorConfig } from "@/lib/selectorConfig";
+
 export type Role = "owner" | "admin" | "investor";
 export type AccountType = "master" | "sub" | "eval" | "demo" | "investor";
 export type CopyPolicy = "AUTO" | "CONFIRM" | "MANUAL" | "PAPER" | "BLOCKED";
@@ -147,4 +149,4 @@ export interface BacktestRow { id: string; strategy_id: string | null; instrumen
 export type AutopilotMode = "off" | "alerts" | "paper" | "confirm" | "auto";
 export interface AutopilotConfig { id: string; instrument: string; mode: AutopilotMode; strategy_id: string | null; account_ids: string[]; risk_pct: number; events: string[]; filters: { allowGradeA?: boolean }; updated_at: string }
 export interface AutopilotRun { id: number; at: string; instrument: string; side: string | null; state: string; grade: string | null; verdict: string | null; price: number | null; action: string | null; detail: Record<string, unknown> }
-export interface Integrations { tv_symbols: Record<string, string>; telegram_chats: { id: string; label: string }[]; tv_to_telegram: boolean; ai_model: string | null }
+export interface Integrations { tv_symbols: Record<string, string>; telegram_chats: { id: string; label: string }[]; tv_to_telegram: boolean; ai_model: string | null; selector?: Partial<SelectorConfig> }
