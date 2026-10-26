@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
-  DESKS, EDGE_WINDOWS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, evaluateGate, guardrails, isFxWeekend, isInWindow,
-  stateFromSetup, type DeskId, type GateInput, type InstrumentId, type ModelId,
+  DESKS, EDGE_RULES, EDGE_WINDOWS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, evaluateGate, guardrails, isFxWeekend, isInWindow,
+  shiftText, stateFromSetup, type DeskId, type GateInput, type InstrumentId, type ModelId,
 } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import { useMarket } from "@/lib/useMarket";
@@ -119,7 +119,7 @@ export default function DeskPage() {
     const input: GateInput = {
       htfTrend: a.htfTrend, poiTfTrend: a.poiTrend, side: tradeSide, price: a.price, range: a.range,
       poi: { inside: triVal(ov.inside, !!a.inside), fresh: a.inside?.fresh ?? true, trendAligned: true, liquidityStory: a.inside?.liquidityStory ?? false, createdBos: a.inside?.createdBos ?? true },
-      swept: triVal(ov.swept, !!a.sweep), shifted: triVal(ov.shifted, !!a.shift?.t),
+      swept: triVal(ov.swept, !!a.sweep), shifted: triVal(ov.shifted, !!a.shift?.t || !!a.ltfShift), shiftDetail: shiftText(a),
       timing: { inWindow: !!liveWindow && !closed, newsClear, windowId: liveWindow?.id ?? null, minutesSinceNews: lastRelease ? (now - lastRelease) / 60000 : null },
       plan: plan ? { ...plan, targetIsStructural: targetReal, stopIsStructural: true } : undefined,
       minStopPct: def.minStopPct, qualityConcern: concern.trim() || null, model, instrument: inst === "XAUUSDT.P" ? "XAUUSD" : inst, modelChecks: checks,
@@ -288,7 +288,7 @@ export default function DeskPage() {
             </div>
           </Card>
 
-          <Ticket def={def} side={tradeSide} plan={plan} suggest={a?.suggest ?? null} gate={gate} window={liveWindow?.id ?? null} accounts={accounts.rows ?? []} investors={investors.rows ?? []} onPlan={setPlanForm} onDone={(msg) => { setDone(msg); trades.reload(); }} />
+          <Ticket def={def} side={tradeSide} plan={plan} suggest={a?.suggest ?? null} targets={a?.targets ?? []} minRR={EDGE_RULES.minRR} gate={gate} window={liveWindow?.id ?? null} accounts={accounts.rows ?? []} investors={investors.rows ?? []} onPlan={setPlanForm} onDone={(msg) => { setDone(msg); trades.reload(); }} />
 
           <Card title="Live tape" right={<Chip>{live.tape.length} prints</Chip>}>
             {live.tape.length === 0 ? <Empty>{live.connected ? "Waiting for trades…" : "Connecting…"}</Empty> : (

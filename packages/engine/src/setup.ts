@@ -1,6 +1,7 @@
 import { equalLevels, fairValueGaps, isSweep, marketShift, pivots, premiumDiscount, smcStructure, swingStructure, atr, type Candle, type Trend } from './smc.js';
 import { orderBlocks, previousDayLevels, sessionRange } from './zones.js';
 import { ASIA_Q } from './sessions.js';
+import { EDGE_RULES } from './specs.js';
 
 /**
  * Setup detector: turns closed HTF / POI / entry-TF candles into what the A+ gate
@@ -41,8 +42,16 @@ export interface SetupAnalysis {
   shift: { t: number | null; level: number; close: number | null } | null;
   lastLH: number | null;
   lastHL: number | null;
-  /** Model A plan: limit at the 5M zone that caused the shift, stop beyond the sweep wick. */
-  suggest: { entry: number; stop: number; target: number; targetLabel: string } | null;
+  /** Latest 5M structure break in the trade direction (LuxAlgo internal structure, length 5) within the sweep lookback, sweep or not. */
+  ltfShift: { t: number; index: number; level: number; kind: 'BOS' | 'CHoCH' } | null;
+  /**
+   * Plan. After a sweep and shift (Model A): limit at the 5M zone that caused the shift, stop beyond
+   * the sweep wick. Without a sweep, from the 5M shift alone: stop beyond the leg that broke structure.
+   * Target: the nearest real level (liquidity, swing, unfilled FVG) worth at least `minRR`.
+   */
+  suggest: { entry: number; stop: number; target: number; targetLabel: string; basis: 'sweep' | 'shift' } | null;
+  /** Real levels beyond the entry in order of distance, with the R each would pay. */
+  targets: { level: number; label: string; r: number }[];
   /** After the shift: did price return to the entry (filled) or run to target first (ran away)? */
   after: { filled: boolean; ranAway: boolean } | null;
   atr: number;
@@ -56,6 +65,8 @@ export interface AnalyzeOptions {
   stopBuffer?: (price: number) => number;
   /** Bars of the entry TF searched for a sweep (default 36 = 3 h on 5M). */
   sweepLookback?: number;
+  /** Minimum reward:risk the target should pay; the nearest real level that does is chosen (default 2). */
+  minRR?: number;
 }
 
 /** Dealing range from the latest HTF break: origin of the BOS → extreme reached after it. */
@@ -151,38 +162,70 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
   const lastLH = [...ltfPiv].reverse().find((p) => p.kind === 'high')?.price ?? null;
   const lastHL = [...ltfPiv].reverse().find((p) => p.kind === 'low')?.price ?? null;
 
+  // 5M structure as LuxAlgo internal structure reads it: the latest break in the trade direction.
+  const ltfStruct = smcStructure(ltf, { internal: STRUCTURE.internal, swing: STRUCTURE.swing });
+  const lastBreak = [...ltfStruct.internal.breaks, ...ltfStruct.swing.breaks]
+    .filter((b) => b.direction === want && b.index >= offset)
+    .sort((x, y) => y.index - x.index)[0];
+  const ltfShift: SetupAnalysis['ltfShift'] = lastBreak ? { t: ltf[lastBreak.index]!.t, index: lastBreak.index, level: lastBreak.level, kind: lastBreak.kind } : null;
+
+  // Target pool: liquidity, range extremes, swings and unfilled FVGs (their near edge) beyond the entry.
+  const fvgTargets = (c: readonly Candle[], label: string) => fairValueGaps(c)
+    .filter((f) => f.filledAt === null && f.direction === (side === 'long' ? 'down' : 'up'))
+    .slice(-8)
+    .map((f) => ({ v: side === 'long' ? f.bottom : f.top, l: label }));
+  const pool = side === 'long'
+    ? [{ v: pdl?.pdh, l: 'PDH' }, { v: hr?.high, l: 'Range high' }, { v: asia?.high, l: 'Asia high' }, ...liquidity.filter((x) => x.label === 'EQH').map((x) => ({ v: x.level, l: 'EQH' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '15M swing high' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '5M swing high' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')]
+    : [{ v: pdl?.pdl, l: 'PDL' }, { v: hr?.low, l: 'Range low' }, { v: asia?.low, l: 'Asia low' }, ...liquidity.filter((x) => x.label === 'EQL').map((x) => ({ v: x.level, l: 'EQL' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '15M swing low' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '5M swing low' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')];
+  const minRR = opts.minRR ?? EDGE_RULES.minRR;
+  const minRisk = Number.isFinite(a) ? a * 0.25 : 0;
+
   let suggest: SetupAnalysis['suggest'] = null;
   let after: SetupAnalysis['after'] = null;
+  let targets: SetupAnalysis['targets'] = [];
+  const plan = (entry: number, stopAt: number, fromIndex: number, basis: 'sweep' | 'shift') => {
+    const buf = (opts.stopBuffer ?? (() => 0))(entry);
+    let stop = side === 'long' ? stopAt - buf : stopAt + buf;
+    // Floor the risk at a quarter of the 15M ATR: a stop inside the noise is hit by spread alone.
+    if ((side === 'long' ? entry - stop : stop - entry) < minRisk) stop = side === 'long' ? entry - minRisk : entry + minRisk;
+    const risk = Math.abs(entry - stop);
+    if (!(risk > 0)) return;
+    const seen = new Set<string>();
+    targets = pool
+      .filter((x): x is { v: number; l: string } => typeof x.v === 'number' && Number.isFinite(x.v) && (side === 'long' ? x.v > entry + risk * 0.25 : x.v < entry - risk * 0.25))
+      .sort((x, y) => (side === 'long' ? x.v - y.v : y.v - x.v))
+      .filter((x) => { const k = x.v.toFixed(2); if (seen.has(k)) return false; seen.add(k); return true; })
+      .map((x) => ({ level: x.v, label: x.l, r: Math.abs(x.v - entry) / risk }));
+    // The nearest real level that pays the minimum R:R; if none does, the nearest one (the gate then says no).
+    const t = targets.find((x) => x.r >= minRR) ?? targets[0];
+    if (!t) return;
+    suggest = { entry, stop, target: t.level, targetLabel: t.label, basis };
+    let filled = false, ranAway = false;
+    for (let k = fromIndex + 1; k < ltf.length; k++) {
+      const c = ltf[k]!;
+      if (side === 'long' ? c.l <= entry : c.h >= entry) { filled = true; break; }
+      if (side === 'long' ? c.h >= t.level : c.l <= t.level) { ranAway = true; break; }
+    }
+    after = { filled, ranAway };
+  };
+
   if (sweep && ms && ms.index !== null) {
     const ob = orderBlocks(ltf, 2, 2).filter((o) => o.direction === want && o.index >= sweep!.index - 3 && o.index <= ms.index!).pop();
     let entry = ob ? (side === 'long' ? ob.top : ob.bottom) : ms.level;
     // A zone beyond the sweep wick has no invalidation behind it: enter at the broken swing instead.
     if (side === 'long' ? entry <= sweep.wick : entry >= sweep.wick) entry = ms.level;
-    const buf = (opts.stopBuffer ?? (() => 0))(entry);
-    let stop = side === 'long' ? sweep.wick - buf : sweep.wick + buf;
-    // Floor the risk at a quarter of the 15M ATR: a stop inside the noise is hit by spread alone
-    // and turns costs into several R.
-    const minRisk = Number.isFinite(a) ? a * 0.25 : 0;
-    if ((side === 'long' ? entry - stop : stop - entry) < minRisk) stop = side === 'long' ? entry - minRisk : entry + minRisk;
-    // Nearest real level beyond the entry (ignoring noise within ¼R): never stretched to reach 3R.
-    const pool = side === 'long'
-      ? [{ v: pdl?.pdh, l: 'PDH' }, { v: hr?.high, l: 'Range high' }, { v: asia?.high, l: 'Asia high' }, ...liquidity.filter((x) => x.label === 'EQH').map((x) => ({ v: x.level, l: 'EQH' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '15M swing high' }))]
-      : [{ v: pdl?.pdl, l: 'PDL' }, { v: hr?.low, l: 'Range low' }, { v: asia?.low, l: 'Asia low' }, ...liquidity.filter((x) => x.label === 'EQL').map((x) => ({ v: x.level, l: 'EQL' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '15M swing low' }))];
-    const risk = Math.abs(entry - stop);
-    const cands = pool
-      .filter((x): x is { v: number; l: string } => typeof x.v === 'number' && Number.isFinite(x.v) && (side === 'long' ? x.v > entry + risk * 0.25 : x.v < entry - risk * 0.25))
-      .sort((x, y) => (side === 'long' ? x.v - y.v : y.v - x.v));
-    const t = cands[0];
-    if (t && risk > 0) {
-      suggest = { entry, stop, target: t.v, targetLabel: t.l };
-      let filled = false, ranAway = false;
-      for (let k = ms.index + 1; k < ltf.length; k++) {
-        const c = ltf[k]!;
-        if (side === 'long' ? c.l <= entry : c.h >= entry) { filled = true; break; }
-        if (side === 'long' ? c.h >= t.v : c.l <= t.v) { ranAway = true; break; }
-      }
-      after = { filled, ranAway };
+    plan(entry, sweep.wick, ms.index, 'sweep');
+  } else if (ltfShift && lastBreak) {
+    // No sweep: the leg that broke structure is the invalidation; enter at its order block or the broken level.
+    let ext = lastBreak.pivotIndex;
+    for (let k = lastBreak.pivotIndex; k <= lastBreak.index; k++) {
+      if (side === 'long' ? ltf[k]!.l < ltf[ext]!.l : ltf[k]!.h > ltf[ext]!.h) ext = k;
     }
+    const wick = side === 'long' ? ltf[ext]!.l : ltf[ext]!.h;
+    const ob = orderBlocks(ltf, 2, 2).filter((o) => o.direction === want && o.index >= ext - 3 && o.index <= lastBreak.index).pop();
+    let entry = ob ? (side === 'long' ? ob.top : ob.bottom) : lastBreak.level;
+    if (side === 'long' ? entry <= wick : entry >= wick) entry = lastBreak.level;
+    plan(entry, wick, lastBreak.index, 'shift');
   }
 
   return {
@@ -203,10 +246,20 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
     shift: ms ? { t: ms.index !== null ? ltf[ms.index]!.t : null, level: ms.level, close: ms.close } : null,
     lastLH,
     lastHL,
+    ltfShift,
     suggest,
+    targets,
     after,
     atr: a,
   };
+}
+
+/** Box 5 wording for the shift the detector found, e.g. "5M CHoCH down through 4,012.91". */
+export function shiftText(a: SetupAnalysis): string | null {
+  const f = (x: number) => x.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (a.shift?.t) return `5M body close through ${f(a.shift.level)} after the sweep`;
+  if (a.ltfShift) return `5M ${a.ltfShift.kind} ${a.ltfShift.kind === 'BOS' ? 'continuation' : 'shift'} through ${f(a.ltfShift.level)}${a.sweep ? '' : ' (no sweep yet)'}`;
+  return null;
 }
 
 /** Desk state from what the detector sees (the gate decides ARMED). */

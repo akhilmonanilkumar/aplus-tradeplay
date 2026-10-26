@@ -53,7 +53,7 @@ export interface StrategyParams {
 
 export const DEFAULT_STRATEGY: StrategyParams = {
   sides: 'both',
-  minRR: 3,
+  minRR: 2,
   windows: ['london_q', 'ny_q'],
   allowGradeA: false,
   requirePoi: true,

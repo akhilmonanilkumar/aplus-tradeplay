@@ -25,6 +25,8 @@ export interface GateInput {
   };
   swept: boolean | null;
   shifted: boolean | null;
+  /** What the shift was, e.g. "5M CHoCH down through 4,012.90" (shown on box 5). */
+  shiftDetail?: string | null;
   timing: {
     inWindow: boolean;
     newsClear: boolean;
@@ -177,7 +179,7 @@ export function evaluateGate(g: GateInput): GateResult {
   {
     let status: BoxStatus, reason: string;
     if (g.shifted) {
-      status = 'pass'; reason = '5M body close through structure';
+      status = 'pass'; reason = g.shiftDetail ?? '5M body close through structure';
       const m = modelGate(5); if (m) { status = m.status; reason = m.reason; }
     } else if (model.shift === 'optional_if_aggressive' && cfg.aggressive && g.swept) {
       status = 'warn'; reason = 'aggressive entry on the sweep'; softMisses.push('aggressive entry (no shift)');
@@ -215,7 +217,7 @@ export function evaluateGate(g: GateInput): GateResult {
       else if (rr < minRR) { status = 'fail'; reason = `R:R ${rr.toFixed(2)} < ${minRR}`; }
       else { status = 'pass'; reason = `R:R ${rr.toFixed(2)} to real target`; }
     }
-    boxes.push({ n: 7, id: 'rr_ge_3_real_target', label: 'R:R ≥ 3 real', status, reason });
+    boxes.push({ n: 7, id: 'rr_ge_3_real_target', label: `R:R ≥ ${minRR} real`, status, reason });
   }
 
   if (g.qualityConcern) softMisses.push(g.qualityConcern);

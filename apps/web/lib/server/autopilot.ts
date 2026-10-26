@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   ALL_WINDOWS, EDGE_WINDOWS, INSTRUMENTS, TF_MS, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
-  sizePosition, stateFromSetup, type Candle, type GateResult, type InstrumentId, type SetupAnalysis,
+  shiftText, sizePosition, stateFromSetup, type Candle, type GateResult, type InstrumentId, type SetupAnalysis,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
@@ -50,15 +50,21 @@ export async function evaluate(id: InstrumentId, opts: { bias?: "long" | "short"
   const allowed = opts.filters?.windows?.length ? ALL_WINDOWS.filter((w) => opts.filters!.windows!.includes(w.id)) : EDGE_WINDOWS;
   const win = allowed.find((w) => isInWindow(now, w)) ?? null;
   const newsClear = !newsBlocked(opts.calendar, def.desk, now, opts.settings?.news_block_minutes ?? 15);
+  // Counter-trend pullbacks (Model G, grade A at most) only when both settings allow them.
+  const counterTrend = !!(opts.settings?.counter_trend_allowed && opts.settings?.advanced_models_allowed);
   const run = (side: "long" | "short") => {
-    const a = analyzeSetup(side, htf.candles, poi.candles, ltf.candles, { now, stopBuffer: def.stopBuffer });
+    const a = analyzeSetup(side, htf.candles, poi.candles, ltf.candles, { now, stopBuffer: def.stopBuffer, minRR: opts.filters?.minRR });
+    const against = !!a.htfTrend && a.htfTrend !== (side === "long" ? "up" : "down");
+    const model = counterTrend && against ? "G" as const : "A" as const;
+    const shifted = !!a.shift?.t || !!a.ltfShift;
     const gate = a.range ? evaluateGate({
       htfTrend: a.htfTrend, poiTfTrend: a.poiTrend, side, price: a.price, range: a.range,
       poi: { inside: !!a.inside, fresh: a.inside?.fresh ?? false, trendAligned: true, liquidityStory: a.inside?.liquidityStory ?? false, createdBos: a.inside?.createdBos ?? true },
-      swept: !!a.sweep, shifted: !!a.shift?.t,
+      swept: !!a.sweep, shifted, shiftDetail: shiftText(a),
       timing: { inWindow: !!win && !(def.fxHours && isFxWeekend(now)), newsClear, windowId: win?.id ?? null },
       plan: a.suggest ? { ...a.suggest, targetIsStructural: true, stopIsStructural: true } : undefined,
-      minStopPct: def.minStopPct, minRR: opts.filters?.minRR, model: "A", instrument: id === "XAUUSDT.P" ? "XAUUSD" : id,
+      minStopPct: def.minStopPct, minRR: opts.filters?.minRR, model, instrument: id === "XAUUSDT.P" ? "XAUUSD" : id,
+      modelChecks: model === "G" ? { fractal_shift: shifted } : undefined,
       conditions: { ranAway: a.after?.ranAway ?? false },
       config: { counterTrendAllowed: opts.settings?.counter_trend_allowed, advancedModelsAllowed: opts.settings?.advanced_models_allowed },
     }) : null;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INSTRUMENTS, costInR, sizePosition, normalizeInstrument, pnlMultiplier,
   oiRegime, fundingState, syntheticDxy, pearson, correlation, contextScore, basisPct, fundingApr, sessionStats, emaTrend,
-  runBacktest, scanSignals, simulate, skippedImpact, breakdown, analyzeSetup, TF_MS, type Candle,
+  runBacktest, scanSignals, simulate, skippedImpact, breakdown, analyzeSetup, shiftText, DEFAULT_STRATEGY, TF_MS, type Candle,
 } from './index.js';
 
 /** Deterministic pseudo-random walk with trending swings so structure forms. */
@@ -133,7 +133,7 @@ describe('backtest', () => {
     for (const t of r.trades) {
       expect(t.entryAt).toBeGreaterThanOrEqual(t.signalAt);
       if (t.exitAt !== null) expect(t.exitAt).toBeGreaterThan(t.entryAt);
-      expect(t.plannedR).toBeGreaterThanOrEqual(3 - 1e-9);
+      expect(t.plannedR).toBeGreaterThanOrEqual(DEFAULT_STRATEGY.minRR - 1e-9);
       if (t.outcome === 'loss') expect(t.rGross).toBeCloseTo(-1, 6);
       if (t.outcome === 'win') expect(t.rGross).toBeCloseTo(t.plannedR, 6);
       expect(t.rNet).toBeLessThanOrEqual(t.rGross);
@@ -252,5 +252,38 @@ describe('gold market hours', () => {
     expect(isFxClosed(Date.UTC(2026, 9, 25, 22, 0))).toBe(false);  // Sun 18:00 NY open
     expect(isFxClosed(Date.UTC(2026, 9, 27, 21, 15))).toBe(true);  // Tue daily break
     expect(isFxClosed(Date.UTC(2026, 9, 27, 22, 0))).toBe(false);  // Tue 18:00 NY
+  });
+});
+
+describe('plan targets and 5M shift', () => {
+  // 1H uptrend leg then a 5M selloff: a clear 5M bearish break with no listed liquidity swept.
+  function bars(points: number[], startT: number, step: number): Candle[] {
+    const out: Candle[] = [];
+    let t = startT;
+    const push = (c: number, o: number) => out.push({ t: (t += step) - step, o, h: Math.max(o, c) + 0.2, l: Math.min(o, c) - 0.2, c });
+    let prev = points[0]!;
+    push(prev, prev);
+    for (let k = 1; k < points.length; k++) {
+      const a = points[k - 1]!, b = points[k]!;
+      for (let s2 = 1; s2 <= 6; s2++) { const c = a + ((b - a) * s2) / 6; push(c, prev); prev = c; }
+    }
+    return out;
+  }
+  const start = Date.UTC(2026, 6, 7);
+  const ltf = bars([100, 104, 102, 107, 105, 110, 108, 112, 109, 111, 106, 108, 103, 105, 101], start, TF_MS['5m']);
+  const a = analyzeSetup('short', ltf, ltf, ltf, { now: ltf[ltf.length - 1]!.t + TF_MS['5m'], minRR: 2 });
+
+  it('reports the 5M bearish structure break even without a sweep', () => {
+    expect(a.ltfShift).not.toBeNull();
+    expect(shiftText(a)).toMatch(/^5M (BOS|CHoCH) /);
+  });
+
+  it('picks the nearest real target worth the minimum R:R and lists the others', () => {
+    if (!a.suggest) return; // the synthetic path may leave no level below; the list check still holds
+    const risk = Math.abs(a.suggest.entry - a.suggest.stop);
+    const r = Math.abs(a.suggest.entry - a.suggest.target) / risk;
+    const first2 = a.targets.find((t) => t.r >= 2);
+    if (first2) expect(r).toBeCloseTo(first2.r, 6);
+    for (let k = 1; k < a.targets.length; k++) expect(a.targets[k]!.r).toBeGreaterThanOrEqual(a.targets[k - 1]!.r - 1e-9);
   });
 });

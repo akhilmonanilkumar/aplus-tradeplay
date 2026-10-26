@@ -16,11 +16,14 @@ import { Card, Chip, Empty, Toggle } from "@/components/ui";
  * Orders are queued as PAPER in paper mode, or as manual tickets in LIVE mode until
  * venue adapters ship.
  */
-export default function Ticket({ def, side, plan, suggest, gate, window, accounts, investors, onPlan, onDone }: {
+export default function Ticket({ def, side, plan, suggest, targets = [], minRR = 2, gate, window, accounts, investors, onPlan, onDone }: {
   def: InstrumentDef;
   side: "long" | "short";
   plan: { entry: number; stop: number; target: number } | null;
   suggest: { entry: number; stop: number; target: number; targetLabel: string } | null;
+  /** Real levels beyond the engine entry with the R each pays. */
+  targets?: { level: number; label: string; r: number }[];
+  minRR?: number;
   gate: GateResult | null;
   window: string | null;
   accounts: TradingAccount[];
@@ -105,10 +108,20 @@ export default function Ticket({ def, side, plan, suggest, gate, window, account
         ))}
         <label className="fld"><span>Risk per account</span><div className="inp"><input inputMode="decimal" value={risk} placeholder="0.50" onChange={(e) => setRisk(e.target.value)} /><span className="u">%</span></div></label>
       </div>
+      {targets.length > 0 && (
+        <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+          <span className="lbl">Targets</span>
+          {targets.slice(0, 6).map((t) => (
+            <button key={`${t.label}${t.level}`} type="button" className={`chip ${t.r >= minRR ? "up" : ""}`} title={`Use ${t.label} as target`} onClick={() => set("target", String(Number(t.level.toFixed(def.digits))))}>
+              {num(t.level, def.digits)} · {t.label} · {t.r.toFixed(1)}R
+            </button>
+          ))}
+        </div>
+      )}
       {suggest && (form.entry || form.stop || form.target) && <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => { setForm({ entry: "", stop: "", target: "" }); onPlan({ entry: "", stop: "", target: "" }); }}>Use engine plan ({suggest.targetLabel})</button>}
       {plan && (
         <div className="px" style={{ marginTop: 10 }}>
-          <div><span className="lbl">R:R</span><b className={`mono ${rr !== null && rr >= 3 ? "up" : "down"}`}>{rr !== null ? rr.toFixed(2) : "—"}</b></div>
+          <div><span className="lbl">R:R</span><b className={`mono ${rr !== null && rr >= minRR ? "up" : "down"}`}>{rr !== null ? rr.toFixed(2) : "—"}</b></div>
           <div><span className="lbl">Stop</span><b className={`mono ${def.minStopPct && stopPct !== null && stopPct < def.minStopPct ? "down" : ""}`}>{stopPct !== null ? `${stopPct.toFixed(2)}%` : "—"}</b></div>
           <div><span className="lbl">Cost</span><b className="mono">{cost !== null ? `${cost.toFixed(2)}R` : "—"}</b></div>
           <div><span className="lbl">Net R at TP</span><b className="mono acc">{rr !== null && cost !== null ? (rr - cost).toFixed(2) : "—"}</b></div>
