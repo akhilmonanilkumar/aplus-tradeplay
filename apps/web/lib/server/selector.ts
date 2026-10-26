@@ -34,9 +34,12 @@ const WARM: Partial<Record<Tf, number>> = { "1h": 15 * 86_400_000, "4h": 60 * 86
  * Walk-forward result of the edge on the last three weeks, per instrument, refreshed about daily.
  * At most `refresh` instruments are recomputed per call so a pass stays fast and within vendor limits.
  */
-export async function recentEdges(db: SupabaseClient, ids: InstrumentId[], refresh = 1): Promise<Map<InstrumentId, Edge>> {
+export async function recentEdges(db: SupabaseClient, ids: InstrumentId[], opts: { allowGradeA: boolean; refresh?: number }): Promise<Map<InstrumentId, Edge>> {
   const out = new Map<InstrumentId, Edge>();
-  const rows = await db.from("backtests").select("instrument, created_at, stats").is("strategy_id", null).eq("summary->>kind", "edge").in("instrument", ids).order("created_at", { ascending: false }).limit(100);
+  const refresh = opts.refresh ?? 1;
+  // Measured with the same grade rule the selector trades, so the edge describes what it would take.
+  const rows = await db.from("backtests").select("instrument, created_at, stats").is("strategy_id", null).eq("summary->>kind", "edge")
+    .eq("summary->>allowGradeA", String(opts.allowGradeA)).in("instrument", ids).order("created_at", { ascending: false }).limit(100);
   for (const r of rows.data ?? []) {
     const id = r.instrument as InstrumentId;
     if (out.has(id)) continue;
@@ -55,11 +58,11 @@ export async function recentEdges(db: SupabaseClient, ids: InstrumentId[], refre
         loadHistory(id, def.poi, from - (WARM[def.poi] ?? 0), to),
         loadHistory(id, def.ltf, from - (WARM[def.ltf] ?? 0), to),
       ]);
-      const res = runBacktest(id, { htf: htf.candles, poi: poi.candles, ltf: ltf.candles });
+      const res = runBacktest(id, { htf: htf.candles, poi: poi.candles, ltf: ltf.candles }, { allowGradeA: opts.allowGradeA });
       const at = new Date().toISOString();
       await db.from("backtests").insert({
         strategy_id: null, instrument: id, from_ts: new Date(res.from).toISOString(), to_ts: new Date(res.to).toISOString(),
-        params: res.params, stats: res.stats, summary: { kind: "edge", days: EDGE_DAYS, returnPct: res.returnPct, maxDrawdownPct: res.maxDrawdownPct, signals: res.signals, rejected: res.rejected, cancelled: res.cancelled, bars: res.bars },
+        params: res.params, stats: res.stats, summary: { kind: "edge", allowGradeA: opts.allowGradeA, days: EDGE_DAYS, returnPct: res.returnPct, maxDrawdownPct: res.maxDrawdownPct, signals: res.signals, rejected: res.rejected, cancelled: res.cancelled, bars: res.bars },
         trades: [], source: ltf.source,
       });
       out.set(id, { avgR: res.stats.avgR, n: res.stats.n, winRate: res.stats.winRate, at });
@@ -127,7 +130,7 @@ export async function runSelector(db: SupabaseClient, deps: {
   const desks = [...new Set(ids.map((i) => INSTRUMENTS[i].desk))];
   const [evals, edges, ctx] = await Promise.all([
     Promise.allSettled(ids.map((i) => deps.evalFor(i))),
-    recentEdges(db, ids).catch(() => new Map<InstrumentId, Edge>()),
+    recentEdges(db, ids, { allowGradeA: cfg.allowGradeA }).catch(() => new Map<InstrumentId, Edge>()),
     Promise.all(desks.map(async (d) => {
       const [dv, mc] = await Promise.all([
         loadDerivs(d === "gold" ? "XAUUSDT" : "BTCUSDT").catch(() => null as Derivs | null),
