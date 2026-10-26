@@ -1,6 +1,6 @@
 import type { Candle } from './smc.js';
 import { atr, structureBreaks } from './smc.js';
-import { NY, isInWindow, wallToUtc, windowOnDateOf, zonedParts, type SessionWindow } from './sessions.js';
+import { NY, wallToUtc, windowOnDateOf, zonedParts, type SessionWindow } from './sessions.js';
 import { INSTRUMENTS, costInR, type InstrumentId } from './instruments.js';
 import { summarize, type RStats } from './stats.js';
 
@@ -52,6 +52,13 @@ export interface SessionModelResult {
 }
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
+
+/** Time-zone lookups memoised per UTC hour: New York offsets are whole hours, so the date and hour are constant within one. */
+function hourly<T>(f: (t: number) => T): (t: number) => T {
+  const m = new Map<number, T>();
+  return (t) => { const k = Math.floor(t / HOUR); let v = m.get(k); if (v === undefined) { v = f(k * HOUR); m.set(k, v); } return v; };
+}
 
 /** Index of the first candle with t >= x. */
 function lowerBound(c: readonly Candle[], x: number): number {
@@ -72,9 +79,15 @@ export function runSessionModel(
   const ranges = new Map<number, { hi: number; lo: number } | null>();
   const tradedDays = new Set<string>();
 
+  const tradeInst = hourly((t) => windowOnDateOf(t, p.tradeWindow));
+  const inTradeWindow = (t: number) => { const w = tradeInst(t); return w.weekday !== 'Sat' && w.weekday !== 'Sun' && w.startUtc <= t && t < w.endUtc; };
+  const nyDay = hourly((t) => zonedParts(t, NY));
+  const rangeInst = hourly((t) => {
+    const w = windowOnDateOf(t, p.rangeWindow);
+    return w.endUtc > t ? windowOnDateOf(t - DAY, p.rangeWindow) : w;
+  });
   const rangeFor = (t: number) => {
-    let w = windowOnDateOf(t, p.rangeWindow);
-    if (w.endUtc > t) w = windowOnDateOf(t - DAY, p.rangeWindow);
+    const w = rangeInst(t);
     if (!ranges.has(w.startUtc)) {
       const a = lowerBound(ltf, w.startUtc), b = lowerBound(ltf, w.endUtc);
       let hi = -Infinity, lo = Infinity;
@@ -115,8 +128,8 @@ export function runSessionModel(
       }
       if (open) continue;
     }
-    if (!isInWindow(bar.t, p.tradeWindow)) continue;
-    const nyD = zonedParts(bar.t, NY);
+    if (!inTradeWindow(bar.t)) continue;
+    const nyD = nyDay(bar.t);
     const dayKey = `${nyD.year}-${nyD.month}-${nyD.day}`;
     if (tradedDays.has(dayKey)) continue;
     const r = rangeFor(bar.t);
