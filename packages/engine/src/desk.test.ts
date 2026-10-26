@@ -182,6 +182,12 @@ describe('backtest', () => {
     expect(impact.reduce((a, g) => a + g.n, 0)).toBe(base.skipped.length);
   });
 
+  it('never loses more than 1R gross with a partial at 1R', () => {
+    const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
+    const r = simulate('XAUUSD', data, scan, { partialAtR: 1, requirePoi: false, allowGradeA: true, requireCorrectHalf: false, minRR: 1.5 });
+    for (const t of r.trades) if (t.outcome !== 'open') expect(t.rGross).toBeGreaterThanOrEqual(-1 - 1e-9);
+  });
+
   it('enters at the shift close in shift_close mode', () => {
     const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
     const r = simulate('XAUUSD', data, scan, { entryMode: 'shift_close', requirePoi: false, allowGradeA: true, requireCorrectHalf: false, minRR: 1.5 });

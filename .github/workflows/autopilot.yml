@@ -8,6 +8,10 @@ name: Autopilot tick
 on:
   workflow_dispatch:
     inputs:
+      endpoint:
+        description: "tick, or lab for the strategy lab (query i=XAUUSD&family=a5|a15|session&days=180)"
+        required: false
+        default: "tick"
       query:
         description: "Optional query string (preview=selector, or research=XAUUSD&days=30&day=2026-10-26)"
         required: false
@@ -16,13 +20,14 @@ on:
 jobs:
   tick:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 7
     steps:
       - name: Call /api/autopilot/tick
         env:
           URL: ${{ secrets.AUTOPILOT_URL }}
           SECRET: ${{ secrets.AUTOPILOT_SECRET }}
           QUERY: ${{ inputs.query }}
+          ENDPOINT: ${{ inputs.endpoint || 'tick' }}
         run: |
           if [ -z "$URL" ] || [ -z "$SECRET" ]; then echo "AUTOPILOT_URL / AUTOPILOT_SECRET not set"; exit 0; fi
-          curl -fsS --max-time 120 -H "Authorization: Bearer $SECRET" "$URL/api/autopilot/tick${QUERY:+?$QUERY}"
+          curl -fsS --max-time 320 -H "Authorization: Bearer $SECRET" "$URL/api/autopilot/$ENDPOINT${QUERY:+?$QUERY}"

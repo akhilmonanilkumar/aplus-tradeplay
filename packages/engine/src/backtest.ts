@@ -3,7 +3,7 @@ import { analyzeSetup, type SetupAnalysis } from './setup.js';
 import { evaluateGate, type Grade } from './gate.js';
 import { resolveSignal, type SignalOutcome } from './outcome.js';
 import { ALL_WINDOWS, NY, isInWindow, windowOnDateOf, zonedParts } from './sessions.js';
-import { INSTRUMENTS, TF_MS, costInR, type InstrumentId } from './instruments.js';
+import { INSTRUMENTS, TF_MS, costInR, type InstrumentId, type Tf } from './instruments.js';
 import { summarize, type RStats } from './stats.js';
 
 /**
@@ -30,6 +30,8 @@ export interface StrategyParams {
   sweepLookback: number;
   /** Move the stop to break-even once price reaches this R (null = set and forget). */
   breakevenAtR: number | null;
+  /** Bank half the position at this R and move the stop to break-even (null = single exit). */
+  partialAtR: number | null;
   /** Minimum stop distance in % (default: instrument rule). */
   minStopPct: number | null;
   /** Round-trip cost as a fraction of notional (default: instrument). */
@@ -58,6 +60,7 @@ export const DEFAULT_STRATEGY: StrategyParams = {
   expiryBars: 12,
   sweepLookback: 36,
   breakevenAtR: null,
+  partialAtR: null,
   minStopPct: null,
   costRate: null,
   newsBlockMinutes: 15,
@@ -171,7 +174,12 @@ export interface ScanTrace {
 export interface ScanResult {
   candidates: ScanCandidate[];
   trace: ScanTrace[];
+  /** Entry-TF bar length the scan ran on (the data's ltf). */
+  ltfMs?: number;
 }
+
+/** Timeframes of the three candle sets (default: the instrument's). */
+export interface ScanTfs { htf: Tf; poi: Tf; ltf: Tf }
 
 /**
  * Runs the detector at every closed entry-TF bar inside the windows, with only the candles closed
@@ -180,10 +188,11 @@ export interface ScanResult {
 export function scanSignals(
   instrumentId: InstrumentId,
   data: BacktestData,
-  opts: { windows: string[]; sides: StrategyParams['sides']; sweepLookback: number; traceFrom?: number },
+  opts: { windows: string[]; sides: StrategyParams['sides']; sweepLookback: number; traceFrom?: number; tfs?: ScanTfs },
 ): ScanResult {
   const def = INSTRUMENTS[instrumentId];
-  const ltfMs = TF_MS[def.ltf], poiMs = TF_MS[def.poi], htfMs = TF_MS[def.htf];
+  const tfs = opts.tfs ?? { htf: def.htf, poi: def.poi, ltf: def.ltf };
+  const ltfMs = TF_MS[tfs.ltf], poiMs = TF_MS[tfs.poi], htfMs = TF_MS[tfs.htf];
   const windows = opts.windows.map((id) => WINDOW_BY_ID.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
   const sides: ('long' | 'short')[] = opts.sides === 'both' ? ['long', 'short'] : [opts.sides];
   const { htf, poi, ltf } = data;
@@ -217,7 +226,7 @@ export function scanSignals(
       candidates.push({ i, side, windowId: win.id, a: { htfTrend: a.htfTrend, poiTrend: a.poiTrend, price: a.price, range: a.range, inside: a.inside, sweep: a.sweep, suggest: a.suggest } });
     }
   }
-  return { candidates, trace };
+  return { candidates, trace, ltfMs };
 }
 
 const WARM_BARS = 300;
@@ -226,7 +235,7 @@ const WARM_BARS = 300;
 export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: ScanResult, params: Partial<StrategyParams> = {}): BacktestResult {
   const def = INSTRUMENTS[instrumentId];
   const p: StrategyParams = { ...DEFAULT_STRATEGY, ...params };
-  const ltfMs = TF_MS[def.ltf];
+  const ltfMs = scan.ltfMs ?? TF_MS[def.ltf];
   const allowed = new Set(p.windows);
   const sideOk = (s: 'long' | 'short') => p.sides === 'both' || p.sides === s;
   const costRate = p.costRate ?? def.costRate;
@@ -250,13 +259,15 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
   let signals = 0;
   const rejected: Record<string, number> = {};
   let pending: (Omit<BacktestTrade, 'entryAt' | 'exitAt' | 'exit' | 'rGross' | 'rNet' | 'outcome'> & { createdIdx: number; windowEnd: number }) | null = null;
-  let open: (BacktestTrade & { beMoved: boolean; risk: number }) | null = null;
+  let open: (BacktestTrade & { beMoved: boolean; risk: number; banked: number }) | null = null;
   const perDay = new Map<string, { trades: number; losses: number }>();
   const day = (t: number) => { const k = dayKey(t); let d = perDay.get(k); if (!d) { d = { trades: 0, losses: 0 }; perDay.set(k, d); } return d; };
 
   const closeTrade = (exit: number, at: number, i: number) => {
     const o = open!;
-    const rGross = ((o.side === 'long' ? 1 : -1) * (exit - o.entry)) / o.risk;
+    const runner = ((o.side === 'long' ? 1 : -1) * (exit - o.entry)) / o.risk;
+    // After a partial, half was banked at partialAtR and the other half ran to this exit.
+    const rGross = o.banked ? 0.5 * o.banked + 0.5 * runner : runner;
     const rNet = rGross - o.costR;
     const outcome: BacktestTrade['outcome'] = Math.abs(rGross) < 0.05 ? 'breakeven' : rGross > 0 ? 'win' : 'loss';
     trades.push({ ...o, exit, exitAt: at, rGross, rNet, outcome });
@@ -292,9 +303,10 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
       const hitTarget = o.side === 'long' ? bar.h >= o.target : bar.l <= o.target;
       if (hitStop) closeTrade(o.stop, T, i);
       else if (hitTarget) closeTrade(o.target, T, i);
-      else if (p.breakevenAtR !== null && !o.beMoved) {
+      else {
         const fav = o.side === 'long' ? (bar.h - o.entry) / o.risk : (o.entry - bar.l) / o.risk;
-        if (fav >= p.breakevenAtR) { o.stop = o.entry; o.beMoved = true; }
+        if (p.partialAtR !== null && !o.banked && fav >= p.partialAtR) { o.banked = p.partialAtR; o.stop = o.entry; o.beMoved = true; }
+        else if (p.breakevenAtR !== null && !o.beMoved && fav >= p.breakevenAtR) { o.stop = o.entry; o.beMoved = true; }
       }
       if (open) continue;
     }
@@ -306,7 +318,7 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
       const ranAway = o.side === 'long' ? bar.h >= o.target : bar.l <= o.target;
       if (reached) {
         const risk = Math.abs(o.entry - o.stop);
-        open = { ...o, entryAt: bar.t, exitAt: null, exit: null, rGross: 0, rNet: 0, outcome: 'open', beMoved: false, risk };
+        open = { ...o, entryAt: bar.t, exitAt: null, exit: null, rGross: 0, rNet: 0, outcome: 'open', beMoved: false, risk, banked: 0 };
         day(bar.t).trades++;
         pending = null;
         // Same-bar stop after the fill counts as a loss; a same-bar target does not count (unknown order).
@@ -367,7 +379,7 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
       };
       if (p.entryMode === 'shift_close') {
         // Market entry at the shift close: in the trade from the next bar.
-        open = { ...base, entryAt: T, exitAt: null, exit: null, rGross: 0, rNet: 0, outcome: 'open', beMoved: false, risk: Math.abs(entry - stop) };
+        open = { ...base, entryAt: T, exitAt: null, exit: null, rGross: 0, rNet: 0, outcome: 'open', beMoved: false, risk: Math.abs(entry - stop), banked: 0 };
         d.trades++;
       } else {
         const win = WINDOW_BY_ID.get(windowId)!;

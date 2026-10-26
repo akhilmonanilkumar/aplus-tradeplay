@@ -17,5 +17,6 @@ export * from './instruments.js';
 export * from './setup.js';
 export * from './context.js';
 export * from './backtest.js';
+export * from './sessionModels.js';
 export * from './selector.js';
 export * from './outcome.js';
