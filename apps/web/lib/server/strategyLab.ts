@@ -47,7 +47,7 @@ function sessionVariants(): { id: string; label: string; params: Omit<SessionMod
   return out;
 }
 
-interface Row { id: string; label: string; trades: number; winRate: number; netR: number; avgR: number; pf: number | null; maxDDR: number; halves: [number, number]; pass: boolean }
+interface Row { id: string; label: string; trades: number; winRate: number; netR: number; avgR: number; pf: number | null; maxDDR: number; halves: [number, number]; pass: boolean; signals?: number; topRejects?: [string, number][] }
 
 function row(id: string, label: string, trades: { signalAt: number; rNet: number }[], stats: { n: number; winRate: number; netR: number; avgR: number; profitFactor: number | null; maxDrawdownR: number }, mid: number): Row {
   const early = trades.filter((t) => t.signalAt < mid).reduce((a, t) => a + t.rNet, 0);
@@ -83,7 +83,11 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180) 
     rows = A_VARIANTS.map((v) => {
       const r = simulate(id, data, scan, { ...v.params, ...scale });
       const closed = r.trades.filter((t) => t.outcome !== "open");
-      return row(v.id, v.label, closed, r.stats, mid);
+      return {
+        ...row(v.id, v.label, closed, r.stats, mid),
+        signals: r.signals,
+        topRejects: Object.entries(r.rejected).sort((a, b) => b[1] - a[1]).slice(0, 3),
+      };
     });
   }
 
