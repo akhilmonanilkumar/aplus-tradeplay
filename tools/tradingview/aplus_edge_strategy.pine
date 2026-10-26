@@ -65,8 +65,8 @@ bool mE = str.startswith(modelIn, "E")
 bool doLong  = sidesIn != "Short only"
 bool doShort = sidesIn != "Long only"
 
-// ───────────────────────── structure (smc.ts structureBreaks + setup.ts htfRange) ─────────────────────────
-// Break = candle BODY close through the last confirmed swing. Range = origin of the latest break → extreme since.
+// ───────────────────────── structure (smc.ts structureBreaks / swingStructure + setup.ts htfRange) ─────────────────────────
+// Internal break = candle BODY close through the last confirmed swing (used for order blocks).
 f_struct(int L, int R) =>
     var float lastH = na
     var int   lastHBar = na
@@ -112,13 +112,100 @@ f_struct(int L, int R) =>
         rLo := math.min(rLo, low)
     [trend, rLo, rHi, up, dn, pivBar]
 
+// Swing structure (smc.ts swingStructure): the trend only flips on a body close through the protected
+// level (strong low in an uptrend, strong high in a downtrend); a continuation BOS needs a close beyond
+// the leg's extreme swing. Closes through minor swings inside a leg are internal and ignored here.
+f_swing(int L, int R) =>
+    var int   trend = 0
+    var float lastH = na
+    var int   lastHBar = na
+    var float lastL = na
+    var int   lastLBar = na
+    var float legH = na
+    var int   legHBar = na
+    var float legL = na
+    var int   legLBar = na
+    var int   lastBreak = -1
+    var float protP = na
+    var int   protBar = na
+    var float rLo = na
+    var float rHi = na
+    float ph = ta.pivothigh(high, L, R)
+    float pl = ta.pivotlow(low, L, R)
+    if not na(ph)
+        lastH := ph
+        lastHBar := bar_index - R
+        if lastHBar >= lastBreak and (na(legH) or ph > legH)
+            legH := ph
+            legHBar := lastHBar
+    if not na(pl)
+        lastL := pl
+        lastLBar := bar_index - R
+        if lastLBar >= lastBreak and (na(legL) or pl < legL)
+            legL := pl
+            legLBar := lastLBar
+    int fromUp = na
+    int fromDn = na
+    if trend == 0
+        if not na(lastH) and close > lastH and bar_index > lastHBar
+            fromUp := lastHBar
+        else if not na(lastL) and close < lastL and bar_index > lastLBar
+            fromDn := lastLBar
+    else if trend == 1
+        if close < protP
+            fromDn := protBar
+        else if not na(legH) and close > legH and bar_index > legHBar
+            fromUp := legHBar
+    else
+        if close > protP
+            fromUp := protBar
+        else if not na(legL) and close < legL and bar_index > legLBar
+            fromDn := legLBar
+    if not na(fromUp)
+        float lo = low
+        int loBar = bar_index
+        for k = 0 to bar_index - fromUp
+            if low[k] < lo
+                lo := low[k]
+                loBar := bar_index - k
+        trend := 1
+        protP := lo
+        protBar := loBar
+        rLo := lo
+        rHi := high
+        lastBreak := bar_index
+        legH := na
+        legL := na
+    else if not na(fromDn)
+        float hi = high
+        int hiBar = bar_index
+        for k = 0 to bar_index - fromDn
+            if high[k] > hi
+                hi := high[k]
+                hiBar := bar_index - k
+        trend := -1
+        protP := hi
+        protBar := hiBar
+        rHi := hi
+        rLo := low
+        lastBreak := bar_index
+        legH := na
+        legL := na
+    else if trend == 1
+        rHi := math.max(rHi, high)
+    else if trend == -1
+        rLo := math.min(rLo, low)
+    [trend, rLo, rHi]
+
 f_htf() =>
-    [t, lo, hi, u, d, pb] = f_struct(3, 3)
+    [t, lo, hi] = f_swing(3, 3)
     [t[1], lo[1], hi[1]]
 
 // 15M: trend, fresh order blocks with imbalance (zones.ts orderBlocks), equal highs/lows, last six swings.
 f_poi() =>
-    [t, lo, hi, up, dn, pb] = f_struct(3, 3)
+    [st, slo, shi] = f_swing(3, 3)
+    [it, lo, hi, up, dn, pb] = f_struct(3, 3)
+    int t = st
     float a14 = ta.sma(ta.tr(true), 14)
     var array<float> uT = array.new<float>()
     var array<float> uB = array.new<float>()

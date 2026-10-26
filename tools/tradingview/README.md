@@ -14,7 +14,7 @@ Leave *Commission* at 0 in Properties: the table already subtracts the preset's 
 
 ## What it reproduces
 
-- **Structure:** body-close BOS/CHoCH through the last confirmed (3,3) swing; HTF dealing range = origin of the latest break → extreme since; trend = direction of the latest break. HTF and 15M use closed bars only (no repainting).
+- **Structure:** SMC swing structure on body closes with (3,3) swings. The trend flips only on a close through the protected level (the strong low the last bullish break started from, or the strong high of the last bearish break); a continuation BOS needs a close beyond the leg's extreme swing. Closes through minor swings inside a leg are internal structure (still used to qualify order blocks). HTF dealing range = origin of the latest swing break → extreme since. HTF and 15M use closed bars only (no repainting).
 - **Liquidity:** previous-day high/low with the day rolling at 17:00 New York, the Asia range (20:00–24:00 NY), 15M equal highs/lows (within 0.1 ATR), recent 5M (3,3) swings.
 - **Sweep:** wick through a level and close back. **Shift:** first 5M body close beyond the last (2,2) swing that formed before the sweep, within the sweep lookback.
 - **POI (box 3):** the two most recent 15M order blocks per side that left an imbalance and are untouched or first tapped within the last 12 bars; touched by price, the sweep candle or the last six bars. A block that swept liquidity when it formed passes; one that did not is a soft miss (grade A).
