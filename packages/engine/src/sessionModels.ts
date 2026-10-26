@@ -1,5 +1,7 @@
 import type { Candle } from './smc.js';
-import { atr, swingStructure } from './smc.js';
+import { atr } from './smc.js';
+import { frameStructure } from './setup.js';
+import { FRAME_BARS } from './backtest.js';
 import { NY, wallToUtc, windowOnDateOf, zonedParts, type SessionWindow } from './sessions.js';
 import { INSTRUMENTS, costInR, type InstrumentId } from './instruments.js';
 import { summarize, type RStats } from './stats.js';
@@ -101,7 +103,7 @@ export function runSessionModel(
   const trendAt = (T: number) => {
     const k = lowerBound(htf, T - htfMs + 1); // htf bars closed by T
     if (k < 30) return null;
-    return swingStructure(htf.slice(Math.max(0, k - 300), k), 3, 3).trend;
+    return frameStructure(htf.slice(Math.max(0, k - FRAME_BARS), k)).trend;
   };
 
   let open: { side: 'long' | 'short'; signalAt: number; entry: number; stop: number; initialStop: number; target: number; risk: number; costR: number; banked: number; flatAt: number; plannedR: number } | null = null;

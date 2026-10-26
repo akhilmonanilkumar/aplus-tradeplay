@@ -197,13 +197,65 @@ f_swing(int L, int R) =>
         rLo := math.min(rLo, low)
     [trend, rLo, rHi]
 
+// LuxAlgo Smart Money Concepts structure (smc.ts smcStructure): legs of `size` bars mark alternating
+// swing points, a close crossing the current swing high / low (once) is a BOS or CHoCH and sets the bias,
+// and premium/discount is the trailing swing top / bottom. The engine uses size 50 (swing structure).
+f_lux(int size) =>
+    var int   leg = 0
+    var float hL = na
+    var bool  hX = false
+    var float lL = na
+    var bool  lX = false
+    var int   trend = 0
+    var float top = na
+    var float bot = na
+    float hh = ta.highest(size)
+    float ll = ta.lowest(size)
+    int prevLeg = leg
+    if high[size] > hh
+        leg := 0
+    else if low[size] < ll
+        leg := 1
+    if leg != prevLeg
+        if leg == 1
+            lL := low[size]
+            lX := false
+            bot := low[size]
+        else
+            hL := high[size]
+            hX := false
+            top := high[size]
+    if not na(top)
+        top := math.max(top, high)
+    if not na(bot)
+        bot := math.min(bot, low)
+    bool upX = ta.crossover(close, hL)
+    bool dnX = ta.crossunder(close, lL)
+    if upX and not hX
+        hX := true
+        trend := 1
+    if dnX and not lX
+        lX := true
+        trend := -1
+    [trend, bot, top]
+
+// Frame trend and range: LuxAlgo swing structure (50); protected-level structure until it has a break.
+f_frame() =>
+    [lt, llo, lhi] = f_lux(50)
+    [pt, plo, phi] = f_swing(3, 3)
+    bool useLux = lt != 0 and not na(llo) and not na(lhi) and lhi > llo
+    int t = useLux ? lt : pt
+    float lo = useLux ? llo : plo
+    float hi = useLux ? lhi : phi
+    [t, lo, hi]
+
 f_htf() =>
-    [t, lo, hi] = f_swing(3, 3)
+    [t, lo, hi] = f_frame()
     [t[1], lo[1], hi[1]]
 
 // 15M: trend, fresh order blocks with imbalance (zones.ts orderBlocks), equal highs/lows, last six swings.
 f_poi() =>
-    [st, slo, shi] = f_swing(3, 3)
+    [st, slo, shi] = f_frame()
     [it, lo, hi, up, dn, pb] = f_struct(3, 3)
     int t = st
     float a14 = ta.sma(ta.tr(true), 14)

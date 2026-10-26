@@ -211,8 +211,8 @@ export function scanSignals(
       if (tracing) for (const side of sides) trace.push({ t: bar.t, side, stage: 'no_structure', sweep: null, zone: null, pos: null, htf: null, m15: null });
       continue;
     }
-    const H = htf.slice(Math.max(0, hi - 300), hi);
-    const P = poi.slice(Math.max(0, pi - 400), pi);
+    const H = htf.slice(Math.max(0, hi - FRAME_BARS), hi);
+    const P = poi.slice(Math.max(0, pi - FRAME_BARS), pi);
     const L = ltf.slice(Math.max(0, i - 299), i + 1);
     for (const side of sides) {
       const a: SetupAnalysis = analyzeSetup(side, H, P, L, { now: T, stopBuffer: def.stopBuffer, sweepLookback: opts.sweepLookback });
@@ -230,6 +230,8 @@ export function scanSignals(
 }
 
 const WARM_BARS = 300;
+/** HTF and POI bars the detector sees at each step (room for 50-bar swing structure). */
+export const FRAME_BARS = 500;
 
 /** Gate + order simulation over a scan, under one set of strategy rules. */
 export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: ScanResult, params: Partial<StrategyParams> = {}): BacktestResult {

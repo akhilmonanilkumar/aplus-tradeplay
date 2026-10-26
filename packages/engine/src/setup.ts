@@ -1,4 +1,4 @@
-import { equalLevels, fairValueGaps, isSweep, marketShift, pivots, premiumDiscount, swingStructure, atr, type Candle, type Trend } from './smc.js';
+import { equalLevels, fairValueGaps, isSweep, marketShift, pivots, premiumDiscount, smcStructure, swingStructure, atr, type Candle, type Trend } from './smc.js';
 import { orderBlocks, previousDayLevels, sessionRange } from './zones.js';
 import { ASIA_Q } from './sessions.js';
 
@@ -73,12 +73,31 @@ export function htfRange(c: readonly Candle[]): { low: number; high: number; tre
   return { low, high, trend };
 }
 
+/** Structure lengths, as in LuxAlgo Smart Money Concepts (internal 5, swing 50). */
+export const STRUCTURE = { internal: 5, swing: 50 } as const;
+
+/**
+ * Trend and dealing range of one frame, read like LuxAlgo Smart Money Concepts: the swing
+ * (50) bias and its trailing premium/discount range. Until the window holds a swing break,
+ * the protected-level structure on (3,3) swings stands in for both.
+ */
+export function frameStructure(c: readonly Candle[]): { trend: Trend | null; range: { low: number; high: number } | null; internalTrend: Trend | null } {
+  const s = smcStructure(c, STRUCTURE);
+  const { top, bottom } = s.trailing;
+  if (s.swing.trend && Number.isFinite(top) && Number.isFinite(bottom) && top > bottom) {
+    return { trend: s.swing.trend, range: { low: bottom, high: top }, internalTrend: s.internal.trend };
+  }
+  const hr = htfRange(c);
+  return { trend: hr?.trend ?? null, range: hr ? { low: hr.low, high: hr.high } : null, internalTrend: s.internal.trend };
+}
+
 export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi: readonly Candle[], ltf: readonly Candle[], opts: AnalyzeOptions = {}): SetupAnalysis {
   const last = ltf[ltf.length - 1] ?? poi[poi.length - 1];
   const price = last?.c ?? 0;
   const now = opts.now ?? (last ? last.t + 1 : Date.now());
-  const hr = htf.length > 20 ? htfRange(htf) : null;
-  const poiTrend = poi.length > 20 ? swingStructure(poi, 3, 3).trend : null;
+  const hs = htf.length > 20 ? frameStructure(htf) : null;
+  const hr = hs?.range ? { ...hs.range, trend: hs.trend } : null;
+  const poiTrend = poi.length > 20 ? frameStructure(poi).trend : null;
   const pd = hr && hr.high > hr.low ? premiumDiscount(hr.low, hr.high, price) : null;
   const pdl = previousDayLevels(poi, now);
   const asiaRaw = sessionRange(poi, ASIA_Q, now - 12 * 3_600_000);

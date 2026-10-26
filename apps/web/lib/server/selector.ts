@@ -28,7 +28,7 @@ export interface Edge { avgR: number; n: number; winRate: number; at: string }
 
 const EDGE_DAYS = 21;
 const EDGE_TTL = 20 * 3_600_000;
-const WARM: Partial<Record<Tf, number>> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
+const WARM: Partial<Record<Tf, number>> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 
 /**
  * Walk-forward result of the edge on the last three weeks, per instrument, refreshed about daily.

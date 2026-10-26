@@ -45,7 +45,7 @@ export function newsBlocked(events: CalEvent[], desk: "gold" | "btc", now: numbe
 
 export async function evaluate(id: InstrumentId, opts: { bias?: "long" | "short" | null; calendar: CalEvent[]; filters?: AutopilotConfig["filters"]; settings?: { counter_trend_allowed?: boolean; advanced_models_allowed?: boolean; news_block_minutes?: number } }): Promise<Evaluation> {
   const def = INSTRUMENTS[id];
-  const [htf, poi, ltf] = await Promise.all([loadCandles(id, def.htf, 300), loadCandles(id, def.poi, 400), loadCandles(id, def.ltf, 300)]);
+  const [htf, poi, ltf] = await Promise.all([loadCandles(id, def.htf, 500), loadCandles(id, def.poi, 500), loadCandles(id, def.ltf, 300)]);
   const now = Date.now();
   const allowed = opts.filters?.windows?.length ? ALL_WINDOWS.filter((w) => opts.filters!.windows!.includes(w.id)) : EDGE_WINDOWS;
   const win = allowed.find((w) => isInWindow(now, w)) ?? null;

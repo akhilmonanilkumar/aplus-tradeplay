@@ -26,7 +26,7 @@ export const VARIANTS: { id: string; label: string; params: Partial<StrategyPara
   { id: "trendCoreHtf", label: "Trend core, HTF only (15M may disagree)", params: { allowGradeA: true, requirePoi: false, requireCorrectHalf: false, requireAlignment: false, minRR: 1.5 } },
 ];
 
-const WARM: Record<string, number> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
+const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 const hm = (t: number) => { const p = zonedParts(t, NY); return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`; };
 const r2 = (x: number) => Math.round(x * 100) / 100;
 

@@ -22,7 +22,7 @@ const WINDOWS = [
 const DAYS = [{ v: "14", l: "14d" }, { v: "30", l: "30d" }, { v: "60", l: "60d" }, { v: "90", l: "90d" }] as const;
 
 /** Warm-up before the test window so structure exists on the first bar. */
-const WARM: Record<string, number> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
+const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 
 function Breakdown({ title, rows }: { title: string; rows: { key: string; stats: BacktestResult["stats"] }[] }) {
   return (

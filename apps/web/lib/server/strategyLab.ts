@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  ASIA_Q, INSTRUMENTS, LONDON_Q, NY, NY_Q, TF_MS, runSessionModel, scanSignals, simulate, structureBreaks, swingStructure, zonedParts,
+  ASIA_Q, INSTRUMENTS, LONDON_Q, NY, NY_Q, TF_MS, FRAME_BARS, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
   type InstrumentId, type ScanTfs, type SessionModelParams, type StrategyParams, type Tf,
 } from "@aplus/engine";
 import { loadHistory } from "@/lib/server/feeds";
@@ -13,7 +13,7 @@ import { loadHistory } from "@/lib/server/feeds";
 
 export type Family = "a5" | "a15" | "session";
 
-const WARM: Record<string, number> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
+const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 const r2 = (x: number) => Math.round(x * 100) / 100;
 export const PASS = { minTrades: 40, minPf: 1.2 };
 
@@ -58,22 +58,33 @@ function row(id: string, label: string, trades: { signalAt: number; rNet: number
 
 const nyTime = (t: number) => { const p = zonedParts(t, NY); return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")} ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} NY`; };
 
-/** HTF and POI structure as the engine sees it now: swing (SMC, protected levels) next to internal. */
+/** HTF and POI structure as the engine sees it now: LuxAlgo-style swing (50) and internal (5), premium/discount, strong level. */
 export async function structureReport(id: InstrumentId) {
   const def = INSTRUMENTS[id];
   const frames = [def.htf, def.poi] as Tf[];
   const out = await Promise.all(frames.map(async (tf) => {
     const to = Date.now();
     const set = await loadHistory(id, tf, to - (WARM[tf] ?? 15 * 86_400_000) * 2, to);
-    const c = set.candles.slice(-300);
-    const sw = swingStructure(c, 3, 3);
-    const internal = structureBreaks(c, 3, 3);
+    const c = set.candles.slice(-FRAME_BARS);
+    const lux = smcStructure(c, STRUCTURE);
+    const frame = frameStructure(c);
+    const prot = swingStructure(c, 3, 3);
+    const at = (i: number) => (i >= 0 && c[i] ? nyTime(c[i]!.t) : null);
+    const side = (st: typeof lux.swing) => ({
+      trend: st.trend,
+      high: Number.isFinite(st.high.level) ? { level: st.high.level, at: at(st.high.index), crossed: st.high.crossed } : null,
+      low: Number.isFinite(st.low.level) ? { level: st.low.level, at: at(st.low.index), crossed: st.low.crossed } : null,
+      breaks: st.breaks.slice(-6).map((b) => ({ kind: b.kind, dir: b.direction, level: b.level, at: at(b.index) })),
+    });
     return {
-      tf, source: set.source, bars: c.length, lastClose: c[c.length - 1]?.c, lastBar: c.length ? nyTime(c[c.length - 1]!.t) : null,
-      swingTrend: sw.trend, internalTrend: internal.trend,
-      protectedLevel: sw.protectedLevel ? { price: sw.protectedLevel.price, at: nyTime(c[sw.protectedLevel.index]!.t) } : null,
-      swingBreaks: sw.breaks.slice(-6).map((b) => ({ kind: b.kind, dir: b.direction, level: b.level, at: nyTime(c[b.index]!.t) })),
-      internalBreaks: internal.breaks.slice(-6).map((b) => ({ kind: b.kind, dir: b.direction, level: b.level, at: nyTime(c[b.index]!.t) })),
+      tf, source: set.source, bars: c.length, lastClose: c[c.length - 1]?.c, lastBar: at(c.length - 1),
+      engineTrend: frame.trend,
+      engineRange: frame.range,
+      luxSwing: side(lux.swing),
+      luxInternal: side(lux.internal),
+      premiumDiscount: Number.isFinite(lux.trailing.top) ? { top: lux.trailing.top, topAt: at(lux.trailing.topIndex), bottom: lux.trailing.bottom, bottomAt: at(lux.trailing.bottomIndex), eq: (lux.trailing.top + lux.trailing.bottom) / 2 } : null,
+      strong: lux.strong,
+      protectedFallback: { trend: prot.trend, level: prot.protectedLevel ? { price: prot.protectedLevel.price, at: at(prot.protectedLevel.index) } : null },
     };
   }));
   return { instrument: id, frames: out };
