@@ -39,7 +39,19 @@ On the Autopilot page. Each pass scores every live setup that passes the A+ gate
 
 ## Autopilot schedule
 
-`.github/workflows/autopilot.yml` calls `/api/autopilot/tick` every 5 minutes. Add repository secrets `AUTOPILOT_URL` and `AUTOPILOT_SECRET` (same value as the Vercel env var). Any external cron can call the same URL with `Authorization: Bearer $AUTOPILOT_SECRET`. A manual run with the input `preview=selector` scores the selector board without acting.
+Supabase runs it: `pg_cron` calls `/api/autopilot/tick` every 5 minutes from 05:00 to 16:55 UTC (London Q and NY Q in summer and winter time) and every 15 minutes otherwise (migration `20261026190000_autopilot_cron.sql`). The URL and secret live in Vault; run once in the SQL editor:
+
+```sql
+select vault.create_secret('https://www.tradeplay.cloud', 'autopilot_url');
+select vault.create_secret('<AUTOPILOT_SECRET from Vercel>', 'autopilot_secret');
+```
+
+Check it with `select * from cron.job_run_details order by start_time desc limit 10;` and `select status_code, created from net._http_response order by created desc limit 10;`. `.github/workflows/autopilot.yml` is a manual trigger only (GitHub skipped most scheduled 5-minute slots). Any external cron can call the same URL with `Authorization: Bearer $AUTOPILOT_SECRET`.
+
+## Backtesting and rule research
+
+- **Lab** (Gold / BTC lab): pick the instrument, set *History* to 30d, run. Toggles cover every gate rule (grade A, POI, premium/discount half, 15M alignment, min R:R, entry at the zone or at the shift close). *Skipped setups* lists every signal the rules rejected, grouped by the rules that blocked it, with what it would have done: a positive row means that rule is filtering out winners.
+- **Research run**: Actions → *Autopilot tick* → Run workflow with the query `research=XAUUSD&days=30&day=2026-10-26` (any instrument id). Returns the live rules and eight relaxed variants on the same scan, the skipped-setup impact, and a bar-by-bar replay of that New York day's London Q and NY Q (sweep, shift, zone, position in the range, HTF / 15M trend) for both sides.
 
 ## Run
 
