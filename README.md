@@ -53,6 +53,8 @@ Check it with `select * from cron.job_run_details order by start_time desc limit
 - **Lab** (Gold / BTC lab): pick the instrument, set *History* to 30d, run. Toggles cover every gate rule (grade A, POI, premium/discount half, 15M alignment, min R:R, entry at the zone or at the shift close). *Skipped setups* lists every signal the rules rejected, grouped by the rules that blocked it, with what it would have done: a positive row means that rule is filtering out winners.
 - **Research run**: Actions → *Autopilot tick* → Run workflow with the query `research=XAUUSD&days=30&day=2026-10-26` (any instrument id). Returns the live rules and eight relaxed variants on the same scan, the skipped-setup impact, and a bar-by-bar replay of that New York day's London Q and NY Q (sweep, shift, zone, position in the range, HTF / 15M trend) for both sides.
 
+- **Strategy lab** (long walk-forward, read-only): Actions → *Autopilot tick* → Run workflow with endpoint `lab` and the query `i=XAUUSD&family=session&days=180`. Families: `a5` (Model A on 5M: live rules, trend core, partial exits), `a15` (Model A on 15M entries with 1H POIs and 4H structure), `session` (Asia range in London and London range in New York, as fades or breakouts, with and without the HTF trend filter, fixed or partial exits). Each variant is marked against criteria fixed before the run: at least 40 trades, profit factor ≥ 1.2 after costs, positive in both halves. Gold history over 90 days may fall back from Twelve Data to the Binance index or the PAXG proxy; the response names the source.
+
 ## Run
 
 ```
