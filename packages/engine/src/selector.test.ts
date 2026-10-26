@@ -22,6 +22,7 @@ describe('opportunity selector', () => {
     const s = scoreCandidate(c({ state: 'SHIFTED', verdict: 'WAIT', grade: 'FORMING', context: 100 }));
     expect(s.eligible).toBe(false);
     expect(s.reasons[0]).toMatch(/not armed/);
+    expect(scoreCandidate(c({ verdict: 'NO', grade: 'NO_TRADE', gateReason: 'outside the London/NY windows' })).reasons[0]).toBe('no trade: outside the London/NY windows');
   });
 
   it('takes grade A only when allowed and without blockers', () => {

@@ -34,6 +34,8 @@ export interface Candidate {
   caution: readonly string[];
   /** Recent walk-forward result on this instrument. */
   edge: { avgR: number; n: number; winRate: number } | null;
+  /** The gate's own first reason (blocker, failed box or what it waits for), shown when not tradeable. */
+  gateReason?: string | null;
 }
 
 export interface SelectorParams {
@@ -83,7 +85,7 @@ export function scoreCandidate(c: Candidate, p: SelectorParams = DEFAULT_SELECTO
   const parts: ScoreParts = { quality, reward: round1(reward), context: round1(context), edge: round1(edge), timing, penalty };
   const score = Math.round(Math.max(0, quality + reward + context + edge + timing - penalty));
 
-  if (!tradeable) reasons.push(c.verdict === 'NO' ? 'gate says no trade' : c.grade === 'A' && !p.allowGradeA ? 'grade A (A+ only)' : `not armed (${c.state.toLowerCase()})`);
+  if (!tradeable) reasons.push(c.grade === 'A' && !p.allowGradeA && c.blockers.length === 0 ? 'grade A (A+ only)' : `${c.verdict === 'NO' ? 'no trade' : `not armed (${c.state.toLowerCase()})`}${c.gateReason ? `: ${c.gateReason}` : ''}`);
   else if (!hasPlan) reasons.push('no entry/stop/target');
   if (c.context !== null && c.context <= p.minContext) reasons.push(`context against (${c.context})`);
   if (c.edge && c.edge.n >= p.minEdgeTrades && c.edge.avgR < p.minEdgeR) reasons.push(`recent edge negative (${c.edge.avgR.toFixed(2)}R over ${c.edge.n})`);

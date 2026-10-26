@@ -59,7 +59,7 @@ export async function recentEdges(db: SupabaseClient, ids: InstrumentId[], refre
       const at = new Date().toISOString();
       await db.from("backtests").insert({
         strategy_id: null, instrument: id, from_ts: new Date(res.from).toISOString(), to_ts: new Date(res.to).toISOString(),
-        params: res.params, stats: res.stats, summary: { kind: "edge", days: EDGE_DAYS, returnPct: res.returnPct, maxDrawdownPct: res.maxDrawdownPct, signals: res.signals },
+        params: res.params, stats: res.stats, summary: { kind: "edge", days: EDGE_DAYS, returnPct: res.returnPct, maxDrawdownPct: res.maxDrawdownPct, signals: res.signals, rejected: res.rejected, cancelled: res.cancelled, bars: res.bars },
         trades: [], source: ltf.source,
       });
       out.set(id, { avgR: res.stats.avgR, n: res.stats.n, winRate: res.stats.winRate, at });
@@ -89,6 +89,13 @@ function why(s: Scored, edge: Edge | undefined): string[] {
   out.push(windowName(s.window));
   if (s.caution.length) out.push(`caution: ${s.caution.join(", ")}`);
   return out;
+}
+
+function gateReason(e: Evaluation): string | null {
+  const g = e.gate;
+  if (!g) return e.analysis.range ? null : "no HTF range yet";
+  const failed = g.boxes.find((b) => b.status === "fail");
+  return g.blockers[0] ?? (failed ? `${failed.label} — ${failed.reason}` : null) ?? g.waitingFor[0] ?? null;
 }
 
 /** Desks with a selector trade still pending/open, or picked within the cooldown. */
@@ -145,6 +152,7 @@ export async function runSelector(db: SupabaseClient, deps: {
       blockers: e.gate?.blockers ?? [], rr: e.gate?.rr ?? null, entry: p?.entry ?? null, stop: p?.stop ?? null, target: p?.target ?? null,
       price: e.price, window: e.window, context: c?.dv || c?.mc ? conf.score : null, caution: conf.caution,
       edge: edge ? { avgR: edge.avgR, n: edge.n, winRate: edge.winRate } : null,
+      gateReason: gateReason(e),
     });
   });
 
