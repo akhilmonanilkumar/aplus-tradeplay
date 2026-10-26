@@ -663,7 +663,7 @@ plotshape(sShift, "Bearish shift", shape.circle, location.abovebar, color.maroon
 bgcolor(winId != "" ? color.new(color.blue, 94) : na, title = "Session window")
 
 // ───────────────────────── results table (net R after the preset cost) ─────────────────────────
-if showTable and barstate.islast
+if showTable and (barstate.islastconfirmedhistory or (barstate.isrealtime and barstate.isconfirmed))
     int n = array.size(resR)
     float net = 0.0
     float gw = 0.0
