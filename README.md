@@ -29,6 +29,10 @@ See `apps/web/.env.example`.
 
 `/bot` lists every signal the autopilot and the selector produced, tracks each one's fill, stop or target on candles (with or without an account trading it), and shows the bot's performance: win rate, net R after costs, expectancy, profit factor, drawdown, equity curve and breakdowns by bot, instrument, session, side, grade and selector score.
 
+## TradingView backtest
+
+`tools/tradingview/aplus_edge_strategy.pine` ports the edge and entry models (A, C, F, E) to a Pine Script v6 strategy for backtesting on TradingView history. See `tools/tradingview/README.md`.
+
 ## Best-opportunity selector
 
 On the Autopilot page. Each pass scores every live setup that passes the A+ gate (gate quality, R:R, dollar/yields/funding/OI/flow confluence, the edge's last-3-weeks walk-forward result on that instrument, timing) and sends the best trade per underlying to Telegram with size per account; optional paper tracking reports fills and results. "Preview board" scores without acting. Details: `docs/spec.md` §11.

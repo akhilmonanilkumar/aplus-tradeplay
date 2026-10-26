@@ -1,0 +1,739 @@
+//@version=6
+// A+ Tradeplay — edge backtest (Pine port of packages/engine: setup.ts, gate.ts, backtest.ts).
+// Run on a 5-minute chart. HTF (1H gold / 4H BTC) and 15M are read with request.security on closed bars only.
+strategy("A+ Edge — entry model backtest", shorttitle = "A+ Edge", overlay = true,
+     initial_capital = 10000, currency = currency.USD, default_qty_type = strategy.fixed, default_qty_value = 1,
+     pyramiding = 0, process_orders_on_close = false, calc_on_every_tick = false, use_bar_magnifier = true,
+     margin_long = 1, margin_short = 1, commission_type = strategy.commission.percent, commission_value = 0,
+     max_bars_back = 2000, max_lines_count = 500, max_labels_count = 500)
+
+// ───────────────────────── inputs ─────────────────────────
+G_M = "Model & rules"
+modelIn    = input.string("A · Market shift → pullback", "Entry model", options = ["A · Market shift → pullback", "C · Sweep → OB → FVG", "F · Asia sweep (London Q)", "E · Aggressive sweep entry"], group = G_M)
+sidesIn    = input.string("Both", "Sides", options = ["Both", "Long only", "Short only"], group = G_M)
+minRR      = input.float(3.0, "Minimum R:R (box 7)", minval = 1.0, step = 0.25, group = G_M)
+allowA     = input.bool(false, "Also take grade A (one soft miss)", group = G_M)
+requirePoi = input.bool(true, "Require a 15M POI (box 3)", group = G_M, tooltip = "Turn off to measure what the POI filter is worth.")
+maxPerDay  = input.int(2, "Max trades per day", minval = 1, group = G_M)
+stopAfter  = input.int(2, "Stop after N losses per day", minval = 1, group = G_M)
+expiryBars = input.int(12, "Limit order lifetime (bars)", minval = 1, group = G_M)
+sweepLook  = input.int(36, "Sweep lookback (bars)", minval = 6, group = G_M)
+beAtR      = input.float(0.0, "Break-even at R (0 = set and forget)", minval = 0.0, step = 0.5, group = G_M)
+
+G_W = "Session windows (New York time)"
+wLon  = input.bool(true, "London Q 02:00–05:00", group = G_W)
+wNy   = input.bool(true, "NY Q 07:00–10:00", group = G_W)
+wAsia = input.bool(false, "Asia 20:00–24:00", group = G_W)
+wLc   = input.bool(false, "London close 10:00–12:00", group = G_W)
+
+G_I = "Instrument"
+preset   = input.string("XAUUSD CFD", "Preset", options = ["XAUUSD CFD", "XAUUSDT.P", "BTCUSD CFD", "BTCUSDT.P", "BTCUSD spot", "Custom"], group = G_I)
+htfIn    = input.string("Auto", "HTF for range & trend", options = ["Auto", "60", "240"], group = G_I, tooltip = "Auto: 1H for gold presets, 4H otherwise (as in the app).")
+cBufAbs  = input.float(0.0, "Custom: stop buffer (price units)", group = G_I)
+cBufPct  = input.float(0.05, "Custom: stop buffer (% of price)", step = 0.01, group = G_I)
+cMinStop = input.float(0.0, "Custom: minimum stop %", step = 0.05, group = G_I)
+cCost    = input.float(0.1, "Custom: round-trip cost % of notional", step = 0.01, group = G_I)
+
+G_R = "Risk"
+riskPct = input.float(0.5, "Risk per trade (% of equity)", minval = 0.01, step = 0.05, group = G_R)
+
+G_V = "Display"
+showLevels = input.bool(true, "Show PDH/PDL, Asia range, HTF equilibrium", group = G_V)
+showPlans  = input.bool(true, "Draw entry / stop / target of each order", group = G_V)
+showTable  = input.bool(true, "Show results table", group = G_V)
+
+// ───────────────────────── presets (packages/engine/src/instruments.ts) ─────────────────────────
+NY = "America/New_York"
+isGold = preset == "XAUUSD CFD" or preset == "XAUUSDT.P"
+isBtc  = preset == "BTCUSD CFD" or preset == "BTCUSDT.P" or preset == "BTCUSD spot"
+float bufAbs   = preset == "XAUUSD CFD" ? 0.3 : preset == "Custom" ? cBufAbs : 0.0
+float bufPct   = preset == "XAUUSDT.P" ? 0.01 : isBtc ? 0.05 : preset == "Custom" ? cBufPct : 0.0
+float minStop  = isBtc ? 0.4 : preset == "Custom" ? cMinStop : 0.0
+float costRate = switch preset
+    "XAUUSD CFD"  => 0.00008
+    "XAUUSDT.P"   => 0.001
+    "BTCUSD CFD"  => 0.0006
+    "BTCUSDT.P"   => 0.001
+    "BTCUSD spot" => 0.002
+    => cCost / 100
+string htfTf = htfIn == "Auto" ? (isGold ? "60" : "240") : htfIn
+
+bool mA = str.startswith(modelIn, "A")
+bool mC = str.startswith(modelIn, "C")
+bool mF = str.startswith(modelIn, "F")
+bool mE = str.startswith(modelIn, "E")
+bool doLong  = sidesIn != "Short only"
+bool doShort = sidesIn != "Long only"
+
+// ───────────────────────── structure (smc.ts structureBreaks + setup.ts htfRange) ─────────────────────────
+// Break = candle BODY close through the last confirmed swing. Range = origin of the latest break → extreme since.
+f_struct(int L, int R) =>
+    var float lastH = na
+    var int   lastHBar = na
+    var float lastL = na
+    var int   lastLBar = na
+    var int   usedH = -1
+    var int   usedL = -1
+    var int   trend = 0
+    var float rLo = na
+    var float rHi = na
+    float ph = ta.pivothigh(high, L, R)
+    float pl = ta.pivotlow(low, L, R)
+    if not na(ph)
+        lastH := ph
+        lastHBar := bar_index - R
+    if not na(pl)
+        lastL := pl
+        lastLBar := bar_index - R
+    bool up = not na(lastH) and lastHBar != usedH and close > lastH
+    bool dn = not up and not na(lastL) and lastLBar != usedL and close < lastL
+    int pivBar = na
+    if up
+        trend := 1
+        usedH := lastHBar
+        pivBar := lastHBar
+        float lo = low
+        for k = 0 to bar_index - lastHBar
+            lo := math.min(lo, low[k])
+        rLo := lo
+        rHi := high
+    else if dn
+        trend := -1
+        usedL := lastLBar
+        pivBar := lastLBar
+        float hi = high
+        for k = 0 to bar_index - lastLBar
+            hi := math.max(hi, high[k])
+        rHi := hi
+        rLo := low
+    else if trend == 1
+        rHi := math.max(rHi, high)
+    else if trend == -1
+        rLo := math.min(rLo, low)
+    [trend, rLo, rHi, up, dn, pivBar]
+
+f_htf() =>
+    [t, lo, hi, u, d, pb] = f_struct(3, 3)
+    [t[1], lo[1], hi[1]]
+
+// 15M: trend, fresh order blocks with imbalance (zones.ts orderBlocks), equal highs/lows, last six swings.
+f_poi() =>
+    [t, lo, hi, up, dn, pb] = f_struct(3, 3)
+    float a14 = ta.sma(ta.tr(true), 14)
+    var array<float> uT = array.new<float>()
+    var array<float> uB = array.new<float>()
+    var array<bool>  uL = array.new<bool>()
+    var array<int>   uM = array.new<int>()
+    var array<float> dT = array.new<float>()
+    var array<float> dB = array.new<float>()
+    var array<bool>  dL = array.new<bool>()
+    var array<int>   dM = array.new<int>()
+    // Mitigation: first return into the block after its break.
+    if array.size(uT) > 0
+        for i = 0 to array.size(uT) - 1
+            if na(array.get(uM, i)) and low <= array.get(uT, i)
+                array.set(uM, i, bar_index)
+    if array.size(dT) > 0
+        for i = 0 to array.size(dT) - 1
+            if na(array.get(dM, i)) and high >= array.get(dB, i)
+                array.set(dM, i, bar_index)
+    if (up or dn) and not na(pb)
+        int span = bar_index - pb
+        // Origin of the displacement: first extreme between the broken swing and the break.
+        int org = span
+        for k = span to 0
+            if up ? low[k] < low[org] : high[k] > high[org]
+                org := k
+        // Last opposite-coloured candle at or up to 3 bars before the origin.
+        int ob = -1
+        for j = org to org + 3
+            if ob < 0 and (up ? close[j] < open[j] : close[j] > open[j])
+                ob := j
+        if ob >= 2
+            bool imb = false
+            for m = 1 to ob - 1
+                if up ? low[m - 1] > high[m + 1] : high[m - 1] < low[m + 1]
+                    imb := true
+            if imb
+                if up
+                    array.push(uT, high[ob])
+                    array.push(uB, low[ob])
+                    array.push(uL, low[ob] < low[ob + 1])
+                    array.push(uM, int(na))
+                    if array.size(uT) > 3
+                        array.shift(uT)
+                        array.shift(uB)
+                        array.shift(uL)
+                        array.shift(uM)
+                else
+                    array.push(dT, high[ob])
+                    array.push(dB, low[ob])
+                    array.push(dL, high[ob] > high[ob + 1])
+                    array.push(dM, int(na))
+                    if array.size(dT) > 3
+                        array.shift(dT)
+                        array.shift(dB)
+                        array.shift(dL)
+                        array.shift(dM)
+    // Two most recent blocks per side that are untouched or first tapped within the last 12 bars.
+    float u1T = na
+    float u1B = na
+    bool  u1L = false
+    float u2T = na
+    float u2B = na
+    bool  u2L = false
+    int nu = 0
+    if array.size(uT) > 0
+        for i = array.size(uT) - 1 to 0
+            int mt = array.get(uM, i)
+            if na(mt) or bar_index - mt <= 11
+                if nu == 0
+                    u1T := array.get(uT, i)
+                    u1B := array.get(uB, i)
+                    u1L := array.get(uL, i)
+                else if nu == 1
+                    u2T := array.get(uT, i)
+                    u2B := array.get(uB, i)
+                    u2L := array.get(uL, i)
+                nu += 1
+    float d1T = na
+    float d1B = na
+    bool  d1L = false
+    float d2T = na
+    float d2B = na
+    bool  d2L = false
+    int nd = 0
+    if array.size(dT) > 0
+        for i = array.size(dT) - 1 to 0
+            int mt = array.get(dM, i)
+            if na(mt) or bar_index - mt <= 11
+                if nd == 0
+                    d1T := array.get(dT, i)
+                    d1B := array.get(dB, i)
+                    d1L := array.get(dL, i)
+                else if nd == 1
+                    d2T := array.get(dT, i)
+                    d2B := array.get(dB, i)
+                    d2L := array.get(dL, i)
+                nd += 1
+    // Equal highs / lows (consecutive swings within 0.1 ATR) and the last six swings.
+    float ph = ta.pivothigh(high, 3, 3)
+    float pl = ta.pivotlow(low, 3, 3)
+    var float prevPH = na
+    var float prevPL = na
+    var float eqh = na
+    var float eql = na
+    var int eqhBar = na
+    var int eqlBar = na
+    var array<float> sh = array.new<float>()
+    var array<float> sl = array.new<float>()
+    if not na(ph)
+        if not na(prevPH) and math.abs(ph - prevPH) <= a14 * 0.1
+            eqh := math.max(ph, prevPH)
+            eqhBar := bar_index
+        prevPH := ph
+        array.push(sh, ph)
+        if array.size(sh) > 6
+            array.shift(sh)
+    if not na(pl)
+        if not na(prevPL) and math.abs(pl - prevPL) <= a14 * 0.1
+            eql := math.min(pl, prevPL)
+            eqlBar := bar_index
+        prevPL := pl
+        array.push(sl, pl)
+        if array.size(sl) > 6
+            array.shift(sl)
+    float eqhOut = not na(eqhBar) and bar_index - eqhBar <= 200 ? eqh : na
+    float eqlOut = not na(eqlBar) and bar_index - eqlBar <= 200 ? eql : na
+    int ns = array.size(sh)
+    int nl = array.size(sl)
+    float s1 = ns > 0 ? array.get(sh, ns - 1) : na
+    float s2 = ns > 1 ? array.get(sh, ns - 2) : na
+    float s3 = ns > 2 ? array.get(sh, ns - 3) : na
+    float s4 = ns > 3 ? array.get(sh, ns - 4) : na
+    float s5 = ns > 4 ? array.get(sh, ns - 5) : na
+    float s6 = ns > 5 ? array.get(sh, ns - 6) : na
+    float l1 = nl > 0 ? array.get(sl, nl - 1) : na
+    float l2 = nl > 1 ? array.get(sl, nl - 2) : na
+    float l3 = nl > 2 ? array.get(sl, nl - 3) : na
+    float l4 = nl > 3 ? array.get(sl, nl - 4) : na
+    float l5 = nl > 4 ? array.get(sl, nl - 5) : na
+    float l6 = nl > 5 ? array.get(sl, nl - 6) : na
+    [t[1], u1T[1], u1B[1], u1L[1], u2T[1], u2B[1], u2L[1], d1T[1], d1B[1], d1L[1], d2T[1], d2B[1], d2L[1], eqhOut[1], eqlOut[1], s1[1], s2[1], s3[1], s4[1], s5[1], s6[1], l1[1], l2[1], l3[1], l4[1], l5[1], l6[1]]
+
+[htfTrend, rangeLo, rangeHi] = request.security(syminfo.tickerid, htfTf, f_htf(), lookahead = barmerge.lookahead_on)
+[poiTrend, u1T, u1B, u1L, u2T, u2B, u2L, d1T, d1B, d1L, d2T, d2B, d2L, eqh, eql, sh1, sh2, sh3, sh4, sh5, sh6, sl1, sl2, sl3, sl4, sl5, sl6] = request.security(syminfo.tickerid, "15", f_poi(), lookahead = barmerge.lookahead_on)
+
+// ───────────────────────── liquidity on the 5M chart ─────────────────────────
+// Previous day high / low with the day rolling at 17:00 New York (zones.ts previousDayLevels).
+int t17 = time + 7 * 3600000
+int day17 = year(t17, NY) * 10000 + month(t17, NY) * 100 + dayofmonth(t17, NY)
+var float dH = na
+var float dL = na
+var float pdh = na
+var float pdl = na
+if bar_index == 0 or day17 != day17[1]
+    pdh := dH
+    pdl := dL
+    dH := high
+    dL := low
+else
+    dH := math.max(dH, high)
+    dL := math.min(dL, low)
+
+// Asia range 20:00–24:00 New York, available once the session has closed.
+bool inAsia = hour(time, NY) >= 20
+var float curAH = na
+var float curAL = na
+var float asiaH = na
+var float asiaL = na
+if inAsia and (bar_index == 0 or not inAsia[1])
+    curAH := high
+    curAL := low
+else if inAsia
+    curAH := math.max(curAH, high)
+    curAL := math.min(curAL, low)
+if not inAsia and bar_index > 0 and inAsia[1]
+    asiaH := curAH
+    asiaL := curAL
+
+// 5M swings: (3,3) pivots confirmed at least two bars ago are sweep targets; (2,2) pivots are the shift reference.
+float pl3 = ta.pivotlow(low, 3, 3)
+float ph3 = ta.pivothigh(high, 3, 3)
+var array<float> swLo = array.new<float>()
+var array<float> swHi = array.new<float>()
+if not na(pl3[2])
+    array.push(swLo, pl3[2])
+    if array.size(swLo) > 4
+        array.shift(swLo)
+if not na(ph3[2])
+    array.push(swHi, ph3[2])
+    if array.size(swHi) > 4
+        array.shift(swHi)
+float ph2 = ta.pivothigh(high, 2, 2)
+float pl2 = ta.pivotlow(low, 2, 2)
+var float lastPH2 = na
+var int   lastPH2Bar = na
+var float lastPL2 = na
+var int   lastPL2Bar = na
+if not na(ph2)
+    lastPH2 := ph2
+    lastPH2Bar := bar_index - 2
+if not na(pl2)
+    lastPL2 := pl2
+    lastPL2Bar := bar_index - 2
+
+// Sweep: wick through a level and close back on the original side (smc.ts isSweep). First matching level names it.
+f_sweepLong() =>
+    string lab = ""
+    if not na(pdl) and low < pdl and close > pdl
+        lab := "PDL"
+    else if not na(asiaL) and low < asiaL and close > asiaL
+        lab := "Asia low"
+    else if not na(eql) and low < eql and close > eql
+        lab := "EQL"
+    else if array.size(swLo) > 0
+        for v in swLo
+            if lab == "" and low < v and close > v
+                lab := "5M swing low"
+    lab
+
+f_sweepShort() =>
+    string lab = ""
+    if not na(pdh) and high > pdh and close < pdh
+        lab := "PDH"
+    else if not na(asiaH) and high > asiaH and close < asiaH
+        lab := "Asia high"
+    else if not na(eqh) and high > eqh and close < eqh
+        lab := "EQH"
+    else if array.size(swHi) > 0
+        for v in swHi
+            if lab == "" and high > v and close < v
+                lab := "5M swing high"
+    lab
+
+// ───────────────────────── sweep → shift state per side ─────────────────────────
+var int    lSw = na
+var float  lWick = na
+var string lLab = ""
+var float  lRef = na
+var int    lRefBar = na
+var bool   lDone = false
+var int    sSw = na
+var float  sWick = na
+var string sLab = ""
+var float  sRef = na
+var int    sRefBar = na
+var bool   sDone = false
+
+string swL = f_sweepLong()
+string swS = f_sweepShort()
+if swL != ""
+    lSw := bar_index
+    lWick := low
+    lLab := swL
+    lDone := false
+    lRef := lastPH2
+    lRefBar := lastPH2Bar
+else if not na(lSw) and not na(ph2) and bar_index - 2 < lSw
+    lRef := ph2
+    lRefBar := bar_index - 2
+if swS != ""
+    sSw := bar_index
+    sWick := high
+    sLab := swS
+    sDone := false
+    sRef := lastPL2
+    sRefBar := lastPL2Bar
+else if not na(sSw) and not na(pl2) and bar_index - 2 < sSw
+    sRef := pl2
+    sRefBar := bar_index - 2
+
+// Market shift: first 5M BODY close beyond the last swing that formed before the sweep.
+bool lShift = not na(lSw) and not lDone and not na(lRef) and bar_index > lSw and bar_index - lSw <= sweepLook and close > lRef
+bool sShift = not na(sSw) and not sDone and not na(sRef) and bar_index > sSw and bar_index - sSw <= sweepLook and close < sRef
+
+// ───────────────────────── windows, day, caps ─────────────────────────
+f_window(int t) =>
+    int h = hour(t, NY)
+    string id = wLon and h >= 2 and h < 5 ? "london_q" : wNy and h >= 7 and h < 10 ? "ny_q" : wAsia and h >= 20 ? "asia_q" : wLc and h >= 10 and h < 12 ? "london_close" : ""
+    id
+
+f_windowEnd(string id, int t) =>
+    int endH = id == "london_q" ? 5 : id == "ny_q" ? 10 : id == "london_close" ? 12 : 24
+    endH == 24 ? timestamp(NY, year(t, NY), month(t, NY), dayofmonth(t, NY), 23, 59, 59) + 1000 : timestamp(NY, year(t, NY), month(t, NY), dayofmonth(t, NY), endH, 0, 0)
+
+string winId = f_window(time)
+int dayKey = year(time, NY) * 10000 + month(time, NY) * 100 + dayofmonth(time, NY)
+var int dayTrades = 0
+var int dayLosses = 0
+if bar_index > 0 and dayKey != dayKey[1]
+    dayTrades := 0
+    dayLosses := 0
+
+// ───────────────────────── plan & gate helpers ─────────────────────────
+f_buffer(float price) => bufAbs + price * bufPct / 100
+
+// Nearest real level beyond the entry, ignoring anything within ¼R (setup.ts): never stretched to reach 3R.
+f_target(int dir, float entry, float risk, array<float> pool, array<string> names) =>
+    float best = na
+    string name = ""
+    for i = 0 to array.size(pool) - 1
+        float v = array.get(pool, i)
+        if not na(v)
+            if dir == 1 and v > entry + risk * 0.25 and (na(best) or v < best)
+                best := v
+                name := array.get(names, i)
+            else if dir == -1 and v < entry - risk * 0.25 and (na(best) or v > best)
+                best := v
+                name := array.get(names, i)
+    [best, name]
+
+// The seven-box A+ gate for an armed setup (gate.ts). Boxes 4–6 are met by construction (swept, shifted, in window).
+f_gate(int dir, float entry, float stop, float target, bool zoneFound, bool zoneLiq, bool aggressive) =>
+    string fail = ""
+    string pend = ""
+    int soft = 0
+    if htfTrend == 0 or poiTrend == 0
+        pend := "1 · structure not established"
+    else if htfTrend != poiTrend
+        pend := "1 · HTF and 15M not aligned"
+    else if htfTrend != dir
+        fail := "1 · counter-trend"
+    if fail == ""
+        float pos = (entry - rangeLo) / (rangeHi - rangeLo) * 100
+        if entry < rangeLo or entry > rangeHi
+            fail := "2 · outside the HTF range"
+        else if math.abs(pos - 50) <= 5
+            fail := "2 · mid-range"
+        else if dir == 1 and pos > 50
+            fail := "2 · long in premium"
+        else if dir == -1 and pos < 50
+            fail := "2 · short in discount"
+    if fail == "" and requirePoi
+        if not zoneFound
+            pend := pend == "" ? "3 · not in a 15M POI" : pend
+        else if not zoneLiq
+            soft += 1
+    if fail == ""
+        float risk = math.abs(entry - stop)
+        if (dir == 1 and stop >= entry) or (dir == -1 and stop <= entry)
+            fail := "7 · stop on wrong side"
+        else if minStop > 0 and risk / entry * 100 < minStop
+            fail := "7 · stop below minimum %"
+        else if math.abs(target - entry) / risk < minRR
+            fail := "7 · R:R below minimum"
+    if aggressive
+        soft += 1
+    string why = fail != "" ? fail : pend != "" ? pend : soft >= 2 ? "two soft misses" : soft == 1 and not allowA ? "grade A (one soft miss)" : ""
+    string grade = fail != "" or pend != "" or soft >= 2 ? "NO" : soft == 0 ? "A+" : "A"
+    [why == "", grade, why]
+
+// Which 15M block the setup is in: price now, else the sweep candle, else the last six bars (setup.ts "inside").
+f_touch(float top, float bot, int sweepOff) =>
+    bool hit = false
+    if not na(top)
+        hit := close <= top and close >= bot
+        if not hit and sweepOff >= 0 and sweepOff <= 500
+            hit := low[sweepOff] <= top and high[sweepOff] >= bot
+        if not hit
+            for k = 0 to 5
+                if low[k] <= top and high[k] >= bot
+                    hit := true
+    hit
+
+// ───────────────────────── state & results ─────────────────────────
+var bool   pendActive = false
+var int    pDir = 0
+var float  pEntry = na
+var float  pStop = na
+var float  pTarget = na
+var float  pCostR = na
+var int    pCreated = na
+var int    pWinEnd = na
+var int    tDir = 0
+var float  tEntry = na
+var float  tStop = na
+var float  tTarget = na
+var float  tCostR = na
+var bool   beMoved = false
+var int    signals = 0
+var int    cExpired = 0
+var int    cRanAway = 0
+var int    cWindow = 0
+var array<float> resR = array.new<float>()
+var array<float> resGross = array.new<float>()
+var map<string, int> rejected = map.new<string, int>()
+
+// 1 — fills and closes from the broker emulator.
+int entriesNow = strategy.closedtrades + strategy.opentrades
+if entriesNow > nz(entriesNow[1])
+    dayTrades += 1
+    pendActive := false
+    tDir := pDir
+    tEntry := pEntry
+    tStop := pStop
+    tTarget := pTarget
+    tCostR := pCostR
+    beMoved := false
+if strategy.closedtrades > nz(strategy.closedtrades[1])
+    int lastIdx = strategy.closedtrades - 1
+    float ex = strategy.closedtrades.exit_price(lastIdx)
+    float en = strategy.closedtrades.entry_price(lastIdx)
+    float rG = tDir * (ex - en) / math.abs(tEntry - tStop)
+    array.push(resGross, rG)
+    array.push(resR, rG - tCostR)
+    if rG <= -0.05
+        dayLosses += 1
+
+// Break-even management (optional).
+if strategy.position_size != 0 and beAtR > 0 and not beMoved
+    float risk0 = math.abs(tEntry - tStop)
+    if tDir == 1 and high >= tEntry + beAtR * risk0
+        strategy.exit("Long exit", from_entry = "Long", stop = tEntry, limit = tTarget)
+        beMoved := true
+    else if tDir == -1 and low <= tEntry - beAtR * risk0
+        strategy.exit("Short exit", from_entry = "Short", stop = tEntry, limit = tTarget)
+        beMoved := true
+
+// 2 — work the pending limit: ran away (target before fill), expired, or window closed.
+if pendActive and strategy.position_size == 0
+    bool ran = pDir == 1 ? high >= pTarget : low <= pTarget
+    string cancelWhy = ran ? "ran" : bar_index - pCreated >= expiryBars ? "expired" : time_close >= pWinEnd ? "window" : ""
+    if cancelWhy != ""
+        strategy.cancel(pDir == 1 ? "Long" : "Short")
+        strategy.cancel(pDir == 1 ? "Long exit" : "Short exit")
+        pendActive := false
+        if cancelWhy == "ran"
+            cRanAway += 1
+        else if cancelWhy == "expired"
+            cExpired += 1
+        else
+            cWindow += 1
+
+// 3 — look for a new setup at this bar close (flat, nothing pending, in a window, under the daily caps).
+bool flat = strategy.position_size == 0 and not pendActive
+bool capsOk = dayTrades < maxPerDay and dayLosses < stopAfter
+bool rangeOk = not na(rangeLo) and not na(rangeHi) and rangeHi > rangeLo
+bool canLook = flat and winId != "" and capsOk and rangeOk and barstate.isconfirmed
+
+bool lTrig = doLong and (mE ? swL != "" : lShift)
+bool sTrig = doShort and (mE ? swS != "" : sShift)
+if lShift
+    lDone := true
+if sShift
+    sDone := true
+
+for side = 0 to 1
+    int dir = side == 0 ? 1 : -1
+    bool trig = dir == 1 ? lTrig : sTrig
+    if canLook and trig and not pendActive
+        int swBar = dir == 1 ? lSw : sSw
+        int refBar = dir == 1 ? lRefBar : sRefBar
+        float ref = dir == 1 ? lRef : sRef
+        float wick = dir == 1 ? lWick : sWick
+        string swName = dir == 1 ? lLab : sLab
+        int swOff = bar_index - swBar
+        string modelFail = ""
+        float entry = na
+        if mE
+            entry := close
+        else
+            // 5M order block that caused the shift: last opposite candle at/before the displacement origin.
+            int span = math.max(0, bar_index - nz(refBar, swBar))
+            int org = span
+            for k = span to 0
+                if dir == 1 ? low[k] < low[org] : high[k] > high[org]
+                    org := k
+            int ob = -1
+            for j = org to org + 3
+                if ob < 0 and (dir == 1 ? close[j] < open[j] : close[j] > open[j])
+                    ob := j
+            bool obOk = ob >= 0 and ob <= swOff + 3
+            float obEdge = obOk ? (dir == 1 ? high[ob] : low[ob]) : na
+            if mC
+                float fvgEdge = na
+                if swOff >= 2
+                    for m = 1 to swOff - 1
+                        if na(fvgEdge) and (dir == 1 ? low[m - 1] > high[m + 1] : high[m - 1] < low[m + 1])
+                            fvgEdge := dir == 1 ? low[m - 1] : high[m - 1]
+                if not obOk or na(fvgEdge)
+                    modelFail := "C · no OB with an FVG"
+                entry := fvgEdge
+            else
+                entry := obOk ? obEdge : ref
+            if mF and (winId != "london_q" or not str.startswith(swName, "Asia"))
+                modelFail := "F · not an Asia sweep in London Q"
+        float stop = na(entry) ? na : dir == 1 ? wick - f_buffer(entry) : wick + f_buffer(entry)
+        float risk = na(entry) ? na : math.abs(entry - stop)
+        array<float> pool = dir == 1 ? array.from(pdh, rangeHi, asiaH, eqh, sh1, sh2, sh3, sh4, sh5, sh6) : array.from(pdl, rangeLo, asiaL, eql, sl1, sl2, sl3, sl4, sl5, sl6)
+        array<string> names = dir == 1 ? array.from("PDH", "Range high", "Asia high", "EQH", "15M swing high", "15M swing high", "15M swing high", "15M swing high", "15M swing high", "15M swing high") : array.from("PDL", "Range low", "Asia low", "EQL", "15M swing low", "15M swing low", "15M swing low", "15M swing low", "15M swing low", "15M swing low")
+        float target = na
+        string tName = ""
+        if not na(risk) and risk > 0
+            [tg, tn] = f_target(dir, entry, risk, pool, names)
+            target := tg
+            tName := tn
+        if not na(target)
+            signals += 1
+            string why = modelFail
+            bool take = false
+            string grade = "NO"
+            if why == ""
+                bool z1 = dir == 1 ? f_touch(u1T, u1B, swOff) : f_touch(d1T, d1B, swOff)
+                bool z2 = dir == 1 ? f_touch(u2T, u2B, swOff) : f_touch(d2T, d2B, swOff)
+                bool zLiq = z1 ? (dir == 1 ? u1L : d1L) : z2 ? (dir == 1 ? u2L : d2L) : false
+                [ok, gr, w] = f_gate(dir, entry, stop, target, z1 or z2, zLiq, mE)
+                take := ok
+                grade := gr
+                why := w
+            if take
+                float qty = (strategy.equity * riskPct / 100) / (risk * syminfo.pointvalue)
+                string id = dir == 1 ? "Long" : "Short"
+                string cmt = grade + " · " + swName + " → " + tName
+                strategy.entry(id, dir == 1 ? strategy.long : strategy.short, qty = qty, limit = entry, comment = cmt)
+                strategy.exit(id + " exit", from_entry = id, stop = stop, limit = target, comment_profit = "TP " + tName, comment_loss = "SL")
+                pendActive := true
+                pDir := dir
+                pEntry := entry
+                pStop := stop
+                pTarget := target
+                pCostR := costRate * entry / risk
+                pCreated := bar_index
+                pWinEnd := f_windowEnd(winId, time)
+                if showPlans
+                    line.new(bar_index, entry, bar_index + expiryBars, entry, color = color.new(color.blue, 0), width = 2)
+                    line.new(bar_index, stop, bar_index + expiryBars, stop, color = color.new(color.red, 0))
+                    line.new(bar_index, target, bar_index + expiryBars, target, color = color.new(color.green, 0))
+                    label.new(bar_index, dir == 1 ? low : high, grade + " " + (dir == 1 ? "long" : "short") + "\n" + str.tostring(math.abs(target - entry) / risk, "#.##") + "R · " + swName, style = dir == 1 ? label.style_label_up : label.style_label_down, color = color.new(dir == 1 ? color.teal : color.maroon, 10), textcolor = color.white, size = size.small)
+                alert('{"model":"' + str.substring(modelIn, 0, 1) + '","symbol":"' + syminfo.ticker + '","side":"' + (dir == 1 ? "long" : "short") + '","grade":"' + grade + '","entry":' + str.tostring(entry) + ',"stop":' + str.tostring(stop) + ',"target":' + str.tostring(target) + ',"rr":' + str.tostring(math.abs(target - entry) / risk, "#.##") + '}', alert.freq_once_per_bar_close)
+            else
+                rejected.put(why, nz(rejected.get(why)) + 1)
+
+// ───────────────────────── visuals ─────────────────────────
+plot(showLevels ? pdh : na, "PDH", color.new(color.orange, 20), 1, plot.style_linebr)
+plot(showLevels ? pdl : na, "PDL", color.new(color.orange, 20), 1, plot.style_linebr)
+plot(showLevels ? asiaH : na, "Asia high", color.new(color.purple, 40), 1, plot.style_linebr)
+plot(showLevels ? asiaL : na, "Asia low", color.new(color.purple, 40), 1, plot.style_linebr)
+plot(showLevels and rangeOk ? (rangeLo + rangeHi) / 2 : na, "HTF equilibrium", color.new(color.gray, 30), 1, plot.style_linebr)
+plotshape(swL != "", "Sell-side sweep", shape.triangleup, location.belowbar, color.new(color.teal, 40), size = size.tiny)
+plotshape(swS != "", "Buy-side sweep", shape.triangledown, location.abovebar, color.new(color.maroon, 40), size = size.tiny)
+plotshape(lShift, "Bullish shift", shape.circle, location.belowbar, color.teal, size = size.tiny)
+plotshape(sShift, "Bearish shift", shape.circle, location.abovebar, color.maroon, size = size.tiny)
+bgcolor(winId != "" ? color.new(color.blue, 94) : na, title = "Session window")
+
+// ───────────────────────── results table (net R after the preset cost) ─────────────────────────
+if showTable and barstate.islast
+    int n = array.size(resR)
+    float net = 0.0
+    float gw = 0.0
+    float gl = 0.0
+    int wins = 0
+    int losses = 0
+    float eq = 0.0
+    float peak = 0.0
+    float mdd = 0.0
+    int streak = 0
+    int worst = 0
+    if n > 0
+        for x in resR
+            net += x
+            eq += x
+            peak := math.max(peak, eq)
+            mdd := math.max(mdd, peak - eq)
+            if x > 0
+                wins += 1
+                gw += x
+                streak := 0
+            else if x < 0
+                losses += 1
+                gl += x
+                streak += 1
+                worst := math.max(worst, streak)
+    float grossNet = n > 0 ? array.sum(resGross) : 0.0
+    array<string> keys = rejected.keys()
+    var table tb = table.new(position.top_right, 2, 40, bgcolor = color.new(color.black, 15), border_width = 1, border_color = color.new(color.gray, 70))
+    table.clear(tb, 0, 0, 1, 39)
+    int r = 0
+    table.cell(tb, 0, r, "A+ Edge · " + str.substring(modelIn, 0, 1), text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, r, syminfo.ticker + " · " + timeframe.period + (timeframe.period != "5" ? " (use 5m!)" : ""), text_color = timeframe.period != "5" ? color.red : color.silver, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Trades (W / L)", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, str.tostring(n) + " (" + str.tostring(wins) + " / " + str.tostring(losses) + ")", text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Win rate", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, n > 0 ? str.tostring(100.0 * wins / n, "#.#") + "%" : "—", text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Net R (after cost)", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, str.tostring(net, "+#.##;-#.##"), text_color = net >= 0 ? color.lime : color.red, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Expectancy / trade", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, n > 0 ? str.tostring(net / n, "+#.###;-#.###") + "R" : "—", text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Gross R", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, str.tostring(grossNet, "+#.##;-#.##"), text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Profit factor", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, gl != 0 ? str.tostring(gw / math.abs(gl), "#.##") : "—", text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Max drawdown", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, str.tostring(-mdd, "#.##") + "R · worst run " + str.tostring(worst), text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Armed setups", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, str.tostring(signals), text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Cancelled", text_color = color.silver, text_size = size.small)
+    table.cell(tb, 1, r, str.tostring(cRanAway) + " ran away · " + str.tostring(cExpired) + " expired · " + str.tostring(cWindow) + " window", text_color = color.white, text_size = size.small)
+    r += 1
+    table.cell(tb, 0, r, "Rejected by the gate", text_color = color.yellow, text_size = size.small)
+    table.cell(tb, 1, r, "", text_size = size.small)
+    r += 1
+    if array.size(keys) > 0
+        for k in keys
+            if r < 39
+                table.cell(tb, 0, r, k, text_color = color.silver, text_size = size.tiny)
+                table.cell(tb, 1, r, str.tostring(rejected.get(k)), text_color = color.white, text_size = size.tiny)
+                r += 1
+    if mE and not allowA and r < 39
+        table.cell(tb, 0, r, "Model E is grade A at best", text_color = color.orange, text_size = size.tiny)
+        table.cell(tb, 1, r, "enable grade A", text_color = color.orange, text_size = size.tiny)
