@@ -11,14 +11,15 @@ create index if not exists signals_meta_key_idx on public.signals ((meta->>'key'
 create index if not exists signals_model_created_idx on public.signals (model, created_at desc);
 
 -- Scheduler secret: generated here, read by autopilot_tick_call() for the bearer header and
--- checked by the app through autopilot_secret_ok(), so it is never copied by hand.
+-- checked by the app through autopilot_secret_ok(), so it is never copied by hand. The URL is the
+-- www host: the apex redirects there and the redirect drops the Authorization header.
 do $$
 begin
   if not exists (select 1 from vault.secrets where name = 'autopilot_secret') then
     perform vault.create_secret(encode(extensions.gen_random_bytes(32), 'hex'), 'autopilot_secret');
   end if;
   if not exists (select 1 from vault.secrets where name = 'autopilot_url') then
-    perform vault.create_secret('https://tradeplay.cloud', 'autopilot_url');
+    perform vault.create_secret('https://www.tradeplay.cloud', 'autopilot_url');
   end if;
 end $$;
 

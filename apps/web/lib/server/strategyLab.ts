@@ -75,6 +75,8 @@ export async function structureReport(id: InstrumentId) {
  * nearest target paying 2R), the playbook's (stop just beyond the entry zone, nearest real target,
  * 3R minimum, never stretched), and the playbook stop with the live target rule.
  */
+const LOOSE: Partial<StrategyParams> = { requireCorrectHalf: false, requirePoi: false, allowGradeA: true };
+
 function modelVariants(): { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] {
   const out: { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] = [];
   for (const m of MODEL_IDS) {
@@ -84,8 +86,14 @@ function modelVariants(): { id: string; label: string; model: string; params: Pa
       { id: `${m}-live`, label: `${m} · ${em.name} — live rules (furthest stop, first target ≥ 2R)`, model: m, params: base, diagnose: true },
       { id: `${m}-spec`, label: `${m} · ${em.name} — playbook (zone stop, nearest target, 3R)`, model: m, params: { ...base, stopMode: "zone", targetMode: "nearest", minRR: 3 }, diagnose: true },
       { id: `${m}-zone`, label: `${m} · ${em.name} — zone stop, first target ≥ 2R`, model: m, params: { ...base, stopMode: "zone" }, diagnose: false },
+      // Location boxes off (premium/discount, POI, one soft miss): enough trades to see why the trigger itself loses.
+      { id: `${m}-loose`, label: `${m} · ${em.name} — live rules, location boxes off`, model: m, params: { ...base, ...LOOSE }, diagnose: true },
     );
   }
+  out.push(
+    { id: "all-loose", label: "All models · live rules, location boxes off", model: "all", params: { models: [...MODEL_IDS], allowAllModels: true, ...LOOSE }, diagnose: true },
+    { id: "all-loose-spec", label: "All models · playbook stop and target, location boxes off", model: "all", params: { models: [...MODEL_IDS], allowAllModels: true, ...LOOSE, stopMode: "zone", targetMode: "nearest", minRR: 3 }, diagnose: true },
+  );
   return out;
 }
 
