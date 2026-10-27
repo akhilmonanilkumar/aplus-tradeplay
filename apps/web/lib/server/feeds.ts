@@ -6,14 +6,13 @@ import { cached, errMsg, getJson } from "@/lib/server/http";
  * Candle and quote providers with ordered fallbacks per instrument. Each result says
  * which source answered and whether it is an approximation of the traded price.
  *
- * Gold CFD accuracy: OANDA (free practice key) or Twelve Data give real XAU/USD.
- * Without a key we fall back to the Binance XAUUSDT index (a multi-venue spot-gold
- * composite), then PAXG — both are labelled.
+ * Free, keyless sources only (an OANDA practice key, if set, goes first). Gold uses the Binance
+ * XAUUSDT index (a multi-venue spot-gold composite), then PAXG; forex and Nifty use Yahoo;
+ * crypto uses the exchanges; approximations are labelled.
  */
 
 export interface CandleSet { candles: Candle[]; forming: Candle | null; source: string; approx: boolean; note?: string }
-/** `patient`: a backtest may wait for a metered vendor's quota; a live pass must fail over at once. */
-type Range = { limit: number; endTime?: number; patient?: boolean };
+type Range = { limit: number; endTime?: number };
 type Provider = {
   name: string; approx: boolean; note?: string; enabled?: () => boolean; load: (tf: Tf, r: Range) => Promise<Candle[]>;
   /** Rate-limited vendors: fetch only this timeframe (once per bar) and aggregate the others from it. */
@@ -127,35 +126,6 @@ function oanda(instrumentName: string): Provider["load"] {
   };
 }
 
-const TD_TF: Record<Tf, string> = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" };
-function twelveData(symbol: string): Provider["load"] {
-  return async (tf, r) => {
-    coolingCheck("twelvedata");
-    await slot("twelvedata", r.patient);
-    const q = new URLSearchParams({ symbol, interval: TD_TF[tf], outputsize: String(Math.min(5000, r.limit)), timezone: "UTC", order: "ASC", apikey: env("TWELVEDATA_API_KEY") });
-    if (r.endTime) q.set("end_date", new Date(r.endTime).toISOString().slice(0, 19).replace("T", " "));
-    type Res = { status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string }[] };
-    // The quota is shared with other server instances. A backtest waits for the next minute and retries;
-    // a live pass trips the cooldown and falls through to the next provider straight away.
-    let j: Res | null = null;
-    for (let attempt = 0; !j; attempt++) {
-      try {
-        j = await getJson<Res>(`https://api.twelvedata.com/time_series?${q}`);
-      } catch (e) {
-        if (!/429/.test(errMsg(e))) throw e;
-        if (!r.patient || attempt >= 2) { trip("twelvedata"); throw e; }
-        await new Promise((res) => setTimeout(res, 61_000));
-      }
-    }
-    // Out of daily credits comes back as HTTP 200 with code 429 in the body.
-    if (j.status !== "ok" || !j.values) {
-      if (/credits|limit/i.test(j.message ?? "")) trip("twelvedata", /day/i.test(j.message ?? "") ? untilUtcMidnight() : undefined);
-      throw new Error(`twelvedata: ${j.message ?? j.status}`);
-    }
-    return j.values.map((x) => ({ t: Date.parse(`${x.datetime.replace(" ", "T")}Z`), o: num(x.open), h: num(x.high), l: num(x.low), c: num(x.close) }));
-  };
-}
-
 /* ---------------- Yahoo Finance (keyless) ---------------- */
 
 /**
@@ -227,7 +197,7 @@ export async function feedHealth(opts: { metered?: boolean } = {}) {
     try { const q = await loadQuote(id); return { id, source: q.source, last: q.last, ageSec: Math.round((Date.now() - q.ts) / 1000) }; }
     catch (e) { return { id, error: errMsg(e) }; }
   }));
-  return { at: new Date().toISOString(), cooldowns: vendorCooldowns(), live, quotes, providers: rows };
+  return { at: new Date().toISOString(), live, quotes, providers: rows };
 }
 
 /* ---------------- NSE (Upstox, keyless) ---------------- */
@@ -276,51 +246,14 @@ function lastNseBarDue(now: number): number {
   return 0;
 }
 
-/** Requests per minute a metered vendor allows; backtest paging waits for a free slot, live pulls fail over. */
-const RATE: Record<string, number> = { twelvedata: 8 };
-const calls = new Map<string, number[]>();
-async function slot(vendor: string, patient = false): Promise<void> {
-  const perMin = RATE[vendor];
-  if (!perMin) return;
-  for (;;) {
-    const now = Date.now();
-    const recent = (calls.get(vendor) ?? []).filter((t) => t > now - 61_000);
-    if (recent.length < perMin) { calls.set(vendor, [...recent, now]); return; }
-    if (!patient) throw new Error(`${vendor}: ${perMin}/min quota in use`);
-    await new Promise((res) => setTimeout(res, recent[0]! + 61_000 - now));
-  }
-}
-
-/**
- * Cooldown after a quota refusal: the vendor is skipped (fails at once) until it ends. A refusal soon
- * after a cooldown means the daily credits are gone, so the next one runs much longer.
- */
-const cooling = new Map<string, { until: number; strikes: number }>();
-const untilUtcMidnight = () => Math.ceil(Date.now() / 86_400_000) * 86_400_000 + 60_000;
-function trip(vendor: string, until?: number) {
-  const now = Date.now();
-  const prev = cooling.get(vendor);
-  const strikes = prev && now - prev.until < 15 * 60_000 ? prev.strikes + 1 : 1;
-  cooling.set(vendor, { until: until ?? now + (strikes >= 3 ? 60 : strikes === 2 ? 15 : 2) * 60_000, strikes });
-}
-function coolingCheck(vendor: string) {
-  const c = cooling.get(vendor);
-  if (c && Date.now() < c.until) throw new Error(`${vendor}: quota cooldown until ${new Date(c.until).toISOString().slice(11, 16)} UTC`);
-}
-/** Vendors in a quota cooldown, for the feed health report. */
-export const vendorCooldowns = () => Object.fromEntries([...cooling].filter(([, c]) => Date.now() < c.until).map(([k, c]) => [k, new Date(c.until).toISOString()]));
-
 /* ---------------- chains ---------------- */
 
 const hasOanda = () => !!env("OANDA_API_KEY");
-const hasTd = () => !!env("TWELVEDATA_API_KEY");
 
 export const CHAINS: Record<InstrumentId, Provider[]> = {
   XAUUSD: [
     { name: "OANDA XAU/USD", approx: false, enabled: hasOanda, load: oanda("XAU_USD") },
-    // Free tier: 8 requests/min, 800/day — one 5,000-bar 5M pull per bar close covers 5M, 15M and 1H.
-    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD"), base: "5m", pageSize: 5000, metered: true },
-    { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA or Twelve Data key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
+    { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
     { name: "PAXG/USDT proxy", approx: true, note: "1 PAXG ≈ 1 oz; trades at a small premium to spot", load: binanceSpot("PAXGUSDT") },
   ],
   "XAUUSDT.P": [
@@ -344,15 +277,13 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   ],
   EURUSD: [
     { name: "OANDA EUR/USD", approx: false, enabled: hasOanda, load: oanda("EUR_USD") },
-    // Yahoo first keeps the Twelve Data credits for gold; it covers 60 days of 5M, so long backtests name Twelve Data.
+    // Yahoo keeps 60 days of 5M; longer backtests fall through to Binance EUR/USDT.
     { name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") },
-    { name: "Twelve Data EUR/USD", approx: false, enabled: hasTd, load: twelveData("EUR/USD"), base: "5m", pageSize: 5000, metered: true },
     { name: "Binance EUR/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("EURUSDT") },
   ],
   USDJPY: [
     { name: "OANDA USD/JPY", approx: false, enabled: hasOanda, load: oanda("USD_JPY") },
     { name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") },
-    { name: "Twelve Data USD/JPY", approx: false, enabled: hasTd, load: twelveData("USD/JPY"), base: "5m", pageSize: 5000, metered: true },
   ],
   NAS100: [
     { name: "OANDA NAS100", approx: false, enabled: hasOanda, load: oanda("NAS100_USD") },
@@ -452,7 +383,7 @@ export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: nu
         const out: Candle[] = [];
         let end = end0;
         for (let guard = 0; guard < 80 && end > start; guard++) {
-          const batch = dedupe(await p.load(t, { limit: page, endTime: end, patient: !opts.allowMetered }));
+          const batch = dedupe(await p.load(t, { limit: page, endTime: end }));
           const older = batch.filter((c) => c.t < (out[0]?.t ?? Infinity) && c.t >= start - TF_MS[t]);
           if (!older.length) break;
           out.unshift(...older);

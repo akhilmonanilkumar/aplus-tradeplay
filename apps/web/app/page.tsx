@@ -1,52 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import { DESKS, INSTRUMENTS, type DeskId, type InstrumentId } from "@aplus/engine";
-import LivePnl from "@/components/LivePnl";
+import { useEffect, useMemo, useState } from "react";
+import DashboardLive from "@/components/DashboardLive";
 import { useRows } from "@/lib/useRows";
 import { useApi } from "@/lib/useApi";
 import { drawdown, matchesOwner, ownerOf, ownerOptions } from "@/lib/accounts";
 import { equitySeries, istDay, riskAmount, todayIst } from "@/lib/derive";
 import type { CalEvent } from "@/lib/server/news";
-import type { AutopilotConfig, AutopilotRun, CashFlow, Investor, TelegramAlert, Trade, TradingAccount } from "@/lib/types";
+import type { AutopilotRun, CashFlow, Investor, TelegramAlert, Trade, TradingAccount } from "@/lib/types";
 import { money, num, pct, signed, timeShort } from "@/lib/fmt";
-import { Card, Chip, Empty, ErrorNote, Kpi, Table } from "@/components/ui";
+import { Card, Chip, Empty, ErrorNote, Kpi } from "@/components/ui";
 import SessionsCard from "@/components/SessionsCard";
 
-type Quote = { last: number; source: string; approx: boolean };
-const STATE_TONE: Record<string, "up" | "warn" | "down" | ""> = { ARMED: "up", SHIFTED: "warn", SWEPT: "warn", IN_POI: "", ERROR: "down" };
-
-function QuoteCell({ id }: { id: InstrumentId }) {
-  const q = useApi<Quote>(`/api/market/quote?i=${encodeURIComponent(id)}`, 15_000);
-  return <span className="mono" style={{ fontWeight: 600 }}>{q.data ? num(q.data.last, INSTRUMENTS[id].digits) : q.error ? "—" : "…"}</span>;
-}
-
-function DeskCard({ desk, runs, configs, trades }: { desk: DeskId; runs: AutopilotRun[]; configs: AutopilotConfig[]; trades: Trade[] }) {
-  const d = DESKS[desk];
-  const today = todayIst();
-  return (
-    <Card span={6} title={d.name} right={<><Link className="btn sm" href={`/lab/${desk}`}>Lab</Link><Link className="btn pri sm" href={`/desk/${desk}`}>Open desk</Link></>}>
-      <Table head={["Instrument", "Price", "State", "Autopilot", "Today"]} right={[1, 4]}>
-        {d.instruments.map((id) => {
-          const r = runs.find((x) => x.instrument === id);
-          const c = configs.find((x) => x.instrument === id);
-          const t = trades.filter((x) => x.instrument === id && istDay(x.opened_at) === today);
-          const p = t.reduce((s, x) => s + Number(x.pnl ?? 0), 0);
-          return (
-            <tr key={id}>
-              <td><Link href={`/desk/${desk}?i=${encodeURIComponent(id)}`}><b style={{ fontWeight: 500 }}>{INSTRUMENTS[id].label}</b></Link></td>
-              <td className="r"><QuoteCell id={id} /></td>
-              <td>{r ? <Chip tone={STATE_TONE[r.state] ?? ""}>{r.state}{r.grade ? ` · ${r.grade.replace("_", " ")}` : ""}</Chip> : <Chip>—</Chip>} {r && <span className="faint mono" style={{ fontSize: 10.5 }}>{timeShort(+new Date(r.at), "Asia/Kolkata")}</span>}</td>
-              <td><Chip tone={c?.mode === "off" || !c ? "" : c.mode === "paper" ? "info" : "acc"}>{c?.mode ?? "off"}</Chip></td>
-              <td className={`r mono ${signed(p)}`}>{t.length ? `${t.length} · ${money(p, "USD", 0)}` : "—"}</td>
-            </tr>
-          );
-        })}
-      </Table>
-    </Card>
-  );
-}
+const REFRESH_MS = 30_000;
 
 function EquityCard({ accounts, trades, investors }: { accounts: TradingAccount[]; trades: Trade[]; investors: Investor[] }) {
   const [owner, setOwner] = useState("all");
@@ -90,9 +57,14 @@ export default function Dashboard() {
   const trades = useRows<Trade>({ table: "trades", order: "opened_at", limit: 5000 });
   const flows = useRows<CashFlow>({ table: "cash_flows", order: "at", limit: 5000 });
   const runs = useRows<AutopilotRun>({ table: "autopilot_runs", order: "at", limit: 50 });
-  const configs = useRows<AutopilotConfig>({ table: "autopilot_config", order: "instrument", ascending: true });
   const alerts = useRows<TelegramAlert>({ table: "telegram_alerts", order: "at", limit: 6 });
   const cal = useApi<{ items: CalEvent[] }>("/api/calendar", 1_800_000);
+  // Closed trades, balances and autopilot states change on every pass: refresh while the tab is visible.
+  const reloads = [accounts.reload, trades.reload, runs.reload];
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === "visible") reloads.forEach((f) => f()); }, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [accounts.reload, trades.reload, runs.reload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const invs = investors.rows ?? [];
   const acc = (accounts.rows ?? []).filter((a) => a.active && a.currency !== "INR");
@@ -131,17 +103,12 @@ export default function Dashboard() {
   return (
     <>
       <ErrorNote error={accounts.error || trades.error} />
-      <section className="g12"><LivePnl /></section>
+      <DashboardLive trades={tr} accounts={acc} runs={runs.rows ?? []} />
       <section className="g12">
         <Kpi label={`Assets under management · ${acc.length} accounts`} value={money(aum, "USD", 0)} foot={<span className="faint mono">own {money(own, "USD", 0)} · investors {money(aum - own, "USD", 0)}</span>} />
-        <Kpi label="Today P&L" value={`${pnlToday > 0 ? "+" : ""}${money(pnlToday)}`} tone={signed(pnlToday)} foot={<span className="faint">{closedIn((d) => d === today).length} closed today</span>} />
-        <Kpi label="Month to date" value={`${pnlMtd > 0 ? "+" : ""}${money(pnlMtd, "USD", 0)}`} tone={signed(pnlMtd)} foot={<span className="faint">{mtd.length} trades · {aum ? `${pnlMtd >= 0 ? "+" : ""}${pct(pnlMtd / Math.max(1, aum - pnlMtd), 2)}` : "—"}</span>} />
+        <Kpi label="Today P&L · real accounts" value={`${pnlToday > 0 ? "+" : ""}${money(pnlToday)}`} tone={signed(pnlToday)} foot={<span className="faint">{closedIn((d) => d === today).length} closed today</span>} />
+        <Kpi label="Month to date · real" value={`${pnlMtd > 0 ? "+" : ""}${money(pnlMtd, "USD", 0)}`} tone={signed(pnlMtd)} foot={<span className="faint">{mtd.length} trades · {aum ? `${pnlMtd >= 0 ? "+" : ""}${pct(pnlMtd / Math.max(1, aum - pnlMtd), 2)}` : "—"}</span>} />
         <Kpi label="Open risk · 30d win rate" value={money(openRisk, "USD", 0)} foot={<span className="faint mono">{open.length} open · {aum ? pct(openRisk / aum, 2) : "—"} of AUM · win {pct(wr30, 0)} ({last30.length})</span>} />
-      </section>
-
-      <section className="g12">
-        <DeskCard desk="gold" runs={runs.rows ?? []} configs={configs.rows ?? []} trades={tr} />
-        <DeskCard desk="btc" runs={runs.rows ?? []} configs={configs.rows ?? []} trades={tr} />
       </section>
 
       <section className="g12">
@@ -159,25 +126,26 @@ export default function Dashboard() {
       <section className="g12">
         <Card span={8} title="Accounts" right={<><Link className="btn ghost sm" href="/analytics">P&L analytics</Link><Link className="btn sm" href="/accounts">Manage</Link></>}>
           {acc.length === 0 ? <Empty><Link className="btn sm" href="/accounts">Add an account</Link></Empty> : (
-            <Table head={["Account", "Owner", "Equity", "Today", "MTD", "From peak", "Risk"]} right={[2, 3, 4, 5, 6]}>
+            <div className="auto-s" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(210px, 100%), 1fr))" }}>
               {acc.map((a) => {
-                const t = real.filter((x) => x.account_id === a.id && x.closed_at);
+                const t = tr.filter((x) => x.account_id === a.id && x.closed_at && x.pnl !== null);
                 const d1 = t.filter((x) => istDay(x.closed_at!) === today).reduce((s, x) => s + Number(x.pnl ?? 0), 0);
                 const m = t.filter((x) => istDay(x.closed_at!).startsWith(month)).reduce((s, x) => s + Number(x.pnl ?? 0), 0);
                 const o = ownerOf(a, invs);
+                const isPaper = t.some((x) => x.source === "paper");
                 return (
-                  <tr key={a.id}>
-                    <td><b style={{ fontWeight: 500 }}>{a.name}</b> <span className="faint" style={{ fontSize: 11 }}>{a.venue} · {a.type}</span></td>
-                    <td><Chip tone={o.own ? "acc" : "info"}>{o.label}</Chip></td>
-                    <td className="r mono">{money(Number(a.equity), a.currency)}</td>
-                    <td className={`r mono ${signed(d1)}`}>{d1 ? money(d1) : "—"}</td>
-                    <td className={`r mono ${signed(m)}`}>{m ? money(m) : "—"}</td>
-                    <td className={`r mono ${drawdown(a) > 0.03 ? "down" : "faint"}`}>{pct(-drawdown(a), 1)}</td>
-                    <td className="r mono">{num(Number(a.risk_pct), 2)}%</td>
-                  </tr>
+                  <div key={a.id} className="card" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 4, boxShadow: "none", background: "var(--surface-2)" }}>
+                    <div className="between"><b style={{ fontWeight: 500, fontSize: 12.5 }}>{a.name}</b><Chip tone={isPaper ? "info" : o.own ? "acc" : "info"}>{isPaper ? "paper" : o.label}</Chip></div>
+                    <div className="kv sm">{money(Number(a.equity), a.currency, 0)}</div>
+                    <div className="between faint mono" style={{ fontSize: 11 }}>
+                      <span>today <span className={d1 > 0 ? "up" : d1 < 0 ? "down" : ""}>{d1 ? money(d1, "USD", 0) : "—"}</span></span>
+                      <span>MTD <span className={m > 0 ? "up" : m < 0 ? "down" : ""}>{m ? money(m, "USD", 0) : "—"}</span></span>
+                    </div>
+                    <div className="between faint mono" style={{ fontSize: 11 }}><span>{a.venue} · {a.type}</span><span className={drawdown(a) > 0.03 ? "down" : ""}>DD {pct(-drawdown(a), 1)} · risk {num(Number(a.risk_pct), 2)}%</span></div>
+                  </div>
                 );
               })}
-            </Table>
+            </div>
           )}
         </Card>
         <div className="s4 col" style={{ gap: 16 }}>

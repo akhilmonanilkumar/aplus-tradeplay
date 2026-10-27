@@ -206,7 +206,7 @@ export default function Lab() {
             </Card>
           ) : (
             <>
-              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. An OANDA key gives broker-grade XAU/USD history (Twelve Data&apos;s free quota is too small for repeatable long backtests).</Note>}
+              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. An OANDA practice key gives broker-grade history.</Note>}
               {res.partial && <Note tone="warn">{res.partial}. Results cover less than the chosen period.</Note>}
               <div className="g12">
                 <Kpi span={3} label={`Trades · ${days}d`} value={s!.n} foot={<span className="faint">{res.signals} signals · {res.cancelled.ranAway} ran away · {res.cancelled.expired + res.cancelled.windowClosed} expired</span>} />

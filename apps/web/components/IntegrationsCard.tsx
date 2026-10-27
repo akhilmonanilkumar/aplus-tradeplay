@@ -13,7 +13,6 @@ const KEYS: { k: string; what: string; where: string }[] = [
   { k: "TELEGRAM_BOT_TOKEN", what: "Send Telegram alerts", where: "@BotFather → /newbot" },
   { k: "OANDA_API_KEY", what: "Broker-grade XAU/USD candles (free practice account works)", where: "OANDA → Manage API access" },
   { k: "OANDA_ACCOUNT_ID", what: "Live XAU/USD bid/ask from OANDA", where: "OANDA account number" },
-  { k: "TWELVEDATA_API_KEY", what: "Alternative XAU/USD feed", where: "twelvedata.com" },
   { k: "FRED_API_KEY", what: "10Y real yield (TIPS) for the gold desk", where: "fred.stlouisfed.org → API keys (free)" },
   { k: "FINNHUB_API_KEY", what: "Extra news headlines", where: "finnhub.io (free tier)" },
   { k: "SUPABASE_SERVICE_ROLE_KEY", what: "Autopilot, selector, investor invites", where: "Supabase → Project settings → API" },
