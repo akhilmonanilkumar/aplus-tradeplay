@@ -17,14 +17,21 @@ export async function GET(req: Request) {
   const only = new URL(req.url).searchParams.get("i");
   try {
     let tq = db.from("trades").select("id, signal_id, account_id, instrument, side, model, entry, stop, target, qty, planned_r, opened_at, trading_accounts(name)").eq("source", "paper").is("exit", null).order("opened_at", { ascending: false });
-    let sq = db.from("signals").select("id, instrument, side, model, entry, stop, target, rr, filled_at, created_at, meta").in("source", ["autopilot", "selector"]).eq("outcome", "filled").order("filled_at", { ascending: false }).limit(200);
+    let sq = db.from("signals").select("id, instrument, side, model, entry, stop, target, rr, filled_at, created_at, meta, gate").in("source", ["autopilot", "selector"]).eq("outcome", "filled").order("filled_at", { ascending: false }).limit(200);
     let oq = db.from("orders").select("id, side, entry, stop, target, created_at, signals!inner(instrument, model)").eq("action", "PAPER").eq("status", "queued").order("created_at", { ascending: false }).limit(50);
     if (only) { tq = tq.eq("instrument", only); sq = sq.eq("instrument", only); oq = oq.eq("signals.instrument", only); }
     const [open, tracked, pending] = await Promise.all([tq, sq, oq]);
     if (open.error) throw new Error(open.error.message);
     if (tracked.error) throw new Error(tracked.error.message);
     type Open = { id: string; signal_id: string | null; instrument: string; side: "long" | "short"; model: string | null; entry: number; stop: number; target: number | null; qty: number; planned_r: number | null; opened_at: string; trading_accounts: { name: string } | null };
-    type Tracked = { id: string; instrument: string; side: "long" | "short"; model: string | null; entry: number; stop: number; target: number | null; rr: number | null; filled_at: string | null; created_at: string; meta: { tradeable?: boolean; strategy?: string; paper?: { blockers?: string[] } } | null };
+    type Tracked = { id: string; instrument: string; side: "long" | "short"; model: string | null; entry: number; stop: number; target: number | null; rr: number | null; filled_at: string | null; created_at: string; meta: { tradeable?: boolean; strategy?: string; paper?: { blockers?: string[]; waitingFor?: string[] } } | null; gate: { label: string; status: string; reason: string }[] | null };
+    // Why the gate turned a setup down: a hard blocker, else the first box that failed, else what it was still waiting for.
+    const whyNot = (t: Tracked) => {
+      if (t.model === "S") return "session strategy";
+      if (t.meta?.tradeable) return "would trade";
+      const box = (t.gate ?? []).find((b) => b.status === "fail") ?? (t.gate ?? []).find((b) => b.status === "pending");
+      return t.meta?.paper?.blockers?.[0] ?? (box ? `${box.label}: ${box.reason}` : t.meta?.paper?.waitingFor?.[0] ?? "rejected");
+    };
     const trades = (open.data ?? []) as unknown as Open[];
     const onAccount = new Set(trades.map((t) => t.signal_id).filter(Boolean));
     const ledger = ((tracked.data ?? []) as unknown as Tracked[]).filter((s) => !onAccount.has(s.id));
@@ -60,7 +67,7 @@ export async function GET(req: Request) {
     const watched = ledger.map((t) => {
       const m = marks.get(t.instrument as InstrumentId) ?? null;
       return {
-        id: t.id, kind: "ledger" as const, gate: t.meta?.tradeable ? "would trade" : t.meta?.paper?.blockers?.[0] ?? "rejected",
+        id: t.id, kind: "ledger" as const, gate: whyNot(t),
         instrument: t.instrument, side: t.side, model: t.model === "S" && t.meta?.strategy ? `S · ${t.meta.strategy}` : t.model, account: null,
         entry: Number(t.entry), stop: Number(t.stop), target: t.target === null ? null : Number(t.target), qty: 0, plannedR: t.rr === null ? null : Number(t.rr),
         openedAt: t.filled_at ?? t.created_at, price: m?.price ?? null, priceSource: m?.source ?? null,
