@@ -191,12 +191,10 @@ function yahoo(symbol: string): Provider["load"] {
 
 /** Free providers not wired into a chain yet, probed by the feed health report. */
 export const CANDIDATES: Partial<Record<InstrumentId, Provider[]>> = {
-  XAUUSD: [{ name: "Yahoo XAU/USD (XAUUSD=X)", approx: false, load: yahoo("XAUUSD=X") }, { name: "Yahoo gold futures (GC=F)", approx: true, load: yahoo("GC=F") }],
-  EURUSD: [{ name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") }],
-  USDJPY: [{ name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") }],
+  // Yahoo has no spot XAU/USD (404); its futures are delayed 10 minutes.
+  XAUUSD: [{ name: "Yahoo gold futures (GC=F)", approx: true, load: yahoo("GC=F") }],
   NAS100: [{ name: "Yahoo Nasdaq-100 (^NDX)", approx: false, load: yahoo("^NDX") }, { name: "Yahoo Nasdaq-100 futures (NQ=F)", approx: true, load: yahoo("NQ=F") }],
   SPX500: [{ name: "Yahoo S&P 500 (^GSPC)", approx: false, load: yahoo("^GSPC") }, { name: "Yahoo S&P 500 futures (ES=F)", approx: true, load: yahoo("ES=F") }],
-  NIFTY: [{ name: "Yahoo Nifty 50 (^NSEI)", approx: false, load: yahoo("^NSEI") }],
 };
 
 /**
@@ -254,9 +252,28 @@ function upstox(key: string): Provider["load"] {
     if (!r.endTime && tf !== "1d") {
       const today = await getJson<{ data: { candles: (string | number)[][] } }>(`${base}/intraday/${path}`).catch(() => null);
       if (today) out.push(...rows(today.data.candles));
+      // Upstox publishes the finished session to its history endpoint late, so after the close (and
+      // overnight) the newest bars can be a whole session old: fail so the next provider answers.
+      const last = Math.max(...out.map((c) => c.t));
+      if (last < lastNseBarDue(Date.now()) - TF_MS[tf]) throw new Error(`stale: last bar ${new Date(last).toISOString().slice(0, 16)}Z`);
     }
     return out.sort((a, b) => a.t - b.t);
   };
+}
+
+/** Open time of the newest NSE bar that should exist by `now` (09:15–15:30 IST, Monday to Friday; holidays not modelled). */
+function lastNseBarDue(now: number): number {
+  const IST = 330 * 60_000;
+  for (let back = 0; back < 7; back++) {
+    const day = Math.floor((now + IST) / 86_400_000) - back;
+    const dow = new Date(day * 86_400_000).getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    const open = day * 86_400_000 + (9 * 60 + 15) * 60_000 - IST;
+    const close = day * 86_400_000 + (15 * 60 + 30) * 60_000 - IST;
+    if (now < open + 15 * 60_000) continue;
+    return Math.min(now, close) - 15 * 60_000;
+  }
+  return 0;
 }
 
 /** Requests per minute a metered vendor allows; backtest paging waits for a free slot, live pulls fail over. */
@@ -327,11 +344,14 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   ],
   EURUSD: [
     { name: "OANDA EUR/USD", approx: false, enabled: hasOanda, load: oanda("EUR_USD") },
+    // Yahoo first keeps the Twelve Data credits for gold; it covers 60 days of 5M, so long backtests name Twelve Data.
+    { name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") },
     { name: "Twelve Data EUR/USD", approx: false, enabled: hasTd, load: twelveData("EUR/USD"), base: "5m", pageSize: 5000, metered: true },
     { name: "Binance EUR/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("EURUSDT") },
   ],
   USDJPY: [
     { name: "OANDA USD/JPY", approx: false, enabled: hasOanda, load: oanda("USD_JPY") },
+    { name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") },
     { name: "Twelve Data USD/JPY", approx: false, enabled: hasTd, load: twelveData("USD/JPY"), base: "5m", pageSize: 5000, metered: true },
   ],
   NAS100: [
@@ -344,6 +364,7 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   ],
   NIFTY: [
     { name: "Upstox NSE Nifty 50", approx: false, load: upstox("NSE_INDEX|Nifty 50") },
+    { name: "Yahoo Nifty 50 (^NSEI)", approx: false, load: yahoo("^NSEI") },
   ],
 };
 
@@ -565,6 +586,17 @@ const upstoxQuote = (key: string, name: string): QuoteProvider => ({
   },
 });
 
+/** Last trade from Yahoo's chart metadata (keyless). */
+const yahooQuote = (symbol: string, name: string): QuoteProvider => ({
+  name,
+  load: async () => {
+    const j = await getJson<{ chart: { result: { meta: { regularMarketPrice: number; regularMarketTime: number } }[] | null } }>(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d`);
+    const m = j.chart.result?.[0]?.meta;
+    if (!m?.regularMarketPrice) throw new Error("no price");
+    return { bid: null, ask: null, last: m.regularMarketPrice, ts: m.regularMarketTime * 1000, source: name, approx: false };
+  },
+});
+
 const coinbaseQuote: QuoteProvider = {
   name: "Coinbase BTC-USD",
   load: async () => {
@@ -605,7 +637,7 @@ const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   USDJPY: [swissquote("USD", "JPY")],
   NAS100: [binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P")],
   SPX500: [binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P")],
-  NIFTY: [upstoxQuote("NSE_INDEX|Nifty 50", "Upstox Nifty 50")],
+  NIFTY: [upstoxQuote("NSE_INDEX|Nifty 50", "Upstox Nifty 50"), yahooQuote("^NSEI", "Yahoo Nifty 50")],
 };
 
 export const instrumentOk = (id: string | null): id is InstrumentId => !!id && id in INSTRUMENTS;
