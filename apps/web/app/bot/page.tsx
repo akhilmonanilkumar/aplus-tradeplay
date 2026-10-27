@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { INSTRUMENTS, INSTRUMENT_IDS, summarize, type InstrumentId } from "@aplus/engine";
+import { INSTRUMENTS, INSTRUMENT_IDS, modelName, strategyName, summarize, type InstrumentId } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import type { Signal } from "@/lib/types";
 import { money, num, pct, r as fmtR } from "@/lib/fmt";
@@ -26,7 +26,7 @@ const WINDOW: Record<string, string> = { london_q: "London Q", ny_q: "NY Q", asi
 const closed = (s: Signal) => s.outcome === "win" || s.outcome === "loss";
 const ist = (iso: string) => new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 /** Model letter, or the session strategy id for model S. */
-const modelOf = (s: Signal) => (s.model === "S" ? `S · ${s.meta?.strategy ?? "session"}` : s.model);
+const modelOf = (s: Signal) => (s.model === "S" ? strategyName(s.meta?.strategy) : modelName(s.model));
 const gateOf = (s: Signal) => (s.meta?.tradeable === undefined ? "—" : s.meta.tradeable ? "would trade" : s.meta.paper?.blockers?.[0] ?? (s.meta.paper?.waitingFor?.length ? "gate not complete" : `grade ${s.grade}`));
 const bucket = (score: number | undefined) => (score === undefined ? "—" : score >= 80 ? "80+" : score >= 70 ? "70–79" : score >= 60 ? "60–69" : "< 60");
 

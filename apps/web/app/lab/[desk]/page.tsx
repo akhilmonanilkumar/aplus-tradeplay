@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  DEFAULT_STRATEGY, DESKS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, tradeWindows, breakdown, breakevenWinRate, skippedImpact, usHighImpactTimes,
+  DEFAULT_STRATEGY, DESKS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, modelName, tradeWindows, breakdown, breakevenWinRate, skippedImpact, usHighImpactTimes,
   type BacktestResult, type BacktestTrade, type DeskId, type InstrumentId, type StrategyParams,
 } from "@aplus/engine";
 import { supabase } from "@/lib/supabase";
@@ -182,7 +182,7 @@ export default function Lab() {
             <div className="between"><span style={{ fontSize: 12.5, opacity: p.requireHtfTrend ? 1 : 0.5 }}>…and the 15M trend must agree with the HTF</span><Toggle on={p.requireHtfTrend && p.requireAlignment} onChange={(v) => set("requireAlignment", v)} label="Require 15M alignment" /></div>
             <div className="lbl-u">Entry models</div>
             <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-              {MODEL_IDS.map((m) => <button key={m} type="button" title={ENTRY_MODELS[m].name} className={`chip ${p.models.includes(m) ? "acc" : ""}`} onClick={() => set("models", p.models.includes(m) ? p.models.filter((x) => x !== m) : [...p.models, m])}>{m} · {ENTRY_MODELS[m].name}</button>)}
+              {MODEL_IDS.map((m) => <button key={m} type="button" title={ENTRY_MODELS[m].name} className={`chip ${p.models.includes(m) ? "acc" : ""}`} onClick={() => set("models", p.models.includes(m) ? p.models.filter((x) => x !== m) : [...p.models, m])}>{ENTRY_MODELS[m].short}</button>)}
             </div>
             <div className="between"><span style={{ fontSize: 12.5 }}>Let advanced, counter-trend and aggressive models through</span><Toggle on={p.allowAllModels} onChange={(v) => set("allowAllModels", v)} label="Allow all models" /></div>
             <div className="between"><span className="lbl">Stop</span><Seg label="Stop" value={p.stopMode} onChange={(v) => set("stopMode", v)} options={[{ v: "structural", l: "Furthest anchor" }, { v: "zone", l: "Beyond entry zone" }]} /></div>
@@ -243,7 +243,7 @@ export default function Lab() {
             <Breakdown title="By weekday" rows={by((t) => t.weekday)} />
             <Breakdown title="By NY hour" rows={by((t) => `${String(t.hourNy).padStart(2, "0")}:00`)} />
             <Breakdown title="By target" rows={by((t) => t.targetLabel)} />
-            <Breakdown title="By model" rows={by((t) => t.model ?? "A")} />
+            <Breakdown title="By model" rows={by((t) => modelName(t.model ?? "A"))} />
             <Breakdown title="By stop anchor" rows={by((t) => (t.stopAnchor ?? "—").replace(/sweep of .*/, "sweep wick"))} />
             <Breakdown title="Losers: best excursion first" rows={by((t) => (t.outcome !== "loss" ? "not a loser" : (t.mfeR ?? 0) >= 1 ? "reached +1R, then stopped" : (t.mfeR ?? 0) >= 0.5 ? "reached +0.5R" : (t.mfeR ?? 0) < 0.3 ? "never went 0.3R in favour" : "0.3–0.5R"))} />
           </div>

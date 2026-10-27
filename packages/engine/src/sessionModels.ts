@@ -178,6 +178,24 @@ export function runSessionModel(
   return { trades, stats: summarize(trades.map((t) => t.rNet)), from: ltf[0]?.t ?? 0, to: ltf[ltf.length - 1]?.t ?? 0 };
 }
 
+/** The four session-range strategies; each runs in variants (HTF trend filter, half off at 1R). */
+export const SESSION_STRATEGIES = [
+  { id: 'asia-fade', name: 'Tokyo Trap', kind: 'fade', range: 'Asia', trade: 'London Q', summary: 'London wicks through the Asia range edge and closes back inside: trade back to the other side.' },
+  { id: 'asia-bo', name: 'Tokyo Break', kind: 'breakout', range: 'Asia', trade: 'London Q', summary: 'The first London close beyond the Asia range edge: trade the break.' },
+  { id: 'ldn-fade', name: 'London Trap', kind: 'fade', range: 'London', trade: 'NY Q', summary: 'New York wicks through the London range edge and closes back inside: trade back to the other side.' },
+  { id: 'ldn-bo', name: 'London Break', kind: 'breakout', range: 'London', trade: 'NY Q', summary: 'The first New York close beyond the London range edge: trade the break.' },
+] as const;
+
+/** Display name of a session variant id, e.g. "asia-fade-p-t" → "Tokyo Trap · ½ at 1R · trend". */
+export function strategyName(id: string | null | undefined): string {
+  if (!id) return 'Session strategy';
+  const base = SESSION_STRATEGIES.find((s) => id === s.id || id.startsWith(`${s.id}-`));
+  if (!base) return id;
+  const rest = id.slice(base.id.length).split('-').filter(Boolean);
+  const tags = [...(rest.includes('p') ? [base.kind === 'fade' ? '½ at 1R' : '3R · ½ at 1R'] : []), ...(rest.includes('t') ? ['trend'] : [])];
+  return [base.name, ...tags].join(' · ');
+}
+
 function sessionVariants(): { id: string; label: string; params: Omit<SessionModelParams, 'costRate'> }[] {
   const out: { id: string; label: string; params: Omit<SessionModelParams, 'costRate'> }[] = [];
   const ranges = [

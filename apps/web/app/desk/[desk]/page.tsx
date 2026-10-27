@@ -275,7 +275,7 @@ export default function DeskPage() {
                 <span className="lbl">Model</span>
                 <div className="inp" style={{ width: 190, height: 32 }}>
                   <select aria-label="Entry model" value={model} onChange={(e) => { setModel(e.target.value as ModelId); setChecks({}); }}>
-                    {MODEL_IDS.map((x) => <option key={x} value={x}>{x} · {ENTRY_MODELS[x].name}</option>)}
+                    {MODEL_IDS.map((x) => <option key={x} value={x}>{ENTRY_MODELS[x].short} · {ENTRY_MODELS[x].name}</option>)}
                   </select>
                 </div>
               </div>

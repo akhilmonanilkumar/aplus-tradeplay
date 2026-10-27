@@ -58,6 +58,7 @@ const OWNER_NAV: NavItem[] = [
   { href: "/lab/btc", l: "BTC lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
   { href: "/lab/fx", l: "Forex lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
   { href: "/lab/indices", l: "Index lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
+  { href: "/playbook", l: "Playbook", i: "M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2zM8 7h6M8 11h6M18 3v18" },
   { href: "/autopilot", l: "Autopilot", i: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z", cnt: "autopilot" },
   { href: "/bot", l: "Bot log", i: "M4 5h16M4 10h16M4 15h10M4 20h7M17 14l2 2 3-4" },
   { h: "Accounts" },
