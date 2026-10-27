@@ -9,6 +9,7 @@ import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 import { modelLedger, storeReleases } from "@/lib/server/ledger";
+import { basisTick } from "@/lib/server/basis";
 
 /**
  * Autopilot: runs the same detector + A+ gate as the desks on the server, on a schedule.
@@ -206,6 +207,14 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       await db.from("autopilot_runs").insert({ instrument: "SELECTOR", state: "ERROR", action: "error", detail: { error: (err as Error).message } });
       out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
     }
+  }
+
+  // Funding basis trade (paper): accrue settlements, exit on negative funding, enter on positive carry.
+  try {
+    const b = await basisTick(db);
+    if (b) out.push({ instrument: "BASIS", state: "PAPER", action: b });
+  } catch (err) {
+    out.push({ instrument: "BASIS", state: "ERROR", action: (err as Error).message });
   }
 
   try {

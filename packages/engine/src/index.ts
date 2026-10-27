@@ -23,3 +23,4 @@ export * from './backtest.js';
 export * from './sessionModels.js';
 export * from './selector.js';
 export * from './outcome.js';
+export * from './basis.js';
