@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { LIVE_INSTRUMENT_IDS as INSTRUMENT_IDS } from "@aplus/engine";
+import { INSTRUMENT_IDS } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import { staffPost } from "@/lib/market";
 import type { TelegramAlert } from "@/lib/types";

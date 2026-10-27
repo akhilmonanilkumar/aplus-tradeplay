@@ -1,8 +1,8 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  ALL_WINDOWS, EDGE_WINDOWS, INSTRUMENTS, liveDesk, TF_MS, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
-  shiftText, sizePosition, stateFromSetup, type Candle, type GateResult, type InstrumentId, type SetupAnalysis,
+  INSTRUMENTS, TF_MS, WINDOWS_BY_ID, tradeWindows, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
+  shiftText, sizePosition, stateFromSetup, type Candle, type DeskId, type GateResult, type SessionWindow, type InstrumentId, type SetupAnalysis,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
@@ -40,7 +40,7 @@ export interface Evaluation {
 
 const fmt = (x: number, d = 2) => x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
-export function newsBlocked(events: CalEvent[], desk: "gold" | "btc", now: number, minutes = 15) {
+export function newsBlocked(events: CalEvent[], desk: DeskId, now: number, minutes = 15) {
   return events.some((e) => e.impact === "high" && e.desks.includes(desk) && Math.abs(e.at - now) <= minutes * 60_000);
 }
 
@@ -48,9 +48,9 @@ export async function evaluate(id: InstrumentId, opts: { bias?: "long" | "short"
   const def = INSTRUMENTS[id];
   const [htf, poi, ltf] = await Promise.all([loadCandles(id, def.htf, 500), loadCandles(id, def.poi, 500), loadCandles(id, def.ltf, 300)]);
   const now = Date.now();
-  const allowed = opts.filters?.windows?.length ? ALL_WINDOWS.filter((w) => opts.filters!.windows!.includes(w.id)) : EDGE_WINDOWS;
+  const allowed = (opts.filters?.windows?.length ? opts.filters.windows : tradeWindows(id)).map((w) => WINDOWS_BY_ID.get(w)).filter((w): w is SessionWindow => !!w);
   const win = allowed.find((w) => isInWindow(now, w)) ?? null;
-  const newsClear = !newsBlocked(opts.calendar, liveDesk(id), now, opts.settings?.news_block_minutes ?? 15);
+  const newsClear = !newsBlocked(opts.calendar, def.desk, now, opts.settings?.news_block_minutes ?? 15);
   // Counter-trend pullbacks (Model G, grade A at most) only when both settings allow them.
   const counterTrend = !!(opts.settings?.counter_trend_allowed && opts.settings?.advanced_models_allowed);
   const run = (side: "long" | "short") => {

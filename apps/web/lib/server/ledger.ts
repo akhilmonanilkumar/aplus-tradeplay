@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  EDGE_RULES, EDGE_WINDOWS, INSTRUMENTS, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, liveDesk, planSetup, runSessionModel,
+  EDGE_RULES, INSTRUMENTS, INSTRUMENT_IDS, WINDOWS_BY_ID, tradeWindows, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, planSetup, runSessionModel,
   type Candle, type GateResult, type InstrumentId, type ModelSetup, type SetupAnalysis, type SetupPlan,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
@@ -24,8 +24,8 @@ export interface Tradeable { signalId: string; side: "long" | "short"; plan: { e
 const SESSION_INSTRUMENTS = new Set<InstrumentId>(["XAUUSD", "BTCUSDT.P"]);
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
 
-function windowAt(t: number) {
-  return EDGE_WINDOWS.find((w) => isInWindow(t, w)) ?? null;
+function windowAt(id: InstrumentId, t: number) {
+  return tradeWindows(id).map((w) => WINDOWS_BY_ID.get(w)).find((w) => !!w && isInWindow(t, w)) ?? null;
 }
 
 export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { calendar: CalEvent[]; settings: LedgerSettings | null }): Promise<{ logged: number; tradeable: Tradeable[]; note: string }> {
@@ -34,10 +34,10 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
   const tfMs = TF_MS[def.ltf];
   const now = Date.now();
   const [htf, poi, ltf] = await Promise.all([loadCandles(id, def.htf, 500), loadCandles(id, def.poi, 500), loadCandles(id, def.ltf, 300)]);
-  // 1M for model H from an unmetered feed (one pull per pass).
-  const m1 = await loadHistory(id, "1m", now - 300 * 60_000, now).then((x) => x.candles).catch(() => [] as Candle[]);
+  // 1M for model H from an unmetered feed (one pull per pass); none where only a metered vendor has it.
+  const m1 = await loadHistory(id, "1m", now - 300 * 60_000, now, { freeOnly: true }).then((x) => x.candles).catch(() => [] as Candle[]);
   const minRR = cfg.filters?.minRR ?? EDGE_RULES.minRR;
-  const desk = liveDesk(id);
+  const desk = def.desk;
   const blockMin = ctx.settings?.news_block_minutes ?? EDGE_RULES.newsBlockMinutes;
   const releases = ctx.calendar.filter((e) => e.impact === "high" && e.desks.includes(desk)).map((e) => e.at);
   const newsTimes = releases.filter((t) => t <= now);
@@ -50,7 +50,7 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
   const rows: Record<string, unknown>[] = [];
   const meta: { key: string; tradeable: boolean; side: "long" | "short"; plan: SetupPlan }[] = [];
   const gateFor = (a: SetupAnalysis, s: ModelSetup, plan: SetupPlan, T: number, config: Record<string, boolean | undefined>): GateResult => {
-    const win = windowAt(T - tfMs);
+    const win = windowAt(id, T - tfMs);
     const last = newsTimes.filter((n) => n <= T).pop();
     return evaluateGate({
       htfTrend: a.htfTrend, poiTfTrend: a.poiTrend, side: s.side, price: a.price, range: a.range!,
@@ -64,7 +64,7 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
 
   for (const side of ["long", "short"] as const) {
     const { a, setups } = detectModels(side, htf.candles, poi.candles, ltf.candles, {
-      now, stopBuffer: def.stopBuffer, minRR, instrument: id, windowId: windowAt(now)?.id ?? null, m1, newsTimes, recentBars: 3,
+      now, stopBuffer: def.stopBuffer, minRR, instrument: id, windowId: windowAt(id, now)?.id ?? null, m1, newsTimes, recentBars: 3,
     });
     if (!a.range) continue;
     for (const s0 of setups) {
@@ -80,7 +80,7 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
       const edge = gateFor(a, s, plan, T, strict);
       const tradeable = !paper.blockers.length && (paper.verdict === "GO" || (paper.grade === "A" && paper.boxes.every((b) => b.status === "pass" || b.status === "warn")));
       rows.push({
-        instrument: id, side, model: s.model, session_window: windowAt(T - tfMs)?.id ?? null,
+        instrument: id, side, model: s.model, session_window: windowAt(id, T - tfMs)?.id ?? null,
         entry: plan.entry, stop: plan.stop, target: plan.target, rr: r3(plan.plannedR), grade: paper.grade, gate: paper.boxes,
         state: tradeable ? "ARMED" : "LOGGED", edge_version: "3.1", source: "autopilot", outcome: "pending", created_at: new Date(T).toISOString(),
         meta: {
@@ -108,7 +108,7 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
         const key = `S:${v.id}:${t.side}:${t.signalAt}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const win = windowAt(t.signalAt - tfMs);
+        const win = windowAt(id, t.signalAt - tfMs);
         rows.push({
           instrument: id, side: t.side, model: "S", session_window: win?.id ?? null,
           entry: t.entry, stop: t.stop, target: t.target, rr: r3(t.plannedR), grade: "S", gate: [],
@@ -134,7 +134,7 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
 export async function storeReleases(db: SupabaseClient, calendar: CalEvent[]): Promise<void> {
   const rows = calendar.filter((e) => e.impact === "high" && e.desks.length).map((e) => ({
     at: new Date(e.at).toISOString(), currency: e.currency, title: e.title, impact: "high",
-    instruments: e.desks.includes("btc") ? ["XAUUSD", "XAUUSDT.P", "BTCUSDT.P", "BTCUSD", "BTCUSD.SPOT"] : ["XAUUSD", "XAUUSDT.P"],
+    instruments: INSTRUMENT_IDS.filter((id) => e.desks.includes(INSTRUMENTS[id].desk)),
     forecast: e.forecast, previous: e.previous,
   }));
   if (rows.length) await db.from("news_events").upsert(rows, { onConflict: "at,currency,title", ignoreDuplicates: true });

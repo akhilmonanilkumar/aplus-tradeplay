@@ -1,4 +1,5 @@
 import "server-only";
+import type { DeskId } from "@aplus/engine";
 import { cached, errMsg, getJson, getText } from "@/lib/server/http";
 
 /* ---------------- headlines ---------------- */
@@ -70,7 +71,7 @@ export function loadHeadlines(desk: "gold" | "btc"): Promise<{ items: Headline[]
 
 /* ---------------- economic calendar ---------------- */
 
-export interface CalEvent { id: string; at: number; currency: string; title: string; impact: "high" | "medium" | "low" | "holiday"; forecast: string | null; previous: string | null; desks: ("gold" | "btc")[] }
+export interface CalEvent { id: string; at: number; currency: string; title: string; impact: "high" | "medium" | "low" | "holiday"; forecast: string | null; previous: string | null; desks: DeskId[] }
 
 /** Forex Factory weekly export (this week + next week once published). */
 export function loadCalendar(): Promise<{ items: CalEvent[]; errors: string[]; source: string }> {
@@ -87,8 +88,9 @@ export function loadCalendar(): Promise<{ items: CalEvent[]; errors: string[]; s
     const items: CalEvent[] = weeks.flat().map((e) => {
       const impact = (e.impact || "").toLowerCase() as CalEvent["impact"];
       const ccy = e.country.toUpperCase();
-      // USD data moves both desks; CNY/EUR high-impact also moves gold.
-      const desks: CalEvent["desks"] = ccy === "USD" || ccy === "ALL" ? ["gold", "btc"] : ["CNY", "EUR"].includes(ccy) && impact === "high" ? ["gold"] : [];
+      // USD data moves every desk; EUR and JPY move forex; CNY/EUR high-impact also moves gold.
+      const desks: CalEvent["desks"] = ccy === "USD" || ccy === "ALL" ? ["gold", "btc", "fx", "indices"]
+        : [...(["CNY", "EUR"].includes(ccy) && impact === "high" ? ["gold" as const] : []), ...(["EUR", "JPY"].includes(ccy) ? ["fx" as const] : [])];
       return { id: `${ccy}:${e.date}:${e.title}`, at: Date.parse(e.date), currency: ccy, title: e.title, impact, forecast: e.forecast || null, previous: e.previous || null, desks };
     }).filter((e) => Number.isFinite(e.at)).sort((a, b) => a.at - b.at);
     return { items, errors, source: "Forex Factory" };

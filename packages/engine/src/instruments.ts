@@ -2,13 +2,14 @@ import type { CfdSpec, PerpSpec } from './sizing.js';
 import { BTCUSDT_PERP_DEFAULT, XAUUSD_DEFAULT } from './specs.js';
 
 /**
- * Instruments by desk. Gold and BTC are traded live; the forex and index desks
- * (EURUSD, USDJPY, NAS100, SPX500, NIFTY) are research desks: lab and backtests only.
+ * Instruments by desk. Gold and BTC have full desks (live context, macro, derivatives, selector);
+ * the forex and index desks (EURUSD, USDJPY, NAS100, SPX500, NIFTY) are research desks:
+ * lab, backtests and the paper autopilot, without desk pages or the selector.
  */
 export type DeskId = 'gold' | 'btc' | 'fx' | 'indices';
-/** Desks with live trading, news, macro and derivatives context. */
+/** Desks with macro and derivatives context (desk pages, selector). */
 export type LiveDeskId = Extract<DeskId, 'gold' | 'btc'>;
-/** The live desk of an instrument the autopilot runs (research instruments never reach live code). */
+/** The context desk of an instrument on the selector board (research instruments never reach it). */
 export const liveDesk = (id: InstrumentId): LiveDeskId => {
   const d = INSTRUMENTS[id].desk;
   if (d !== 'gold' && d !== 'btc') throw new Error(`${id} is a research instrument`);
@@ -50,7 +51,7 @@ export interface InstrumentDef {
   priceBasis: string;
   /** Trade windows (session ids). Default: London Q and NY Q. */
   windows?: string[];
-  /** Research only: backtested in the lab, never traded or paper-logged by the autopilot. */
+  /** Research desk: lab and paper autopilot only, no desk page, macro context or selector. */
   research?: boolean;
 }
 
@@ -150,7 +151,7 @@ export const DESKS: Record<DeskId, { id: DeskId; name: string; instruments: Inst
   indices: { id: 'indices', name: 'Index lab', instruments: ['NAS100', 'SPX500', 'NIFTY'], primary: 'NAS100' },
 };
 
-/** Instruments the autopilot trades and paper-logs. */
+/** Instruments with a full desk (desk pages, macro context, selector board). */
 export const LIVE_INSTRUMENT_IDS = (Object.keys(INSTRUMENTS) as InstrumentId[]).filter((id) => !INSTRUMENTS[id].research);
 
 export function instrument(id: string): InstrumentDef {

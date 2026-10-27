@@ -296,6 +296,8 @@ export interface HistoryOpts {
   allowMetered?: boolean;
   /** Providers with a base timeframe: pull the base from here so later frames of the same run reuse it. */
   baseFrom?: number;
+  /** Never use a metered vendor, even when nothing free covers the instrument (fail instead). */
+  freeOnly?: boolean;
 }
 
 /** Base-timeframe history of one run, shared by its frames (a metered vendor is asked once). */
@@ -312,7 +314,7 @@ export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: nu
   const enabled = CHAINS[id].filter((x) => !x.enabled || x.enabled());
   const free = enabled.filter((x) => opts.allowMetered || !x.metered);
   // A metered vendor is used without being named only when nothing free covers the instrument.
-  const chain = opts.source ? enabled.filter((x) => x.name === opts.source) : free.length ? free : enabled;
+  const chain = opts.source ? enabled.filter((x) => x.name === opts.source) : free.length || opts.freeOnly ? free : enabled;
   if (!chain.length) throw new Error(opts.source ? `source not available: ${opts.source}` : "no provider");
   // Weekends and holidays leave CFD history without bars for up to a few days.
   const slack = (INSTRUMENTS[id].fxHours ? 4 : 1) * 86_400_000 + TF_MS[tf];

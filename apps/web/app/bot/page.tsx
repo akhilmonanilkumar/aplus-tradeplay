@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { INSTRUMENTS, LIVE_INSTRUMENT_IDS, summarize, type InstrumentId } from "@aplus/engine";
+import { INSTRUMENTS, INSTRUMENT_IDS, summarize, type InstrumentId } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import type { Signal } from "@/lib/types";
 import { money, num, pct, r as fmtR } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Kpi, Seg, Table } from "@/components/ui";
+import LivePnl from "@/components/LivePnl";
 
 /**
  * Bot log: every signal the autopilot and the selector produced, with its outcome tracked on
@@ -21,7 +22,7 @@ const OUTCOME: Record<string, { l: string; tone: "up" | "down" | "info" | "warn"
   win: { l: "Target", tone: "up" }, loss: { l: "Stop", tone: "down" }, filled: { l: "In trade", tone: "info" },
   pending: { l: "Waiting fill", tone: "warn" }, expired: { l: "Expired", tone: "" }, ran_away: { l: "Ran away", tone: "" }, cancelled: { l: "Cancelled", tone: "" },
 };
-const WINDOW: Record<string, string> = { london_q: "London Q", ny_q: "NY Q", asia_q: "Asia Q", london_close: "London close" };
+const WINDOW: Record<string, string> = { london_q: "London Q", ny_q: "NY Q", asia_q: "Asia Q", london_close: "London close", india_q: "India Q" };
 const closed = (s: Signal) => s.outcome === "win" || s.outcome === "loss";
 const ist = (iso: string) => new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 /** Model letter, or the session strategy id for model S. */
@@ -113,7 +114,7 @@ export default function BotLog() {
         <Seg label="Range" value={range} onChange={setRange} options={[{ v: "7", l: "7d" }, { v: "30", l: "30d" }, { v: "90", l: "90d" }, { v: "all", l: "All" }]} />
         <Seg label="Source" value={src} onChange={setSrc} options={[{ v: "all", l: "All bots" }, { v: "selector", l: "Selector" }, { v: "autopilot", l: "Autopilot" }]} />
         <Seg label="Gate" value={take} onChange={setTake} options={[{ v: "all", l: "All logged" }, { v: "tradeable", l: "Would trade" }, { v: "rejected", l: "Rejected" }]} />
-        <Seg label="Instrument" value={inst} onChange={setInst} options={[{ v: "all", l: "All" }, ...LIVE_INSTRUMENT_IDS.map((i) => ({ v: i, l: i }))]} />
+        <Seg label="Instrument" value={inst} onChange={setInst} options={[{ v: "all", l: "All" }, ...INSTRUMENT_IDS.map((i) => ({ v: i, l: i }))]} />
         <span style={{ flex: 1 }} />
         <button className="btn ghost sm" onClick={() => { signals.reload(); trades.reload(); alerts.reload(); }}>Refresh</button>
       </div>
@@ -123,6 +124,7 @@ export default function BotLog() {
         <Kpi span={3} label="Fill rate" value={resolvedFills ? pct(filled / resolvedFills, 0) : "—"} foot={<span className="faint">{rows.filter((s) => s.outcome === "ran_away").length} ran away · {rows.filter((s) => s.outcome === "expired").length} expired</span>} />
         <Kpi span={3} label="Win rate" value={st.n ? pct(st.winRate, 0) : "—"} tone={st.n ? (st.avgR >= 0 ? "up" : "down") : ""} foot={<span className="faint">{st.wins} targets · {st.losses} stops</span>} />
         <Kpi span={3} label="Net R (after costs)" value={st.n ? fmtR(st.netR) : "—"} tone={st.netR > 0 ? "up" : st.netR < 0 ? "down" : ""} foot={<span className="faint">expectancy {st.n ? fmtR(st.avgR) : "—"} / trade</span>} />
+        <LivePnl />
         <Kpi span={3} size="md" label="Profit factor" value={st.profitFactor !== null ? num(st.profitFactor, 2) : "—"} foot={<span className="faint">avg win {fmtR(st.avgWin)} · avg loss {fmtR(st.avgLoss)}</span>} />
         <Kpi span={3} size="md" label="Max drawdown" value={st.n ? fmtR(-st.maxDrawdownR) : "—"} foot={<span className="faint">longest losing run {st.longestLosingStreak}</span>} />
         <Kpi span={3} size="md" label="Paper P&L" value={paperN ? money(paper) : "—"} tone={paper > 0 ? "up" : paper < 0 ? "down" : ""} foot={<span className="faint">{paperN} closed paper trade{paperN === 1 ? "" : "s"}</span>} />

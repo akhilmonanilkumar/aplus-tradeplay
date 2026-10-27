@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { LIVE_INSTRUMENT_IDS as INSTRUMENT_IDS } from "@aplus/engine";
+import { INSTRUMENT_IDS } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import { matchesOwner, ownerOf, ownerOptions } from "@/lib/accounts";
 import { istDay } from "@/lib/derive";
