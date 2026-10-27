@@ -20,7 +20,7 @@ export default function Ticket({ def, side, plan, suggest, targets = [], minRR =
   def: InstrumentDef;
   side: "long" | "short";
   plan: { entry: number; stop: number; target: number } | null;
-  suggest: { entry: number; stop: number; target: number; targetLabel: string } | null;
+  suggest: { entry: number; stop: number; target: number; targetLabel: string; stopAnchor: string; stopBuffer: number } | null;
   /** Real levels beyond the engine entry with the R each pays. */
   targets?: { level: number; label: string; r: number }[];
   minRR?: number;
@@ -108,6 +108,11 @@ export default function Ticket({ def, side, plan, suggest, targets = [], minRR =
         ))}
         <label className="fld"><span>Risk per account</span><div className="inp"><input inputMode="decimal" value={risk} placeholder="0.50" onChange={(e) => setRisk(e.target.value)} /><span className="u">%</span></div></label>
       </div>
+      {suggest && (
+        <div className="faint" style={{ marginTop: 6, fontSize: 12 }}>
+          Engine stop: {side === "long" ? "below" : "above"} {suggest.stopAnchor} + {num(suggest.stopBuffer, def.digits)} buffer (0.2 × 5M ATR)
+        </div>
+      )}
       {targets.length > 0 && (
         <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: "wrap" }}>
           <span className="lbl">Targets</span>

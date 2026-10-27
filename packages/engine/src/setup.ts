@@ -45,11 +45,13 @@ export interface SetupAnalysis {
   /** Latest 5M structure break in the trade direction (LuxAlgo internal structure, length 5) within the sweep lookback, sweep or not. */
   ltfShift: { t: number; index: number; level: number; kind: 'BOS' | 'CHoCH' } | null;
   /**
-   * Plan. After a sweep and shift (Model A): limit at the 5M zone that caused the shift, stop beyond
-   * the sweep wick. Without a sweep, from the 5M shift alone: stop beyond the leg that broke structure.
+   * Plan. After a sweep and shift (Model A): limit at the 5M zone that caused the shift. Without a
+   * sweep, from the 5M shift alone, the leg that broke structure stands in for the sweep.
+   * Stop: beyond the furthest of the sweep wick (or leg extreme), the entry order block and the 15M
+   * POI being traded, plus a buffer of a fraction of the 5M ATR (never less than the spread buffer).
    * Target: the nearest real level (liquidity, swing, unfilled FVG) worth at least `minRR`.
    */
-  suggest: { entry: number; stop: number; target: number; targetLabel: string; basis: 'sweep' | 'shift' } | null;
+  suggest: { entry: number; stop: number; target: number; targetLabel: string; basis: 'sweep' | 'shift'; stopAnchor: string; stopBuffer: number } | null;
   /** Real levels beyond the entry in order of distance, with the R each would pay. */
   targets: { level: number; label: string; r: number }[];
   /** After the shift: did price return to the entry (filled) or run to target first (ran away)? */
@@ -61,8 +63,10 @@ export interface AnalyzeOptions {
   /** Instant used for "today" (previous-day levels, Asia range). Defaults to the last candle close. */
   now?: number;
   manual?: SetupZone[];
-  /** Spread / noise buffer beyond the sweep wick. */
+  /** Spread buffer beyond the stop anchor (the minimum buffer). */
   stopBuffer?: (price: number) => number;
+  /** Stop buffer beyond the anchor as a multiple of the entry-TF ATR(14) (default 0.2). */
+  stopAtrMult?: number;
   /** Bars of the entry TF searched for a sweep (default 36 = 3 h on 5M). */
   sweepLookback?: number;
   /** Minimum reward:risk the target should pay; the nearest real level that does is chosen (default 2). */
@@ -178,16 +182,19 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
     ? [{ v: pdl?.pdh, l: 'PDH' }, { v: hr?.high, l: 'Range high' }, { v: asia?.high, l: 'Asia high' }, ...liquidity.filter((x) => x.label === 'EQH').map((x) => ({ v: x.level, l: 'EQH' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '15M swing high' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '5M swing high' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')]
     : [{ v: pdl?.pdl, l: 'PDL' }, { v: hr?.low, l: 'Range low' }, { v: asia?.low, l: 'Asia low' }, ...liquidity.filter((x) => x.label === 'EQL').map((x) => ({ v: x.level, l: 'EQL' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '15M swing low' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '5M swing low' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')];
   const minRR = opts.minRR ?? EDGE_RULES.minRR;
-  const minRisk = Number.isFinite(a) ? a * 0.25 : 0;
+  const ltfAtr = atr(ltf, 14);
+  const atrBuf = Number.isFinite(ltfAtr) ? ltfAtr * (opts.stopAtrMult ?? 0.2) : 0;
 
   let suggest: SetupAnalysis['suggest'] = null;
   let after: SetupAnalysis['after'] = null;
   let targets: SetupAnalysis['targets'] = [];
-  const plan = (entry: number, stopAt: number, fromIndex: number, basis: 'sweep' | 'shift') => {
-    const buf = (opts.stopBuffer ?? (() => 0))(entry);
-    let stop = side === 'long' ? stopAt - buf : stopAt + buf;
-    // Floor the risk at a quarter of the 15M ATR: a stop inside the noise is hit by spread alone.
-    if ((side === 'long' ? entry - stop : stop - entry) < minRisk) stop = side === 'long' ? entry - minRisk : entry + minRisk;
+  const plan = (entry: number, anchors: { v: number; l: string }[], fromIndex: number, basis: 'sweep' | 'shift') => {
+    // The structural invalidation is the furthest anchor beyond the entry: below all of them for a long.
+    const beyond = anchors.filter((x) => Number.isFinite(x.v) && (side === 'long' ? x.v < entry : x.v > entry));
+    if (!beyond.length) return;
+    const anchor = beyond.reduce((m, x) => (side === 'long' ? (x.v < m.v ? x : m) : (x.v > m.v ? x : m)));
+    const buf = Math.max(atrBuf, (opts.stopBuffer ?? (() => 0))(entry));
+    const stop = side === 'long' ? anchor.v - buf : anchor.v + buf;
     const risk = Math.abs(entry - stop);
     if (!(risk > 0)) return;
     const seen = new Set<string>();
@@ -199,7 +206,7 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
     // The nearest real level that pays the minimum R:R; if none does, the nearest one (the gate then says no).
     const t = targets.find((x) => x.r >= minRR) ?? targets[0];
     if (!t) return;
-    suggest = { entry, stop, target: t.level, targetLabel: t.label, basis };
+    suggest = { entry, stop, target: t.level, targetLabel: t.label, basis, stopAnchor: anchor.l, stopBuffer: buf };
     let filled = false, ranAway = false;
     for (let k = fromIndex + 1; k < ltf.length; k++) {
       const c = ltf[k]!;
@@ -209,12 +216,16 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
     after = { filled, ranAway };
   };
 
+  // The 15M POI being traded protects the setup until price leaves it: its far edge is a stop anchor.
+  const poiAnchor = (z: SetupZone | null) => (z ? [{ v: side === 'long' ? z.bottom : z.top, l: z.label }] : []);
+  const obAnchor = (o: { top: number; bottom: number } | undefined) => (o ? [{ v: side === 'long' ? o.bottom : o.top, l: '5M OB' }] : []);
+
   if (sweep && ms && ms.index !== null) {
     const ob = orderBlocks(ltf, 2, 2).filter((o) => o.direction === want && o.index >= sweep!.index - 3 && o.index <= ms.index!).pop();
     let entry = ob ? (side === 'long' ? ob.top : ob.bottom) : ms.level;
     // A zone beyond the sweep wick has no invalidation behind it: enter at the broken swing instead.
     if (side === 'long' ? entry <= sweep.wick : entry >= sweep.wick) entry = ms.level;
-    plan(entry, sweep.wick, ms.index, 'sweep');
+    plan(entry, [{ v: sweep.wick, l: `sweep of ${sweep.label}` }, ...obAnchor(ob), ...poiAnchor(inside)], ms.index, 'sweep');
   } else if (ltfShift && lastBreak) {
     // No sweep: the leg that broke structure is the invalidation; enter at its order block or the broken level.
     let ext = lastBreak.pivotIndex;
@@ -225,7 +236,7 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
     const ob = orderBlocks(ltf, 2, 2).filter((o) => o.direction === want && o.index >= ext - 3 && o.index <= lastBreak.index).pop();
     let entry = ob ? (side === 'long' ? ob.top : ob.bottom) : lastBreak.level;
     if (side === 'long' ? entry <= wick : entry >= wick) entry = lastBreak.level;
-    plan(entry, wick, lastBreak.index, 'shift');
+    plan(entry, [{ v: wick, l: 'shift leg extreme' }, ...obAnchor(ob), ...poiAnchor(inside)], lastBreak.index, 'shift');
   }
 
   return {

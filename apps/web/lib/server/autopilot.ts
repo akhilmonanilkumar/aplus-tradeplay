@@ -85,7 +85,7 @@ function stateMessage(e: Evaluation, mode: Mode): string {
   const head = `${icon} <b>${escapeHtml(e.instrument)} · ${e.state}${e.gate ? ` · ${e.gate.grade.replace("_", " ")}` : ""}</b>`;
   const lines = [head];
   if (e.state === "ARMED" && p && e.gate) {
-    lines.push(`${e.side === "long" ? "Long" : "Short"} limit ${fmt(p.entry)} · SL ${fmt(p.stop)} · TP ${fmt(p.target)} (${escapeHtml(p.targetLabel)}) · ${fmt(e.gate.rr ?? 0)}R`);
+    lines.push(`${e.side === "long" ? "Long" : "Short"} limit ${fmt(p.entry)} · SL ${fmt(p.stop)} (${escapeHtml(p.stopAnchor)}) · TP ${fmt(p.target)} (${escapeHtml(p.targetLabel)}) · ${fmt(e.gate.rr ?? 0)}R`);
     lines.push(`Model A · ${e.window === "london_q" ? "London Q" : e.window === "ny_q" ? "NY Q" : "—"} · ${mode === "paper" ? "paper" : mode === "alerts" ? "alert only" : "confirm in app"}`);
   } else if (e.state === "SHIFTED" && a.shift) {
     lines.push(`5M body close ${fmt(a.shift.close ?? 0)} through ${fmt(a.shift.level)}${e.gate?.waitingFor.length ? ` · waiting: ${escapeHtml(e.gate.waitingFor.slice(0, 2).join(", "))}` : ""}`);

@@ -32,6 +32,7 @@ htfIn    = input.string("Auto", "HTF for range & trend", options = ["Auto", "60"
 cBufAbs  = input.float(0.0, "Custom: stop buffer (price units)", group = G_I)
 cBufPct  = input.float(0.05, "Custom: stop buffer (% of price)", step = 0.01, group = G_I)
 cMinStop = input.float(0.0, "Custom: minimum stop %", step = 0.05, group = G_I)
+stopAtr  = input.float(0.2, "Stop buffer (× entry-TF ATR 14)", minval = 0.0, step = 0.05, group = G_I, tooltip = "Stop = beyond the furthest of the sweep wick, the entry order block and the 15M POI being traded, plus this many ATRs (never less than the preset spread buffer).")
 cCost    = input.float(0.1, "Custom: round-trip cost % of notional", step = 0.01, group = G_I)
 
 G_R = "Risk"
@@ -48,7 +49,7 @@ isGold = preset == "XAUUSD CFD" or preset == "XAUUSDT.P"
 isBtc  = preset == "BTCUSD CFD" or preset == "BTCUSDT.P" or preset == "BTCUSD spot"
 float bufAbs   = preset == "XAUUSD CFD" ? 0.3 : preset == "Custom" ? cBufAbs : 0.0
 float bufPct   = preset == "XAUUSDT.P" ? 0.01 : isBtc ? 0.05 : preset == "Custom" ? cBufPct : 0.0
-float minStop  = isBtc ? 0.4 : preset == "Custom" ? cMinStop : 0.0
+float minStop  = preset == "Custom" ? cMinStop : 0.0
 float costRate = switch preset
     "XAUUSD CFD"  => 0.00008
     "XAUUSDT.P"   => 0.001
@@ -552,6 +553,7 @@ if bar_index > 0 and dayKey != dayKey[1]
 
 // ───────────────────────── plan & gate helpers ─────────────────────────
 f_buffer(float price) => bufAbs + price * bufPct / 100
+atrStop = ta.atr(14)
 
 // Nearest real level beyond the entry, ignoring anything within ¼R (setup.ts): never stretched to reach 3R.
 f_target(int dir, float entry, float risk, array<float> pool, array<string> names) =>
@@ -715,6 +717,7 @@ for side = 0 to 1
         int swOff = bar_index - swBar
         string modelFail = ""
         float entry = na
+        float obFar = na
         if mE
             entry := close
         else
@@ -730,6 +733,7 @@ for side = 0 to 1
                     ob := j
             bool obOk = ob >= 0 and ob <= swOff + 3
             float obEdge = obOk ? (dir == 1 ? high[ob] : low[ob]) : na
+            obFar := obOk ? (dir == 1 ? low[ob] : high[ob]) : na
             if mC
                 float fvgEdge = na
                 if swOff >= 2
@@ -743,7 +747,16 @@ for side = 0 to 1
                 entry := obOk ? obEdge : ref
             if mF and (winId != "london_q" or not str.startswith(swName, "Asia"))
                 modelFail := "F · not an Asia sweep in London Q"
-        float stop = na(entry) ? na : dir == 1 ? wick - f_buffer(entry) : wick + f_buffer(entry)
+        // Stop: beyond the furthest of the sweep wick, the entry OB and the 15M POI being traded, plus an ATR buffer.
+        bool z1 = dir == 1 ? f_touch(u1T, u1B, swOff) : f_touch(d1T, d1B, swOff)
+        bool z2 = dir == 1 ? f_touch(u2T, u2B, swOff) : f_touch(d2T, d2B, swOff)
+        float poiFar = z1 ? (dir == 1 ? u1B : d1T) : z2 ? (dir == 1 ? u2B : d2T) : na
+        float anchor = wick
+        if not na(obFar) and (dir == 1 ? obFar < anchor : obFar > anchor)
+            anchor := obFar
+        if not na(poiFar) and not na(entry) and (dir == 1 ? poiFar < entry and poiFar < anchor : poiFar > entry and poiFar > anchor)
+            anchor := poiFar
+        float stop = na(entry) ? na : dir == 1 ? anchor - math.max(f_buffer(entry), atrStop * stopAtr) : anchor + math.max(f_buffer(entry), atrStop * stopAtr)
         float risk = na(entry) ? na : math.abs(entry - stop)
         array<float> pool = dir == 1 ? array.from(pdh, rangeHi, asiaH, eqh, sh1, sh2, sh3, sh4, sh5, sh6) : array.from(pdl, rangeLo, asiaL, eql, sl1, sl2, sl3, sl4, sl5, sl6)
         array<string> names = dir == 1 ? array.from("PDH", "Range high", "Asia high", "EQH", "15M swing high", "15M swing high", "15M swing high", "15M swing high", "15M swing high", "15M swing high") : array.from("PDL", "Range low", "Asia low", "EQL", "15M swing low", "15M swing low", "15M swing low", "15M swing low", "15M swing low", "15M swing low")
@@ -759,8 +772,6 @@ for side = 0 to 1
             bool take = false
             string grade = "NO"
             if why == ""
-                bool z1 = dir == 1 ? f_touch(u1T, u1B, swOff) : f_touch(d1T, d1B, swOff)
-                bool z2 = dir == 1 ? f_touch(u2T, u2B, swOff) : f_touch(d2T, d2B, swOff)
                 bool zLiq = z1 ? (dir == 1 ? u1L : d1L) : z2 ? (dir == 1 ? u2L : d2L) : false
                 [ok, gr, w] = f_gate(dir, entry, stop, target, z1 or z2, zLiq, mE)
                 take := ok

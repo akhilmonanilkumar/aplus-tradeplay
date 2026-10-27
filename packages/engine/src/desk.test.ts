@@ -4,6 +4,7 @@ import {
   oiRegime, fundingState, syntheticDxy, pearson, correlation, contextScore, basisPct, fundingApr, sessionStats, emaTrend,
   runBacktest, scanSignals, simulate, skippedImpact, breakdown, analyzeSetup, shiftText, DEFAULT_STRATEGY, TF_MS, type Candle,
 } from './index.js';
+import { atr } from './smc.js';
 
 /** Deterministic pseudo-random walk with trending swings so structure forms. */
 function walk(n: number, startT: number, stepMs: number, seed = 7, start = 100): Candle[] {
@@ -211,21 +212,35 @@ describe('backtest', () => {
 });
 
 describe('setup detector', () => {
-  it('keeps the stop on the right side and at least a quarter 15M ATR away', () => {
+  it('puts the stop beyond the sweep, the entry OB and the traded POI, plus an ATR buffer', () => {
     const ltf = walk(12 * 24 * 12, Date.UTC(2026, 6, 6), TF_MS['5m'], 5, 4000);
     const poi = agg(ltf, TF_MS['15m']), htf = agg(ltf, TF_MS['1h']);
-    let plans = 0;
+    let plans = 0, poiAnchored = 0;
     for (let i = 400; i < ltf.length; i += 3) {
       const T = ltf[i]!.t + TF_MS['5m'];
       for (const side of ['long', 'short'] as const) {
-        const a = analyzeSetup(side, htf.filter((c) => c.t + TF_MS['1h'] <= T).slice(-300), poi.filter((c) => c.t + TF_MS['15m'] <= T).slice(-400), ltf.slice(i - 299, i + 1), { now: T, stopBuffer: () => 0.3 });
+        const L = ltf.slice(i - 299, i + 1);
+        const a = analyzeSetup(side, htf.filter((c) => c.t + TF_MS['1h'] <= T).slice(-300), poi.filter((c) => c.t + TF_MS['15m'] <= T).slice(-400), L, { now: T, stopBuffer: () => 0.3 });
         if (!a.suggest) continue;
         plans++;
-        const risk = side === 'long' ? a.suggest.entry - a.suggest.stop : a.suggest.stop - a.suggest.entry;
-        expect(risk).toBeGreaterThanOrEqual(a.atr * 0.25 - 1e-9);
+        const { entry, stop, stopBuffer: buf } = a.suggest;
+        const dir = side === 'long' ? 1 : -1;
+        // Buffer: a fifth of the 5M ATR, never less than the spread buffer.
+        expect(buf).toBeCloseTo(Math.max(atr(L, 14) * 0.2, 0.3), 9);
+        expect(dir * (entry - stop)).toBeGreaterThanOrEqual(buf - 1e-9);
+        // Every anchor beyond the entry sits inside the stop.
+        if (a.suggest.basis === 'sweep' && a.sweep) expect(dir * (a.sweep.wick - stop)).toBeGreaterThanOrEqual(buf - 1e-9);
+        if (a.inside) {
+          const edge = side === 'long' ? a.inside.bottom : a.inside.top;
+          if (dir * (entry - edge) > 0) {
+            expect(dir * (edge - stop)).toBeGreaterThanOrEqual(buf - 1e-9);
+            if (a.suggest.stopAnchor === a.inside.label) poiAnchored++;
+          }
+        }
       }
     }
     expect(plans).toBeGreaterThan(0);
+    expect(poiAnchored).toBeGreaterThan(0);
   });
 
   it('uses only the candles it is given and returns a coherent analysis', () => {
