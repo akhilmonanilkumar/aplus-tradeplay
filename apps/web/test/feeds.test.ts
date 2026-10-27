@@ -225,8 +225,8 @@ describe("news & calendar", () => {
     const cpi = c.items.find((e) => e.title === "CPI m/m")!;
     expect(cpi.at).toBe(Date.parse("2026-10-28T12:30:00Z"));
     expect(cpi.impact).toBe("high");
-    expect(cpi.desks).toEqual(["gold", "btc"]);
-    expect(c.items.find((e) => e.currency === "EUR")!.desks).toEqual(["gold"]);
+    expect(cpi.desks).toEqual(["gold", "btc", "fx", "indices"]);
+    expect(c.items.find((e) => e.currency === "EUR")!.desks).toEqual(["gold", "fx"]);
     expect(c.items.find((e) => e.currency === "AUD")!.desks).toEqual([]);
   });
 });
