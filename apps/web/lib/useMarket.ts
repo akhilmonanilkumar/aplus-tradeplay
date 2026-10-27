@@ -19,8 +19,8 @@ export function useMarket(instrument: string) {
       ctl = new AbortController();
       try {
         const [htf, poi, ltf] = await Promise.all([
-          fetchCandles(instrument, tf.htf, 300, ctl.signal),
-          fetchCandles(instrument, tf.poi, 400, ctl.signal),
+          fetchCandles(instrument, tf.htf, 500, ctl.signal),
+          fetchCandles(instrument, tf.poi, 500, ctl.signal),
           fetchCandles(instrument, tf.ltf, 300, ctl.signal),
         ]);
         setData({ htf: htf.candles, poi: poi.candles, ltf: ltf.candles, forming: ltf.forming, at: Date.now(), source: ltf.source, approx: ltf.approx, note: ltf.note });

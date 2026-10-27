@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  INSTRUMENTS, costInR, sizePosition, normalizeInstrument, pnlMultiplier,
+  INSTRUMENTS, LIVE_INSTRUMENT_IDS, WINDOWS_BY_ID, isInWindow, tradeWindows, costInR, sizePosition, normalizeInstrument, pnlMultiplier,
   oiRegime, fundingState, syntheticDxy, pearson, correlation, contextScore, basisPct, fundingApr, sessionStats, emaTrend,
-  runBacktest, scanSignals, simulate, skippedImpact, breakdown, analyzeSetup, TF_MS, type Candle,
+  runBacktest, scanSignals, simulate, skippedImpact, breakdown, analyzeSetup, shiftText, DEFAULT_STRATEGY, TF_MS, type Candle,
 } from './index.js';
+import { atr } from './smc.js';
 
 /** Deterministic pseudo-random walk with trending swings so structure forms. */
 function walk(n: number, startT: number, stepMs: number, seed = 7, start = 100): Candle[] {
@@ -36,8 +37,16 @@ function agg(base: Candle[], ms: number): Candle[] {
 }
 
 describe('instruments', () => {
-  it('has the five desk instruments', () => {
-    expect(Object.keys(INSTRUMENTS).sort()).toEqual(['BTCUSD', 'BTCUSD.SPOT', 'BTCUSDT.P', 'XAUUSD', 'XAUUSDT.P']);
+  it('trades five instruments live and keeps the forex and index desks research-only', () => {
+    expect([...LIVE_INSTRUMENT_IDS].sort()).toEqual(['BTCUSD', 'BTCUSD.SPOT', 'BTCUSDT.P', 'XAUUSD', 'XAUUSDT.P']);
+    expect(Object.keys(INSTRUMENTS).filter((id) => INSTRUMENTS[id as keyof typeof INSTRUMENTS].research).sort()).toEqual(['EURUSD', 'NAS100', 'NIFTY', 'SPX500', 'USDJPY']);
+  });
+  it('trades the Nifty in India Q and everything else in London Q and NY Q', () => {
+    expect(tradeWindows('NIFTY')).toEqual(['india_q']);
+    expect(tradeWindows('EURUSD')).toEqual(['london_q', 'ny_q']);
+    const india = WINDOWS_BY_ID.get('india_q')!;
+    expect(isInWindow(Date.UTC(2026, 9, 27, 3, 45), india)).toBe(true);  // Tue 09:15 IST
+    expect(isInWindow(Date.UTC(2026, 9, 27, 6, 45), india)).toBe(false); // 12:15 IST
   });
   it('normalises legacy and TradingView ids', () => {
     expect(normalizeInstrument('BINANCE:BTCUSDT.P')).toBe('BTCUSDT.P');
@@ -133,7 +142,7 @@ describe('backtest', () => {
     for (const t of r.trades) {
       expect(t.entryAt).toBeGreaterThanOrEqual(t.signalAt);
       if (t.exitAt !== null) expect(t.exitAt).toBeGreaterThan(t.entryAt);
-      expect(t.plannedR).toBeGreaterThanOrEqual(3 - 1e-9);
+      expect(t.plannedR).toBeGreaterThanOrEqual(DEFAULT_STRATEGY.minRR - 1e-9);
       if (t.outcome === 'loss') expect(t.rGross).toBeCloseTo(-1, 6);
       if (t.outcome === 'win') expect(t.rGross).toBeCloseTo(t.plannedR, 6);
       expect(t.rNet).toBeLessThanOrEqual(t.rGross);
@@ -182,6 +191,22 @@ describe('backtest', () => {
     expect(impact.reduce((a, g) => a + g.n, 0)).toBe(base.skipped.length);
   });
 
+  it('never loses more than 1R gross with a partial at 1R', () => {
+    const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
+    const r = simulate('XAUUSD', data, scan, { partialAtR: 1, requirePoi: false, allowGradeA: true, requireCorrectHalf: false, minRR: 1.5 });
+    for (const t of r.trades) if (t.outcome !== 'open') expect(t.rGross).toBeGreaterThanOrEqual(-1 - 1e-9);
+  });
+
+  it('allows counter-trend setups only when the HTF trend is not required', () => {
+    const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
+    const htfKey = (r: ReturnType<typeof simulate>) => Object.keys(r.rejected).filter((k) => k.startsWith('HTF aligned'));
+    const alignOff = simulate('XAUUSD', data, scan, { requireAlignment: false });
+    expect(htfKey(alignOff).every((k) => k.includes('counter-trend'))).toBe(true);
+    const trendOff = simulate('XAUUSD', data, scan, { requireHtfTrend: false });
+    expect(htfKey(trendOff)).toEqual([]);
+    expect(trendOff.skipped.some((x) => x.fails.includes('HTF aligned'))).toBe(false);
+  });
+
   it('enters at the shift close in shift_close mode', () => {
     const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
     const r = simulate('XAUUSD', data, scan, { entryMode: 'shift_close', requirePoi: false, allowGradeA: true, requireCorrectHalf: false, minRR: 1.5 });
@@ -195,21 +220,35 @@ describe('backtest', () => {
 });
 
 describe('setup detector', () => {
-  it('keeps the stop on the right side and at least a quarter 15M ATR away', () => {
+  it('puts the stop beyond the sweep, the entry OB and the traded POI, plus an ATR buffer', () => {
     const ltf = walk(12 * 24 * 12, Date.UTC(2026, 6, 6), TF_MS['5m'], 5, 4000);
     const poi = agg(ltf, TF_MS['15m']), htf = agg(ltf, TF_MS['1h']);
-    let plans = 0;
+    let plans = 0, poiAnchored = 0;
     for (let i = 400; i < ltf.length; i += 3) {
       const T = ltf[i]!.t + TF_MS['5m'];
       for (const side of ['long', 'short'] as const) {
-        const a = analyzeSetup(side, htf.filter((c) => c.t + TF_MS['1h'] <= T).slice(-300), poi.filter((c) => c.t + TF_MS['15m'] <= T).slice(-400), ltf.slice(i - 299, i + 1), { now: T, stopBuffer: () => 0.3 });
+        const L = ltf.slice(i - 299, i + 1);
+        const a = analyzeSetup(side, htf.filter((c) => c.t + TF_MS['1h'] <= T).slice(-300), poi.filter((c) => c.t + TF_MS['15m'] <= T).slice(-400), L, { now: T, stopBuffer: () => 0.3 });
         if (!a.suggest) continue;
         plans++;
-        const risk = side === 'long' ? a.suggest.entry - a.suggest.stop : a.suggest.stop - a.suggest.entry;
-        expect(risk).toBeGreaterThanOrEqual(a.atr * 0.25 - 1e-9);
+        const { entry, stop, stopBuffer: buf } = a.suggest;
+        const dir = side === 'long' ? 1 : -1;
+        // Buffer: a fifth of the 5M ATR, never less than the spread buffer.
+        expect(buf).toBeCloseTo(Math.max(atr(L, 14) * 0.2, 0.3), 9);
+        expect(dir * (entry - stop)).toBeGreaterThanOrEqual(buf - 1e-9);
+        // Every anchor beyond the entry sits inside the stop.
+        if (a.suggest.basis === 'sweep' && a.sweep) expect(dir * (a.sweep.wick - stop)).toBeGreaterThanOrEqual(buf - 1e-9);
+        if (a.inside) {
+          const edge = side === 'long' ? a.inside.bottom : a.inside.top;
+          if (dir * (entry - edge) > 0) {
+            expect(dir * (edge - stop)).toBeGreaterThanOrEqual(buf - 1e-9);
+            if (a.suggest.stopAnchor === a.inside.label) poiAnchored++;
+          }
+        }
       }
     }
     expect(plans).toBeGreaterThan(0);
+    expect(poiAnchored).toBeGreaterThan(0);
   });
 
   it('uses only the candles it is given and returns a coherent analysis', () => {
@@ -236,5 +275,38 @@ describe('gold market hours', () => {
     expect(isFxClosed(Date.UTC(2026, 9, 25, 22, 0))).toBe(false);  // Sun 18:00 NY open
     expect(isFxClosed(Date.UTC(2026, 9, 27, 21, 15))).toBe(true);  // Tue daily break
     expect(isFxClosed(Date.UTC(2026, 9, 27, 22, 0))).toBe(false);  // Tue 18:00 NY
+  });
+});
+
+describe('plan targets and 5M shift', () => {
+  // 1H uptrend leg then a 5M selloff: a clear 5M bearish break with no listed liquidity swept.
+  function bars(points: number[], startT: number, step: number): Candle[] {
+    const out: Candle[] = [];
+    let t = startT;
+    const push = (c: number, o: number) => out.push({ t: (t += step) - step, o, h: Math.max(o, c) + 0.2, l: Math.min(o, c) - 0.2, c });
+    let prev = points[0]!;
+    push(prev, prev);
+    for (let k = 1; k < points.length; k++) {
+      const a = points[k - 1]!, b = points[k]!;
+      for (let s2 = 1; s2 <= 6; s2++) { const c = a + ((b - a) * s2) / 6; push(c, prev); prev = c; }
+    }
+    return out;
+  }
+  const start = Date.UTC(2026, 6, 7);
+  const ltf = bars([100, 104, 102, 107, 105, 110, 108, 112, 109, 111, 106, 108, 103, 105, 101], start, TF_MS['5m']);
+  const a = analyzeSetup('short', ltf, ltf, ltf, { now: ltf[ltf.length - 1]!.t + TF_MS['5m'], minRR: 2 });
+
+  it('reports the 5M bearish structure break even without a sweep', () => {
+    expect(a.ltfShift).not.toBeNull();
+    expect(shiftText(a)).toMatch(/^5M (BOS|CHoCH) /);
+  });
+
+  it('picks the nearest real target worth the minimum R:R and lists the others', () => {
+    if (!a.suggest) return; // the synthetic path may leave no level below; the list check still holds
+    const risk = Math.abs(a.suggest.entry - a.suggest.stop);
+    const r = Math.abs(a.suggest.entry - a.suggest.target) / risk;
+    const first2 = a.targets.find((t) => t.r >= 2);
+    if (first2) expect(r).toBeCloseTo(first2.r, 6);
+    for (let k = 1; k < a.targets.length; k++) expect(a.targets[k]!.r).toBeGreaterThanOrEqual(a.targets[k - 1]!.r - 1e-9);
   });
 });

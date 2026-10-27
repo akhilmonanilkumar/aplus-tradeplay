@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { DESKS, INSTRUMENTS, type DeskId, type InstrumentId } from "@aplus/engine";
+import LivePnl from "@/components/LivePnl";
 import { useRows } from "@/lib/useRows";
 import { useApi } from "@/lib/useApi";
 import { drawdown, matchesOwner, ownerOf, ownerOptions } from "@/lib/accounts";
@@ -130,6 +131,7 @@ export default function Dashboard() {
   return (
     <>
       <ErrorNote error={accounts.error || trades.error} />
+      <section className="g12"><LivePnl /></section>
       <section className="g12">
         <Kpi label={`Assets under management · ${acc.length} accounts`} value={money(aum, "USD", 0)} foot={<span className="faint mono">own {money(own, "USD", 0)} · investors {money(aum - own, "USD", 0)}</span>} />
         <Kpi label="Today P&L" value={`${pnlToday > 0 ? "+" : ""}${money(pnlToday)}`} tone={signed(pnlToday)} foot={<span className="faint">{closedIn((d) => d === today).length} closed today</span>} />

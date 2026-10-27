@@ -28,6 +28,9 @@ export const EDGE_WINDOWS = [LONDON_Q, NY_Q] as const;
 export const ASIA_Q: SessionWindow = { id: 'asia_q', name: 'Asia', start: { hour: 20, minute: 0 }, end: { hour: 24, minute: 0 }, tz: NY };
 export const LONDON_CLOSE: SessionWindow = { id: 'london_close', name: 'London close', start: { hour: 10, minute: 0 }, end: { hour: 12, minute: 0 }, tz: NY };
 export const ALL_WINDOWS = [ASIA_Q, LONDON_Q, NY_Q, LONDON_CLOSE] as const;
+/** India Q: the first three hours of the NSE cash session, the Nifty's counterpart of London Q and NY Q. */
+export const INDIA_Q: SessionWindow = { id: 'india_q', name: 'India Q', start: { hour: 9, minute: 15 }, end: { hour: 12, minute: 15 }, tz: IST };
+export const WINDOWS_BY_ID: ReadonlyMap<string, SessionWindow> = new Map([...ALL_WINDOWS, INDIA_Q].map((w) => [w.id, w]));
 
 export interface ZonedParts {
   year: number;

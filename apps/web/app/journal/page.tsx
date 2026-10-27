@@ -89,7 +89,7 @@ export default function Journal() {
       <ErrorNote error={trades.error} />
       {msg && <Note tone={msg.ok ? "up" : "down"}>{msg.t}</Note>}
       <div className="row">
-        {chipSel("model", "Model", MODEL_IDS.map((m) => [m, m]))}
+        {chipSel("model", "Model", MODEL_IDS.map((m) => [m, ENTRY_MODELS[m].short]))}
         {chipSel("win", "Window", [["london_q", "London Q"], ["ny_q", "NY Q"], ["other", "Outside"]])}
         {chipSel("inst", "Instrument", [["XAUUSD", "XAUUSD"], ["BTCUSDT.P", "BTCUSDT.P"], ["GOLDM", "GOLDM"]])}
         <button className={`chip ${fm.breaks ? "down" : ""}`} onClick={() => setFm({ ...fm, breaks: !fm.breaks })}>Rule breaks only</button>
@@ -161,7 +161,7 @@ export default function Journal() {
               <label className="fld"><span>Account</span><div className="inp"><select value={f.account_id} onChange={set("account_id")}><option value="">—</option>{(accounts.rows ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div></label>
               <label className="fld"><span>Instrument</span><div className="inp"><select value={f.instrument} onChange={set("instrument")}>{["XAUUSD", "BTCUSDT.P", "GOLDM", "GOLD"].map((i) => <option key={i}>{i}</option>)}</select></div></label>
               <label className="fld"><span>Side</span><div className="inp"><select value={f.side} onChange={set("side")}><option value="long">Long</option><option value="short">Short</option></select></div></label>
-              <label className="fld"><span>Model</span><div className="inp"><select value={f.model} onChange={set("model")}>{MODEL_IDS.map((m) => <option key={m} value={m}>{m} · {ENTRY_MODELS[m].name}</option>)}</select></div></label>
+              <label className="fld"><span>Model</span><div className="inp"><select value={f.model} onChange={set("model")}>{MODEL_IDS.map((m) => <option key={m} value={m}>{ENTRY_MODELS[m].short} · {ENTRY_MODELS[m].name}</option>)}</select></div></label>
               <label className="fld"><span>Window</span><div className="inp"><select value={f.session} onChange={set("session")}><option value="london_q">London Q</option><option value="ny_q">NY Q</option><option value="other">Outside</option></select></div></label>
               <label className="fld"><span>Grade</span><div className="inp"><select value={f.grade} onChange={set("grade")}>{["A+", "A", "B", "C"].map((g) => <option key={g}>{g}</option>)}</select></div></label>
               {(["qty", "entry", "stop", "target", "exit", "pnl", "fees"] as const).map((k) => <label key={k} className="fld"><span style={{ textTransform: "capitalize" }}>{k === "pnl" ? "P&L" : k}</span><div className="inp"><input inputMode="decimal" value={f[k]} onChange={set(k)} /></div></label>)}

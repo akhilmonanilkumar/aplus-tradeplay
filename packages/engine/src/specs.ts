@@ -11,8 +11,7 @@ export const XAUUSD_DEFAULT: CfdSpec = { tickSize: 0.01, tickValue: 1, volumeSte
 export const BTCUSDT_PERP_DEFAULT: PerpSpec = { qtyStep: 0.001, minQty: 0.001, minNotional: 100, takerFee: 0.0005, mmr: 0.004, maintAmount: 0 };
 
 export const EDGE_RULES = {
-  minRR: 3,
-  btcMinStopPct: 0.4,
+  minRR: 2,
   newsBlockMinutes: 15,
   maxAPlusTradesPerDay: 2,
   stopAfterLosses: 2,

@@ -32,6 +32,7 @@ htfIn    = input.string("Auto", "HTF for range & trend", options = ["Auto", "60"
 cBufAbs  = input.float(0.0, "Custom: stop buffer (price units)", group = G_I)
 cBufPct  = input.float(0.05, "Custom: stop buffer (% of price)", step = 0.01, group = G_I)
 cMinStop = input.float(0.0, "Custom: minimum stop %", step = 0.05, group = G_I)
+stopAtr  = input.float(0.2, "Stop buffer (× entry-TF ATR 14)", minval = 0.0, step = 0.05, group = G_I, tooltip = "Stop = beyond the furthest of the sweep wick, the entry order block and the 15M POI being traded, plus this many ATRs (never less than the preset spread buffer).")
 cCost    = input.float(0.1, "Custom: round-trip cost % of notional", step = 0.01, group = G_I)
 
 G_R = "Risk"
@@ -48,7 +49,7 @@ isGold = preset == "XAUUSD CFD" or preset == "XAUUSDT.P"
 isBtc  = preset == "BTCUSD CFD" or preset == "BTCUSDT.P" or preset == "BTCUSD spot"
 float bufAbs   = preset == "XAUUSD CFD" ? 0.3 : preset == "Custom" ? cBufAbs : 0.0
 float bufPct   = preset == "XAUUSDT.P" ? 0.01 : isBtc ? 0.05 : preset == "Custom" ? cBufPct : 0.0
-float minStop  = isBtc ? 0.4 : preset == "Custom" ? cMinStop : 0.0
+float minStop  = preset == "Custom" ? cMinStop : 0.0
 float costRate = switch preset
     "XAUUSD CFD"  => 0.00008
     "XAUUSDT.P"   => 0.001
@@ -65,8 +66,8 @@ bool mE = str.startswith(modelIn, "E")
 bool doLong  = sidesIn != "Short only"
 bool doShort = sidesIn != "Long only"
 
-// ───────────────────────── structure (smc.ts structureBreaks + setup.ts htfRange) ─────────────────────────
-// Break = candle BODY close through the last confirmed swing. Range = origin of the latest break → extreme since.
+// ───────────────────────── structure (smc.ts structureBreaks / swingStructure + setup.ts htfRange) ─────────────────────────
+// Internal break = candle BODY close through the last confirmed swing (used for order blocks).
 f_struct(int L, int R) =>
     var float lastH = na
     var int   lastHBar = na
@@ -112,13 +113,152 @@ f_struct(int L, int R) =>
         rLo := math.min(rLo, low)
     [trend, rLo, rHi, up, dn, pivBar]
 
+// Swing structure (smc.ts swingStructure): the trend only flips on a body close through the protected
+// level (strong low in an uptrend, strong high in a downtrend); a continuation BOS needs a close beyond
+// the leg's extreme swing. Closes through minor swings inside a leg are internal and ignored here.
+f_swing(int L, int R) =>
+    var int   trend = 0
+    var float lastH = na
+    var int   lastHBar = na
+    var float lastL = na
+    var int   lastLBar = na
+    var float legH = na
+    var int   legHBar = na
+    var float legL = na
+    var int   legLBar = na
+    var int   lastBreak = -1
+    var float protP = na
+    var int   protBar = na
+    var float rLo = na
+    var float rHi = na
+    float ph = ta.pivothigh(high, L, R)
+    float pl = ta.pivotlow(low, L, R)
+    if not na(ph)
+        lastH := ph
+        lastHBar := bar_index - R
+        if lastHBar >= lastBreak and (na(legH) or ph > legH)
+            legH := ph
+            legHBar := lastHBar
+    if not na(pl)
+        lastL := pl
+        lastLBar := bar_index - R
+        if lastLBar >= lastBreak and (na(legL) or pl < legL)
+            legL := pl
+            legLBar := lastLBar
+    int fromUp = na
+    int fromDn = na
+    if trend == 0
+        if not na(lastH) and close > lastH and bar_index > lastHBar
+            fromUp := lastHBar
+        else if not na(lastL) and close < lastL and bar_index > lastLBar
+            fromDn := lastLBar
+    else if trend == 1
+        if close < protP
+            fromDn := protBar
+        else if not na(legH) and close > legH and bar_index > legHBar
+            fromUp := legHBar
+    else
+        if close > protP
+            fromUp := protBar
+        else if not na(legL) and close < legL and bar_index > legLBar
+            fromDn := legLBar
+    if not na(fromUp)
+        float lo = low
+        int loBar = bar_index
+        for k = 0 to bar_index - fromUp
+            if low[k] < lo
+                lo := low[k]
+                loBar := bar_index - k
+        trend := 1
+        protP := lo
+        protBar := loBar
+        rLo := lo
+        rHi := high
+        lastBreak := bar_index
+        legH := na
+        legL := na
+    else if not na(fromDn)
+        float hi = high
+        int hiBar = bar_index
+        for k = 0 to bar_index - fromDn
+            if high[k] > hi
+                hi := high[k]
+                hiBar := bar_index - k
+        trend := -1
+        protP := hi
+        protBar := hiBar
+        rHi := hi
+        rLo := low
+        lastBreak := bar_index
+        legH := na
+        legL := na
+    else if trend == 1
+        rHi := math.max(rHi, high)
+    else if trend == -1
+        rLo := math.min(rLo, low)
+    [trend, rLo, rHi]
+
+// LuxAlgo Smart Money Concepts structure (smc.ts smcStructure): legs of `size` bars mark alternating
+// swing points, a close crossing the current swing high / low (once) is a BOS or CHoCH and sets the bias,
+// and premium/discount is the trailing swing top / bottom. The engine uses size 50 (swing structure).
+f_lux(int size) =>
+    var int   leg = 0
+    var float hL = na
+    var bool  hX = false
+    var float lL = na
+    var bool  lX = false
+    var int   trend = 0
+    var float top = na
+    var float bot = na
+    float hh = ta.highest(size)
+    float ll = ta.lowest(size)
+    int prevLeg = leg
+    if high[size] > hh
+        leg := 0
+    else if low[size] < ll
+        leg := 1
+    if leg != prevLeg
+        if leg == 1
+            lL := low[size]
+            lX := false
+            bot := low[size]
+        else
+            hL := high[size]
+            hX := false
+            top := high[size]
+    if not na(top)
+        top := math.max(top, high)
+    if not na(bot)
+        bot := math.min(bot, low)
+    bool upX = ta.crossover(close, hL)
+    bool dnX = ta.crossunder(close, lL)
+    if upX and not hX
+        hX := true
+        trend := 1
+    if dnX and not lX
+        lX := true
+        trend := -1
+    [trend, bot, top]
+
+// Frame trend and range: LuxAlgo swing structure (50); protected-level structure until it has a break.
+f_frame() =>
+    [lt, llo, lhi] = f_lux(50)
+    [pt, plo, phi] = f_swing(3, 3)
+    bool useLux = lt != 0 and not na(llo) and not na(lhi) and lhi > llo
+    int t = useLux ? lt : pt
+    float lo = useLux ? llo : plo
+    float hi = useLux ? lhi : phi
+    [t, lo, hi]
+
 f_htf() =>
-    [t, lo, hi, u, d, pb] = f_struct(3, 3)
+    [t, lo, hi] = f_frame()
     [t[1], lo[1], hi[1]]
 
 // 15M: trend, fresh order blocks with imbalance (zones.ts orderBlocks), equal highs/lows, last six swings.
 f_poi() =>
-    [t, lo, hi, up, dn, pb] = f_struct(3, 3)
+    [st, slo, shi] = f_frame()
+    [it, lo, hi, up, dn, pb] = f_struct(3, 3)
+    int t = st
     float a14 = ta.sma(ta.tr(true), 14)
     var array<float> uT = array.new<float>()
     var array<float> uB = array.new<float>()
@@ -413,6 +553,7 @@ if bar_index > 0 and dayKey != dayKey[1]
 
 // ───────────────────────── plan & gate helpers ─────────────────────────
 f_buffer(float price) => bufAbs + price * bufPct / 100
+atrStop = ta.atr(14)
 
 // Nearest real level beyond the entry, ignoring anything within ¼R (setup.ts): never stretched to reach 3R.
 f_target(int dir, float entry, float risk, array<float> pool, array<string> names) =>
@@ -576,6 +717,7 @@ for side = 0 to 1
         int swOff = bar_index - swBar
         string modelFail = ""
         float entry = na
+        float obFar = na
         if mE
             entry := close
         else
@@ -591,6 +733,7 @@ for side = 0 to 1
                     ob := j
             bool obOk = ob >= 0 and ob <= swOff + 3
             float obEdge = obOk ? (dir == 1 ? high[ob] : low[ob]) : na
+            obFar := obOk ? (dir == 1 ? low[ob] : high[ob]) : na
             if mC
                 float fvgEdge = na
                 if swOff >= 2
@@ -604,7 +747,16 @@ for side = 0 to 1
                 entry := obOk ? obEdge : ref
             if mF and (winId != "london_q" or not str.startswith(swName, "Asia"))
                 modelFail := "F · not an Asia sweep in London Q"
-        float stop = na(entry) ? na : dir == 1 ? wick - f_buffer(entry) : wick + f_buffer(entry)
+        // Stop: beyond the furthest of the sweep wick, the entry OB and the 15M POI being traded, plus an ATR buffer.
+        bool z1 = dir == 1 ? f_touch(u1T, u1B, swOff) : f_touch(d1T, d1B, swOff)
+        bool z2 = dir == 1 ? f_touch(u2T, u2B, swOff) : f_touch(d2T, d2B, swOff)
+        float poiFar = z1 ? (dir == 1 ? u1B : d1T) : z2 ? (dir == 1 ? u2B : d2T) : na
+        float anchor = wick
+        if not na(obFar) and (dir == 1 ? obFar < anchor : obFar > anchor)
+            anchor := obFar
+        if not na(poiFar) and not na(entry) and (dir == 1 ? poiFar < entry and poiFar < anchor : poiFar > entry and poiFar > anchor)
+            anchor := poiFar
+        float stop = na(entry) ? na : dir == 1 ? anchor - math.max(f_buffer(entry), atrStop * stopAtr) : anchor + math.max(f_buffer(entry), atrStop * stopAtr)
         float risk = na(entry) ? na : math.abs(entry - stop)
         array<float> pool = dir == 1 ? array.from(pdh, rangeHi, asiaH, eqh, sh1, sh2, sh3, sh4, sh5, sh6) : array.from(pdl, rangeLo, asiaL, eql, sl1, sl2, sl3, sl4, sl5, sl6)
         array<string> names = dir == 1 ? array.from("PDH", "Range high", "Asia high", "EQH", "15M swing high", "15M swing high", "15M swing high", "15M swing high", "15M swing high", "15M swing high") : array.from("PDL", "Range low", "Asia low", "EQL", "15M swing low", "15M swing low", "15M swing low", "15M swing low", "15M swing low", "15M swing low")
@@ -620,8 +772,6 @@ for side = 0 to 1
             bool take = false
             string grade = "NO"
             if why == ""
-                bool z1 = dir == 1 ? f_touch(u1T, u1B, swOff) : f_touch(d1T, d1B, swOff)
-                bool z2 = dir == 1 ? f_touch(u2T, u2B, swOff) : f_touch(d2T, d2B, swOff)
                 bool zLiq = z1 ? (dir == 1 ? u1L : d1L) : z2 ? (dir == 1 ? u2L : d2L) : false
                 [ok, gr, w] = f_gate(dir, entry, stop, target, z1 or z2, zLiq, mE)
                 take := ok

@@ -1,12 +1,12 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  DEFAULT_SELECTOR, INSTRUMENTS, TF_MS, clientOrderId, runBacktest, selectOpportunities, sizePosition,
+  DEFAULT_SELECTOR, INSTRUMENTS, TF_MS, liveDesk, clientOrderId, runBacktest, usHighImpactTimes, selectOpportunities, sizePosition,
   type Candidate, type DeskId, type InstrumentId, type Scored, type Tf,
 } from "@aplus/engine";
 import { confluence } from "@/lib/confluence";
 import { loadDerivs, type Derivs } from "@/lib/server/derivs";
-import { loadHistory } from "@/lib/server/feeds";
+import { historyEnd, loadFrames } from "@/lib/server/feeds";
 import { loadMacro, type Macro } from "@/lib/server/macro";
 import { telegramExecutor, type TradeTicket } from "@/lib/server/execution";
 import type { Chat } from "@/lib/server/telegram";
@@ -28,7 +28,7 @@ export interface Edge { avgR: number; n: number; winRate: number; at: string }
 
 const EDGE_DAYS = 21;
 const EDGE_TTL = 20 * 3_600_000;
-const WARM: Partial<Record<Tf, number>> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
+const WARM: Partial<Record<Tf, number>> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 
 /**
  * Walk-forward result of the edge on the last three weeks, per instrument, refreshed about daily.
@@ -51,14 +51,10 @@ export async function recentEdges(db: SupabaseClient, ids: InstrumentId[], opts:
   for (const id of stale.slice(0, refresh)) {
     try {
       const def = INSTRUMENTS[id];
-      const to = Math.floor(Date.now() / TF_MS[def.ltf]) * TF_MS[def.ltf];
+      const to = historyEnd();
       const from = to - EDGE_DAYS * 86_400_000;
-      const [htf, poi, ltf] = await Promise.all([
-        loadHistory(id, def.htf, from - (WARM[def.htf] ?? 0), to),
-        loadHistory(id, def.poi, from - (WARM[def.poi] ?? 0), to),
-        loadHistory(id, def.ltf, from - (WARM[def.ltf] ?? 0), to),
-      ]);
-      const res = runBacktest(id, { htf: htf.candles, poi: poi.candles, ltf: ltf.candles }, { allowGradeA: opts.allowGradeA });
+      const [ltf, htf, poi] = await loadFrames(id, [def.ltf, def.htf, def.poi].map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) })), to);
+      const res = runBacktest(id, { htf: htf.candles, poi: poi.candles, ltf: ltf.candles, news: usHighImpactTimes(from - 7 * 86_400_000, to) }, { allowGradeA: opts.allowGradeA });
       const at = new Date().toISOString();
       await db.from("backtests").insert({
         strategy_id: null, instrument: id, from_ts: new Date(res.from).toISOString(), to_ts: new Date(res.to).toISOString(),
@@ -127,7 +123,7 @@ export async function runSelector(db: SupabaseClient, deps: {
 }): Promise<SelectorOutcome> {
   const cfg = deps.config;
   const ids = cfg.universe;
-  const desks = [...new Set(ids.map((i) => INSTRUMENTS[i].desk))];
+  const desks = [...new Set(ids.map((i) => liveDesk(i)))];
   const [evals, edges, ctx] = await Promise.all([
     Promise.allSettled(ids.map((i) => deps.evalFor(i))),
     recentEdges(db, ids, { allowGradeA: cfg.allowGradeA }).catch(() => new Map<InstrumentId, Edge>()),
@@ -146,8 +142,8 @@ export async function runSelector(db: SupabaseClient, deps: {
     if (r.status !== "fulfilled") return;
     const e = r.value, def = INSTRUMENTS[ids[k]!];
     byId.set(e.instrument, e);
-    const c = ctx.get(def.desk);
-    const conf = confluence(def.desk, e.side, c?.dv, c?.mc);
+    const c = ctx.get(liveDesk(def.id));
+    const conf = confluence(liveDesk(def.id), e.side, c?.dv, c?.mc);
     const p = e.analysis.suggest;
     const edge = edges.get(e.instrument);
     candidates.push({

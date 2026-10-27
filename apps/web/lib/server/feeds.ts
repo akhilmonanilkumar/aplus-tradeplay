@@ -19,6 +19,8 @@ type Provider = {
   base?: Tf;
   /** Bars per request when paging history. */
   pageSize?: number;
+  /** Tight request quota: a long history pull can run out mid-way, so backtests skip it unless asked for by name. */
+  metered?: boolean;
 };
 
 const num = (x: unknown) => Number(x);
@@ -127,12 +129,64 @@ function oanda(instrumentName: string): Provider["load"] {
 const TD_TF: Record<Tf, string> = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" };
 function twelveData(symbol: string): Provider["load"] {
   return async (tf, r) => {
+    await slot("twelvedata");
     const q = new URLSearchParams({ symbol, interval: TD_TF[tf], outputsize: String(Math.min(5000, r.limit)), timezone: "UTC", order: "ASC", apikey: env("TWELVEDATA_API_KEY") });
     if (r.endTime) q.set("end_date", new Date(r.endTime).toISOString().slice(0, 19).replace("T", " "));
-    const j = await getJson<{ status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string }[] }>(`https://api.twelvedata.com/time_series?${q}`);
+    type Res = { status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string }[] };
+    // The per-minute quota is shared with other server instances: on a 429, wait for the next minute and retry.
+    let j: Res | null = null;
+    for (let attempt = 0; !j; attempt++) {
+      try {
+        j = await getJson<Res>(`https://api.twelvedata.com/time_series?${q}`);
+      } catch (e) {
+        if (attempt >= 2 || !/429/.test(errMsg(e))) throw e;
+        await new Promise((res) => setTimeout(res, 61_000));
+      }
+    }
     if (j.status !== "ok" || !j.values) throw new Error(`twelvedata: ${j.message ?? j.status}`);
     return j.values.map((x) => ({ t: Date.parse(`${x.datetime.replace(" ", "T")}Z`), o: num(x.open), h: num(x.high), l: num(x.low), c: num(x.close) }));
   };
+}
+
+/* ---------------- NSE (Upstox, keyless) ---------------- */
+
+/**
+ * Upstox v3 historical candles for an NSE instrument key. One call covers up to a month of
+ * minute bars or a quarter of hourly bars; today's bars come from the intraday endpoint.
+ */
+function upstox(key: string): Provider["load"] {
+  const unit: Record<Tf, [string, number, number]> = {
+    "1m": ["minutes", 1, 7], "5m": ["minutes", 5, 28], "15m": ["minutes", 15, 28], "1h": ["hours", 1, 85], "4h": ["hours", 4, 85], "1d": ["days", 1, 360],
+  };
+  const ist = (t: number) => new Date(t + 330 * 60_000).toISOString().slice(0, 10);
+  const rows = (c: (string | number)[][]) => c.map((x) => ({ t: Date.parse(String(x[0])), o: num(x[1]), h: num(x[2]), l: num(x[3]), c: num(x[4]), v: num(x[5] ?? 0) }));
+  const base = `https://api.upstox.com/v3/historical-candle`;
+  return async (tf, r) => {
+    const [u, n, days] = unit[tf];
+    const to = r.endTime ?? Date.now();
+    const path = `${encodeURIComponent(key)}/${u}/${n}`;
+    const hist = await getJson<{ status: string; data: { candles: (string | number)[][] } }>(`${base}/${path}/${ist(to)}/${ist(to - days * 86_400_000)}`);
+    const out = rows(hist.data.candles);
+    if (!r.endTime && tf !== "1d") {
+      const today = await getJson<{ data: { candles: (string | number)[][] } }>(`${base}/intraday/${path}`).catch(() => null);
+      if (today) out.push(...rows(today.data.candles));
+    }
+    return out.sort((a, b) => a.t - b.t);
+  };
+}
+
+/** Requests per minute a metered vendor allows; paging waits for a free slot instead of failing. */
+const RATE: Record<string, number> = { twelvedata: 8 };
+const calls = new Map<string, number[]>();
+async function slot(vendor: string): Promise<void> {
+  const perMin = RATE[vendor];
+  if (!perMin) return;
+  for (;;) {
+    const now = Date.now();
+    const recent = (calls.get(vendor) ?? []).filter((t) => t > now - 61_000);
+    if (recent.length < perMin) { calls.set(vendor, [...recent, now]); return; }
+    await new Promise((res) => setTimeout(res, recent[0]! + 61_000 - now));
+  }
 }
 
 /* ---------------- chains ---------------- */
@@ -144,7 +198,7 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   XAUUSD: [
     { name: "OANDA XAU/USD", approx: false, enabled: hasOanda, load: oanda("XAU_USD") },
     // Free tier: 8 requests/min, 800/day — one 5,000-bar 5M pull per bar close covers 5M, 15M and 1H.
-    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD"), base: "5m", pageSize: 5000 },
+    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD"), base: "5m", pageSize: 5000, metered: true },
     { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA or Twelve Data key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
     { name: "PAXG/USDT proxy", approx: true, note: "1 PAXG ≈ 1 oz; trades at a small premium to spot", load: binanceSpot("PAXGUSDT") },
   ],
@@ -166,6 +220,26 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
     { name: "OANDA BTC/USD CFD", approx: false, enabled: hasOanda, load: oanda("BTC_USD") },
     { name: "Coinbase BTC-USD (CFD reference)", approx: true, note: "Broker CFD tracks USD spot plus its spread", load: coinbase("BTC-USD") },
     { name: "Kraken XBT/USD (CFD reference)", approx: true, load: kraken("XBTUSD") },
+  ],
+  EURUSD: [
+    { name: "OANDA EUR/USD", approx: false, enabled: hasOanda, load: oanda("EUR_USD") },
+    { name: "Twelve Data EUR/USD", approx: false, enabled: hasTd, load: twelveData("EUR/USD"), base: "5m", pageSize: 5000, metered: true },
+    { name: "Binance EUR/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("EURUSDT") },
+  ],
+  USDJPY: [
+    { name: "OANDA USD/JPY", approx: false, enabled: hasOanda, load: oanda("USD_JPY") },
+    { name: "Twelve Data USD/JPY", approx: false, enabled: hasTd, load: twelveData("USD/JPY"), base: "5m", pageSize: 5000, metered: true },
+  ],
+  NAS100: [
+    { name: "OANDA NAS100", approx: false, enabled: hasOanda, load: oanda("NAS100_USD") },
+    { name: "Binance QQQUSDT.P (Nasdaq-100 tracker)", approx: true, note: "QQQ ETF perpetual: tracks the Nasdaq-100 in %, not in index points", load: binanceFutures("klines", "QQQUSDT") },
+  ],
+  SPX500: [
+    { name: "OANDA SPX500", approx: false, enabled: hasOanda, load: oanda("SPX500_USD") },
+    { name: "Binance SPYUSDT.P (S&P 500 tracker)", approx: true, note: "SPY ETF perpetual: tracks the S&P 500 in %, not in index points", load: binanceFutures("klines", "SPYUSDT") },
+  ],
+  NIFTY: [
+    { name: "Upstox NSE Nifty 50", approx: false, load: upstox("NSE_INDEX|Nifty 50") },
   ],
 };
 
@@ -215,31 +289,103 @@ async function fromBase(id: InstrumentId, p: Provider, tf: Tf): Promise<Candle[]
   return tf === base ? rows : aggregate(rows, TF_MS[tf]);
 }
 
-/** Closed candles between `from` and `to`, paging backwards through the first provider that answers. */
-export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: number): Promise<CandleSet> {
+export interface HistoryOpts {
+  /** Use only this provider (by name) and fail rather than fall back to another. */
+  source?: string;
+  /** Allow metered providers in the automatic chain (live tracking, not backtests). */
+  allowMetered?: boolean;
+  /** Providers with a base timeframe: pull the base from here so later frames of the same run reuse it. */
+  baseFrom?: number;
+  /** Never use a metered vendor, even when nothing free covers the instrument (fail instead). */
+  freeOnly?: boolean;
+}
+
+/** Base-timeframe history of one run, shared by its frames (a metered vendor is asked once). */
+const historyMemo = new Map<string, { from: number; to: number; v: Promise<Candle[]> }>();
+
+/**
+ * Closed candles between `from` and `to`, paging backwards through one provider.
+ * Repeatable by design: metered vendors are skipped unless named, and a provider whose history
+ * starts well after `from` is passed over for one that covers the window, so the same request
+ * gets the same source and the same bars instead of whichever vendor happened to answer.
+ */
+export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: number, opts: HistoryOpts = {}): Promise<CandleSet> {
   const errors: string[] = [];
-  for (const p of CHAINS[id].filter((x) => !x.enabled || x.enabled())) {
+  const enabled = CHAINS[id].filter((x) => !x.enabled || x.enabled());
+  const free = enabled.filter((x) => opts.allowMetered || !x.metered);
+  // A metered vendor is used without being named only when nothing free covers the instrument.
+  const chain = opts.source ? enabled.filter((x) => x.name === opts.source) : free.length || opts.freeOnly ? free : enabled;
+  if (!chain.length) throw new Error(opts.source ? `source not available: ${opts.source}` : "no provider");
+  // Weekends and holidays leave CFD history without bars for up to a few days.
+  const slack = (INSTRUMENTS[id].fxHours ? 4 : 1) * 86_400_000 + TF_MS[tf];
+  const end0 = Math.min(to, Date.now());
+  let partial: CandleSet | null = null;
+  for (const p of chain) {
     const page = p.pageSize ?? 1000;
     try {
-      const out: Candle[] = [];
-      let end = Math.min(to, Date.now());
-      for (let guard = 0; guard < 60 && end > from; guard++) {
-        const batch = dedupe(await p.load(tf, { limit: page, endTime: end }));
-        const older = batch.filter((c) => c.t < (out[0]?.t ?? Infinity) && c.t >= from - TF_MS[tf]);
-        if (!older.length) break;
-        out.unshift(...older);
-        end = older[0]!.t - 1;
-        if (batch.length < page * 0.3) break;
+      const pull = async (t: Tf, start: number) => {
+        const out: Candle[] = [];
+        let end = end0;
+        for (let guard = 0; guard < 80 && end > start; guard++) {
+          const batch = dedupe(await p.load(t, { limit: page, endTime: end }));
+          const older = batch.filter((c) => c.t < (out[0]?.t ?? Infinity) && c.t >= start - TF_MS[t]);
+          if (!older.length) break;
+          out.unshift(...older);
+          end = older[0]!.t - 1;
+          if (batch.length < page * 0.3) break;
+        }
+        return out;
+      };
+      let out: Candle[];
+      if (p.base && tf !== "1m" && tf !== p.base) {
+        // Rate-limited vendor: page the base timeframe once per run and build this one from it.
+        const key = `${id}:${p.name}`;
+        const start = Math.min(from, opts.baseFrom ?? from);
+        let m = historyMemo.get(key);
+        if (!m || m.from > from || m.to < end0) {
+          m = { from: start, to: end0, v: pull(p.base, start) };
+          historyMemo.set(key, m);
+          m.v.catch(() => historyMemo.delete(key));
+        }
+        out = aggregate((await m.v).filter((c) => c.t >= from - TF_MS[tf]), TF_MS[tf]);
+      } else if (p.base && tf === p.base) {
+        const key = `${id}:${p.name}`;
+        const start = Math.min(from, opts.baseFrom ?? from);
+        const m = { from: start, to: end0, v: pull(tf, start) };
+        historyMemo.set(key, m);
+        m.v.catch(() => historyMemo.delete(key));
+        out = (await m.v).filter((c) => c.t >= from - TF_MS[tf]);
+      } else {
+        out = await pull(tf, from);
       }
-      const closed = openHours(id, out).filter((c) => c.t >= from && c.t + TF_MS[tf] <= Math.min(to, Date.now()));
+      const closed = openHours(id, out).filter((c) => c.t >= from && c.t + TF_MS[tf] <= end0);
       if (closed.length < 50) throw new Error(`only ${closed.length} candles`);
-      return { candles: closed, forming: null, source: p.name, approx: p.approx, note: p.note };
+      const set: CandleSet = { candles: closed, forming: null, source: p.name, approx: p.approx, note: p.note };
+      if (closed[0]!.t <= from + slack) return set;
+      errors.push(`${p.name}: history starts ${new Date(closed[0]!.t).toISOString().slice(0, 10)}`);
+      if (!partial || closed[0]!.t < partial.candles[0]!.t) partial = set;
     } catch (e) {
       errors.push(`${p.name}: ${errMsg(e)}`);
     }
   }
+  if (partial) return { ...partial, note: `Partial history: starts ${new Date(partial.candles[0]!.t).toISOString().slice(0, 10)}, not ${new Date(from).toISOString().slice(0, 10)}` };
   throw new Error(errors.join(" · "));
 }
+
+/**
+ * Several timeframes for one backtest from a single provider: the first frame picks the source,
+ * the others must come from it too, so structure, POIs and entries all read the same prices.
+ */
+export async function loadFrames(id: InstrumentId, frames: { tf: Tf; from: number }[], to: number, opts: HistoryOpts = {}): Promise<CandleSet[]> {
+  const [first, ...rest] = frames;
+  const baseFrom = Math.min(...frames.map((f) => f.from));
+  const lead = await loadHistory(id, first!.tf, first!.from, to, { ...opts, baseFrom });
+  const others = await Promise.all(rest.map((f) => loadHistory(id, f.tf, f.from, to, { source: lead.source, baseFrom })));
+  return [lead, ...others];
+}
+
+/** Backtest windows end on the last whole hour, so reruns within the hour replay the same bars. */
+export const historyEnd = (now = Date.now()) => Math.floor(now / 3_600_000) * 3_600_000;
 
 /** Drop bars printed while a CFD market is shut (weekend, daily break). Crypto trades 24/7. */
 function openHours(id: InstrumentId, rows: Candle[]): Candle[] {
@@ -274,7 +420,7 @@ export async function loadQuote(id: InstrumentId): Promise<Quote> {
       if (q.enabled && !q.enabled()) continue;
       try { return await q.load(); } catch (e) { errors.push(`${q.name}: ${errMsg(e)}`); }
     }
-    throw new Error(errors.join(" · "));
+    throw new Error(errors.join(" · ") || "no quote feed for this instrument");
   });
 }
 
@@ -288,6 +434,30 @@ const binanceFutQuote = (symbol: string, name: string): QuoteProvider => ({
       getJson<{ bidPrice: string; askPrice: string }>(`https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol=${symbol}`).catch(() => null),
     ]);
     return { bid: bt ? num(bt.bidPrice) : null, ask: bt ? num(bt.askPrice) : null, last: num(pi.markPrice), mark: num(pi.markPrice), index: num(pi.indexPrice), ts: pi.time, source: name, approx: false };
+  },
+});
+
+/** Swissquote's public best bid/offer across its spread profiles (keyless). */
+const swissquote = (base: string, quote: string): QuoteProvider => ({
+  name: `Swissquote ${base}/${quote}`,
+  load: async () => {
+    const j = await getJson<{ ts: number; spreadProfilePrices: { spreadProfile: string; bid: number; ask: number }[] }[]>(
+      `https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${base}/${quote}`,
+    );
+    const best = j.flatMap((x) => x.spreadProfilePrices.map((p) => ({ ...p, ts: x.ts }))).sort((a, b) => a.ask - a.bid - (b.ask - b.bid))[0];
+    if (!best) throw new Error("no prices");
+    return { bid: best.bid, ask: best.ask, last: (best.bid + best.ask) / 2, ts: best.ts, source: `Swissquote ${base}/${quote}`, approx: false };
+  },
+});
+
+/** Last 1M bar of the NSE session from Upstox (no keyless tick feed for the index). */
+const upstoxQuote = (key: string, name: string): QuoteProvider => ({
+  name,
+  load: async () => {
+    const j = await getJson<{ data: { candles: (string | number)[][] } }>(`https://api.upstox.com/v3/historical-candle/intraday/${encodeURIComponent(key)}/minutes/1`);
+    const c = j.data.candles[0];
+    if (!c) throw new Error("no session bars today");
+    return { bid: null, ask: null, last: num(c[4]), ts: Date.parse(String(c[0])) + 60_000, source: `${name} (1M bar)`, approx: true };
   },
 });
 
@@ -314,17 +484,7 @@ const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
         return { bid, ask, last: (bid + ask) / 2, ts: Date.parse(p.time), source: "OANDA XAU/USD", approx: false };
       },
     },
-    {
-      name: "Swissquote XAU/USD",
-      load: async () => {
-        const j = await getJson<{ ts: number; spreadProfilePrices: { spreadProfile: string; bid: number; ask: number }[] }[]>(
-          "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD",
-        );
-        const best = j.flatMap((x) => x.spreadProfilePrices.map((p) => ({ ...p, ts: x.ts }))).sort((a, b) => a.ask - a.bid - (b.ask - b.bid))[0];
-        if (!best) throw new Error("no prices");
-        return { bid: best.bid, ask: best.ask, last: (best.bid + best.ask) / 2, ts: best.ts, source: "Swissquote XAU/USD", approx: false };
-      },
-    },
+    swissquote("XAU", "USD"),
     {
       name: "Binance XAU index",
       load: async () => {
@@ -337,6 +497,11 @@ const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   "BTCUSDT.P": [binanceFutQuote("BTCUSDT", "Binance BTCUSDT.P")],
   "BTCUSD.SPOT": [coinbaseQuote],
   BTCUSD: [coinbaseQuote],
+  EURUSD: [swissquote("EUR", "USD")],
+  USDJPY: [swissquote("USD", "JPY")],
+  NAS100: [binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P")],
+  SPX500: [binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P")],
+  NIFTY: [upstoxQuote("NSE_INDEX|Nifty 50", "Upstox Nifty 50")],
 };
 
 export const instrumentOk = (id: string | null): id is InstrumentId => !!id && id in INSTRUMENTS;

@@ -45,3 +45,11 @@ describe('signal outcome', () => {
     expect(isFinalOutcome('filled')).toBe(false);
   });
 });
+
+describe('market entries', () => {
+  it('fill when placed, so a move away is a win, not "ran away"', () => {
+    const r = resolveSignal({ ...long, market: true }, bars([100.5, 103], [102, 106.5]), M5);
+    expect(r.outcome).toBe('win');
+    expect(r.filledAt).toBe(long.createdAt);
+  });
+});

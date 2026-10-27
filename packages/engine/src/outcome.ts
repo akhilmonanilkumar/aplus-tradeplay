@@ -16,6 +16,8 @@ export interface SignalPlan {
   target: number;
   /** When the order was placed (ms). Bars that close after this count. */
   createdAt: number;
+  /** Market entry: filled at `entry` when placed (models E and the session breakouts). */
+  market?: boolean;
 }
 
 export interface SignalResolution {
@@ -37,7 +39,7 @@ export function resolveSignal(s: SignalPlan, candles: readonly Candle[], tfMs: n
   const bars = candles.filter((c) => c.t + tfMs > s.createdAt);
   const touched = (c: Candle, level: number, below: boolean) => (below ? c.l <= level : c.h >= level);
 
-  let filledAt: number | null = null;
+  let filledAt: number | null = s.market ? s.createdAt : null;
   for (let i = 0; i < bars.length; i++) {
     const c = bars[i]!;
     if (filledAt === null) {

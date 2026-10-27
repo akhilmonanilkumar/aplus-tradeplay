@@ -16,7 +16,11 @@ export interface ModelCheck {
 
 export interface EntryModel {
   id: ModelId;
+  /** Short display name (the letter stays the stored id). */
+  short: string;
   name: string;
+  /** What the engine's detector looks for (packages/engine/src/detect.ts). */
+  detect: string[];
   sequence: string[];
   entry: string;
   stop: string;
@@ -36,63 +40,72 @@ export interface EntryModel {
 
 export const ENTRY_MODELS: Record<ModelId, EntryModel> = {
   A: {
-    id: 'A', name: 'Market shift → pullback',
+    id: 'A', short: 'Shift Retest', detect: ['Price is inside, or has just tapped, a fresh 15M POI', 'A 5M wick sweeps a liquidity level (PDL/PDH, Asia or London high/low, equal lows, a 5M swing) and closes back', 'The first 5M body close beyond the last lower high (long) / higher low (short) formed before the sweep', 'Entry waits for price to return to the 5M order block that started the shift (or the broken level)'],
+    name: 'Market shift → pullback',
     sequence: ['Tap 15M POI', 'Sweep internal liquidity (V-shape)', '5M body close beyond last LH / HL', 'Pull back into the shift zone'],
     entry: 'Limit at the 5M zone that caused the shift', stop: 'Beyond that zone or the sweep wick', target: 'Next 15M swing / opposing zone',
     shift: 'required', checks: [],
     aPlusEligible: true, advanced: false, counterTrend: false,
   },
   B: {
-    id: 'B', name: 'Flip zone',
+    id: 'B', short: 'Flip Zone', detect: ['A sweep, then a market shift, as in Shift Retest', 'Between the sweep and the shift, an opposing 5M zone (a supply zone for a long) reacted, then failed and was closed through', 'That broken zone has flipped: the entry sits on its near edge'],
+    name: 'Flip zone',
     sequence: ['Tap POI + sweep', 'Opposing LTF zone reacts, then fails and breaks', 'Market shift'],
     entry: 'Limit at the flip zone', stop: 'Beyond the flip zone', target: 'Next 15M swing / opposing zone',
     shift: 'required', checks: [{ id: 'failed_opposing_zone', label: 'Opposing zone failed and broke', box: 5 }],
     aPlusEligible: true, advanced: false, counterTrend: false,
   },
   C: {
-    id: 'C', name: 'Sweep → OB → FVG',
+    id: 'C', short: 'Gap Stack', detect: ['A sweep and a shift, as in Shift Retest', 'The displacement left a 5M order block with an unfilled fair-value gap inside or next to it', 'Entry at the gap\'s near edge, stop beyond the order block'],
+    name: 'Sweep → OB → FVG',
     sequence: ['Liquidity sweep (the trap)', 'Displacement leaves an order block', 'FVG inside / next to the OB'],
     entry: 'Limit at the FVG (or OB if none)', stop: 'Beyond the OB or protected level', target: 'Next 15M swing — 3R minimum',
     shift: 'required', checks: [{ id: 'ob_fvg', label: 'Displacement left an OB with an FVG', box: 3 }],
     aPlusEligible: true, advanced: false, counterTrend: false,
   },
   D: {
-    id: 'D', name: 'Institutional precision',
+    id: 'D', short: 'First Tap', detect: ['The 15M POI has a liquidity story: it swept a swing when it formed, or sits just behind a pool', 'Price tapped it once (the first tap, the inducement) and left a 5M swing', 'A second move sweeps that first-tap swing, then the market shifts'],
+    name: 'Institutional precision',
     sequence: ['Institutional zone (protected level that swept liquidity)', 'First tap = inducement', 'Sweep of the first tap'],
     entry: 'After the sweep of the initial mitigation', stop: 'Beyond the new protected level', target: 'Opposing institutional zone',
     shift: 'optional_if_aggressive', checks: [{ id: 'first_tap_swept', label: 'First tap swept (inducement taken)', box: 4 }],
     aPlusEligible: true, advanced: false, counterTrend: false,
   },
   E: {
-    id: 'E', name: 'Gold sweep entry',
+    id: 'E', short: 'Sweep Snap', detect: ['Gold only', 'Price is inside a 15M POI', 'A 5M candle sweeps a liquidity level and closes back: enter at that close, no shift needed', 'Never A+ unless aggressive entries are switched on'],
+    name: 'Gold sweep entry',
     sequence: ['1H and 15M aligned', 'Mark liquidity and 15M POIs', 'Price reaches a POI', 'Sweep', 'Shift (conservative)'],
     entry: 'Conservative: shift + pullback · aggressive: on the sweep candle', stop: 'Beyond the protected level', target: 'Nearest 15M swing (≈3R)',
     shift: 'optional_if_aggressive', checks: [],
     aPlusEligible: true, advanced: false, counterTrend: false, instruments: ['XAUUSD'],
   },
   F: {
-    id: 'F', name: 'Asia sweep',
+    id: 'F', short: 'Asia Raid', detect: ['London Q only', 'Price sweeps the Asia high or low in the direction of the HTF bias', 'A 5M market shift follows', 'Targets the opposite side of the Asia range first'],
+    name: 'Asia sweep',
     sequence: ['Mark Asia high / low', 'London window sweeps one side with the bias', 'LTF shift'],
     entry: 'Shift zone', stop: 'Beyond the sweep', target: 'Opposite side of the range / next HTF level',
     shift: 'required', checks: [{ id: 'asia_swept', label: 'Asia high / low swept', box: 4 }],
     aPlusEligible: true, advanced: false, counterTrend: false, window: 'london_q',
   },
   G: {
-    id: 'G', name: 'Counter-trend pullback scalp',
+    id: 'G', short: 'Counter Scalp', detect: ['The setup of Shift Retest, but against the HTF trend', 'HTF over-extended in deep premium or discount', 'Grade A at most, never A+; needs counter-trend and advanced models switched on'],
+    name: 'Counter-trend pullback scalp',
     sequence: ['HTF over-extended in premium / discount', '1M fractal shift + internal BOS', 'POI tap + inducement swept'],
     entry: '1M zone', stop: 'Beyond the protected level', target: 'Nearest 5M zone only',
     shift: 'required', checks: [{ id: 'fractal_shift', label: '1M fractal shift + internal BOS', box: 5 }],
     aPlusEligible: false, advanced: true, counterTrend: true,
   },
   H: {
-    id: 'H', name: 'Sniper / fractal shift',
+    id: 'H', short: 'Fractal Sniper', detect: ['A Shift Retest shift ran at least 1R without filling the limit', 'On 1M, a fresh internal break of structure in the trade\'s direction leaves a 1M order block', 'Entry at that 1M block with a very tight stop; targets need at least 5R', 'Needs 1M candles: live every pass, in the lab up to 60 days'],
+    name: 'Sniper / fractal shift',
     sequence: ['Shift with no pullback', 'Drop to 1M: fractal shift', 'Tiny extreme / flip zone'],
     entry: '1M zone, scale in on internal BOS pullbacks', stop: 'Beyond the 1M zone (very tight)', target: 'Far targets (1:5+)',
     shift: 'required', checks: [{ id: 'fractal_shift', label: '1M fractal shift', box: 5 }],
     aPlusEligible: false, advanced: true, counterTrend: false,
   },
   I: {
-    id: 'I', name: 'Post-news',
+    id: 'I', short: 'News Reset', detect: ['A high-impact release printed 30–120 minutes ago', 'The spike is over: a sweep and a market shift form after it', 'Planned and stopped like Shift Retest'],
+    name: 'Post-news',
     sequence: ['Let the spike happen', 'Wait 30–60 min', 'Sweep, reclaim or return to a POI'],
     entry: 'Normal plan from there', stop: 'Structural', target: 'Structural',
     shift: 'required', checks: [],
@@ -101,6 +114,13 @@ export const ENTRY_MODELS: Record<ModelId, EntryModel> = {
 };
 
 export const MODEL_IDS = Object.keys(ENTRY_MODELS) as ModelId[];
+
+/** Display name of a stored model id (entry models by letter; 'S' is the session-strategy bucket). */
+export function modelName(id: string | null | undefined): string {
+  if (!id) return '—';
+  if (id === 'S') return 'Session strategy';
+  return ENTRY_MODELS[id as ModelId]?.short ?? id;
+}
 
 /** Legacy alias used by older rows. */
 export function normalizeModel(id: string | null | undefined): ModelId {

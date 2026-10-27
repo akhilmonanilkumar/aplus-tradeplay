@@ -1,9 +1,9 @@
 import "server-only";
 import {
-  INSTRUMENTS, NY, TF_MS, scanSignals, simulate, skippedImpact, wallToUtc, zonedParts,
+  INSTRUMENTS, NY, scanSignals, usHighImpactTimes, simulate, skippedImpact, wallToUtc, zonedParts,
   type InstrumentId, type ScanTrace, type StrategyParams,
 } from "@aplus/engine";
-import { loadHistory } from "@/lib/server/feeds";
+import { historyEnd, loadFrames } from "@/lib/server/feeds";
 
 /**
  * Rule research: one walk-forward scan of the last N days, simulated under the live rules and a
@@ -16,6 +16,7 @@ export const VARIANTS: { id: string; label: string; params: Partial<StrategyPara
   { id: "gradeA", label: "+ grade A", params: { allowGradeA: true } },
   { id: "noHalf", label: "No premium/discount rule", params: { requireCorrectHalf: false } },
   { id: "htfOnly", label: "HTF trend only (15M may disagree)", params: { requireAlignment: false } },
+  { id: "noTrend", label: "Counter-trend allowed (no HTF trend rule)", params: { requireHtfTrend: false } },
   { id: "noPoi", label: "No 15M POI required", params: { requirePoi: false } },
   { id: "rr2", label: "Min R:R 2", params: { minRR: 2 } },
   { id: "shiftClose", label: "Enter at the shift close", params: { entryMode: "shift_close" } },
@@ -26,7 +27,7 @@ export const VARIANTS: { id: string; label: string; params: Partial<StrategyPara
   { id: "trendCoreHtf", label: "Trend core, HTF only (15M may disagree)", params: { allowGradeA: true, requirePoi: false, requireCorrectHalf: false, requireAlignment: false, minRR: 1.5 } },
 ];
 
-const WARM: Record<string, number> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
+const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 const hm = (t: number) => { const p = zonedParts(t, NY); return `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`; };
 const r2 = (x: number) => Math.round(x * 100) / 100;
 
@@ -46,14 +47,10 @@ export async function research(id: InstrumentId, opts: { days?: number; day?: st
   const t0 = Date.now();
   const def = INSTRUMENTS[id];
   const days = Math.min(Math.max(opts.days ?? 30, 5), 90);
-  const to = Math.floor(Date.now() / TF_MS[def.ltf]) * TF_MS[def.ltf];
+  const to = historyEnd();
   const from = to - days * 86_400_000;
-  const [htf, poi, ltf] = await Promise.all([
-    loadHistory(id, def.htf, from - (WARM[def.htf] ?? 0), to),
-    loadHistory(id, def.poi, from - (WARM[def.poi] ?? 0), to),
-    loadHistory(id, def.ltf, from - (WARM[def.ltf] ?? 0), to),
-  ]);
-  const data = { htf: htf.candles, poi: poi.candles, ltf: ltf.candles };
+  const [ltf, htf, poi] = await loadFrames(id, [def.ltf, def.htf, def.poi].map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) })), to);
+  const data = { htf: htf.candles, poi: poi.candles, ltf: ltf.candles, news: usHighImpactTimes(from - 7 * 86_400_000, to) };
 
   // The New York day to replay (default: today in New York).
   const nyNow = zonedParts(Date.now(), NY);
@@ -90,7 +87,7 @@ export async function research(id: InstrumentId, opts: { days?: number; day?: st
   });
 
   return {
-    instrument: id, source: ltf.source, approx: ltf.approx, days, bars: ltf.candles.length,
+    instrument: id, source: ltf.source, approx: ltf.approx, partial: ltf.note?.startsWith("Partial") ? ltf.note : null, days, bars: ltf.candles.length,
     day: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
     variants,
     replay: { long: segments(trace, "long"), short: segments(trace, "short") },

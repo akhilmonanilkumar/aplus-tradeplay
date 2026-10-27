@@ -1,13 +1,14 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  ALL_WINDOWS, EDGE_WINDOWS, INSTRUMENTS, TF_MS, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
-  sizePosition, stateFromSetup, type Candle, type GateResult, type InstrumentId, type SetupAnalysis,
+  INSTRUMENTS, TF_MS, WINDOWS_BY_ID, tradeWindows, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
+  shiftText, sizePosition, stateFromSetup, type Candle, type DeskId, type GateResult, type SessionWindow, type InstrumentId, type SetupAnalysis,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
+import { modelLedger, storeReleases } from "@/lib/server/ledger";
 
 /**
  * Autopilot: runs the same detector + A+ gate as the desks on the server, on a schedule.
@@ -39,26 +40,32 @@ export interface Evaluation {
 
 const fmt = (x: number, d = 2) => x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
-export function newsBlocked(events: CalEvent[], desk: "gold" | "btc", now: number, minutes = 15) {
+export function newsBlocked(events: CalEvent[], desk: DeskId, now: number, minutes = 15) {
   return events.some((e) => e.impact === "high" && e.desks.includes(desk) && Math.abs(e.at - now) <= minutes * 60_000);
 }
 
 export async function evaluate(id: InstrumentId, opts: { bias?: "long" | "short" | null; calendar: CalEvent[]; filters?: AutopilotConfig["filters"]; settings?: { counter_trend_allowed?: boolean; advanced_models_allowed?: boolean; news_block_minutes?: number } }): Promise<Evaluation> {
   const def = INSTRUMENTS[id];
-  const [htf, poi, ltf] = await Promise.all([loadCandles(id, def.htf, 300), loadCandles(id, def.poi, 400), loadCandles(id, def.ltf, 300)]);
+  const [htf, poi, ltf] = await Promise.all([loadCandles(id, def.htf, 500), loadCandles(id, def.poi, 500), loadCandles(id, def.ltf, 300)]);
   const now = Date.now();
-  const allowed = opts.filters?.windows?.length ? ALL_WINDOWS.filter((w) => opts.filters!.windows!.includes(w.id)) : EDGE_WINDOWS;
+  const allowed = (opts.filters?.windows?.length ? opts.filters.windows : tradeWindows(id)).map((w) => WINDOWS_BY_ID.get(w)).filter((w): w is SessionWindow => !!w);
   const win = allowed.find((w) => isInWindow(now, w)) ?? null;
   const newsClear = !newsBlocked(opts.calendar, def.desk, now, opts.settings?.news_block_minutes ?? 15);
+  // Counter-trend pullbacks (Model G, grade A at most) only when both settings allow them.
+  const counterTrend = !!(opts.settings?.counter_trend_allowed && opts.settings?.advanced_models_allowed);
   const run = (side: "long" | "short") => {
-    const a = analyzeSetup(side, htf.candles, poi.candles, ltf.candles, { now, stopBuffer: def.stopBuffer });
+    const a = analyzeSetup(side, htf.candles, poi.candles, ltf.candles, { now, stopBuffer: def.stopBuffer, minRR: opts.filters?.minRR });
+    const against = !!a.htfTrend && a.htfTrend !== (side === "long" ? "up" : "down");
+    const model = counterTrend && against ? "G" as const : "A" as const;
+    const shifted = !!a.shift?.t || !!a.ltfShift;
     const gate = a.range ? evaluateGate({
       htfTrend: a.htfTrend, poiTfTrend: a.poiTrend, side, price: a.price, range: a.range,
       poi: { inside: !!a.inside, fresh: a.inside?.fresh ?? false, trendAligned: true, liquidityStory: a.inside?.liquidityStory ?? false, createdBos: a.inside?.createdBos ?? true },
-      swept: !!a.sweep, shifted: !!a.shift?.t,
+      swept: !!a.sweep, shifted, shiftDetail: shiftText(a),
       timing: { inWindow: !!win && !(def.fxHours && isFxWeekend(now)), newsClear, windowId: win?.id ?? null },
       plan: a.suggest ? { ...a.suggest, targetIsStructural: true, stopIsStructural: true } : undefined,
-      minStopPct: def.minStopPct, minRR: opts.filters?.minRR, model: "A", instrument: id === "XAUUSDT.P" ? "XAUUSD" : id,
+      minStopPct: def.minStopPct, minRR: opts.filters?.minRR, model, instrument: id === "XAUUSDT.P" ? "XAUUSD" : id,
+      modelChecks: model === "G" ? { fractal_shift: shifted } : undefined,
       conditions: { ranAway: a.after?.ranAway ?? false },
       config: { counterTrendAllowed: opts.settings?.counter_trend_allowed, advancedModelsAllowed: opts.settings?.advanced_models_allowed },
     }) : null;
@@ -79,7 +86,7 @@ function stateMessage(e: Evaluation, mode: Mode): string {
   const head = `${icon} <b>${escapeHtml(e.instrument)} · ${e.state}${e.gate ? ` · ${e.gate.grade.replace("_", " ")}` : ""}</b>`;
   const lines = [head];
   if (e.state === "ARMED" && p && e.gate) {
-    lines.push(`${e.side === "long" ? "Long" : "Short"} limit ${fmt(p.entry)} · SL ${fmt(p.stop)} · TP ${fmt(p.target)} (${escapeHtml(p.targetLabel)}) · ${fmt(e.gate.rr ?? 0)}R`);
+    lines.push(`${e.side === "long" ? "Long" : "Short"} limit ${fmt(p.entry)} · SL ${fmt(p.stop)} (${escapeHtml(p.stopAnchor)}) · TP ${fmt(p.target)} (${escapeHtml(p.targetLabel)}) · ${fmt(e.gate.rr ?? 0)}R`);
     lines.push(`Model A · ${e.window === "london_q" ? "London Q" : e.window === "ny_q" ? "NY Q" : "—"} · ${mode === "paper" ? "paper" : mode === "alerts" ? "alert only" : "confirm in app"}`);
   } else if (e.state === "SHIFTED" && a.shift) {
     lines.push(`5M body close ${fmt(a.shift.close ?? 0)} through ${fmt(a.shift.level)}${e.gate?.waitingFor.length ? ` · waiting: ${escapeHtml(e.gate.waitingFor.slice(0, 2).join(", "))}` : ""}`);
@@ -116,7 +123,7 @@ async function passContext(db: SupabaseClient) {
     }
     return memo.get(k)!;
   };
-  return { configs: (cfgRes.data ?? []) as AutopilotConfig[], settings, chats, evalFor };
+  return { configs: (cfgRes.data ?? []) as AutopilotConfig[], settings, chats, evalFor, calendar: calendar.items };
 }
 
 /** Score the selector board without acting: no signals, orders, Telegram or log rows. */
@@ -128,8 +135,9 @@ export async function previewSelector(db: SupabaseClient): Promise<SelectorOutco
 
 /** One autopilot pass over every enabled instrument. Idempotent: only state changes act. */
 export async function tick(db: SupabaseClient): Promise<{ results: { instrument: string; state: string; action: string }[]; selector: SelectorOutcome | null }> {
-  const { configs, settings, chats, evalFor } = await passContext(db);
+  const { configs, settings, chats, evalFor, calendar } = await passContext(db);
   const out: { instrument: string; state: string; action: string }[] = [];
+  await storeReleases(db, calendar).catch(() => undefined);
 
   for (const cfg of configs) {
     if (cfg.mode === "off") {
@@ -158,23 +166,8 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       if (changed) {
         const allowA = cfg.filters?.allowGradeA === true;
         const tradeable = e.state === "ARMED" || (allowA && e.gate?.grade === "A" && !e.gate.blockers.length && e.gate.boxes.every((b) => b.status === "pass" || b.status === "warn"));
-        let signalId: string | null = null;
-        // Every tradeable setup goes into the bot ledger (its outcome is tracked on candles);
-        // orders are only queued in the modes that trade, and never under the kill switch.
-        if (tradeable && e.analysis.suggest && e.gate) {
-          const p = e.analysis.suggest;
-          const sig = await db.from("signals").insert({
-            instrument: cfg.instrument, side: e.side, model: "A", session_window: e.window, entry: p.entry, stop: p.stop, target: p.target,
-            rr: e.gate.rr, grade: e.gate.grade, gate: e.gate.boxes, state: "ARMED", edge_version: "3.0", source: "autopilot",
-            outcome: "pending", meta: { mode: cfg.mode, targetLabel: p.targetLabel, dataSource: e.source, killSwitch: !!settings?.kill_switch },
-          }).select("id").single();
-          if (sig.error) throw new Error(sig.error.message);
-          signalId = sig.data.id as string;
-          action = "signal logged";
-          if (cfg.mode === "paper" || cfg.mode === "confirm" || cfg.mode === "auto") {
-            action = settings?.kill_switch ? "signal logged · kill switch: no orders" : await queue(db, cfg, e, signalId);
-          }
-        }
+        // Signals and paper orders come from the model ledger below; this block keeps the state log and alerts.
+        const signalId: string | null = null;
         if (cfg.events.includes(e.state) || (tradeable && cfg.events.includes("ARMED"))) {
           await sendTelegram(db, { text: stateMessage(e, cfg.mode), chats, kind: e.state, instrument: cfg.instrument, signalId, source: "autopilot" });
           if (action === "none") action = "alert";
@@ -184,8 +177,20 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
           detail: { plan: planKey, source: e.source, window: e.window, newsClear: e.newsClear, waitingFor: e.gate?.waitingFor ?? [], blockers: e.gate?.blockers ?? [], suggest: e.analysis.suggest },
         });
       }
+      // Every entry model and session strategy: logged once per setup, paper orders for the ones the gate would trade.
+      let ledger = "";
+      try {
+        const l = await modelLedger(db, cfg, { calendar, settings });
+        let orders = 0;
+        if (l.tradeable.length && (cfg.mode === "paper" || cfg.mode === "confirm" || cfg.mode === "auto") && !settings?.kill_switch) {
+          for (const t of l.tradeable) { const q = await queue(db, cfg, t.side, t.plan, t.signalId); if (/^\d+ /.test(q)) orders += Number(q.split(" ")[0]); }
+        }
+        if (l.logged) ledger = `logged ${l.logged} (${l.note})${orders ? ` · ${orders} paper orders` : ""}`;
+      } catch (err) {
+        ledger = `ledger error: ${(err as Error).message}`;
+      }
       const paper = await managePaper(db, cfg, e.ltf, chats);
-      out.push({ instrument: cfg.instrument, state: e.state, action: [action, paper].filter((x) => x && x !== "none").join(" · ") || "none" });
+      out.push({ instrument: cfg.instrument, state: e.state, action: [action, ledger, paper].filter((x) => x && x !== "none").join(" · ") || "none" });
     } catch (err) {
       await db.from("autopilot_runs").insert({ instrument: cfg.instrument, state: "ERROR", action: "error", detail: { error: (err as Error).message } });
       out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message });
@@ -217,9 +222,9 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
  * (fill, ran away, expired, then stop or target), independent of any account.
  */
 async function trackSignals(db: SupabaseClient): Promise<number> {
-  const open = await db.from("signals").select("id, instrument, side, entry, stop, target, created_at, outcome")
+  const open = await db.from("signals").select("id, instrument, side, entry, stop, target, created_at, outcome, entry_type:meta->>entryType")
     .in("source", ["autopilot", "selector"]).in("outcome", ["pending", "filled"])
-    .gte("created_at", new Date(Date.now() - 7 * 86_400_000).toISOString()).limit(200);
+    .gte("created_at", new Date(Date.now() - 7 * 86_400_000).toISOString()).order("created_at").limit(1000);
   if (open.error) throw new Error(open.error.message);
   let updated = 0;
   const byInst = new Map<InstrumentId, typeof open.data>();
@@ -232,9 +237,9 @@ async function trackSignals(db: SupabaseClient): Promise<number> {
     const tfMs = TF_MS[def.ltf];
     const oldest = Math.min(...list.map((s) => Date.parse(s.created_at)));
     let candles = (await loadCandles(id, def.ltf, 300)).candles;
-    if (!candles.length || candles[0]!.t > oldest - tfMs) candles = (await loadHistory(id, def.ltf, oldest - tfMs, Date.now())).candles;
+    if (!candles.length || candles[0]!.t > oldest - tfMs) candles = (await loadHistory(id, def.ltf, oldest - tfMs, Date.now(), { allowMetered: true })).candles;
     for (const s of list) {
-      const plan = { side: s.side as "long" | "short", entry: Number(s.entry), stop: Number(s.stop), target: Number(s.target), createdAt: Date.parse(s.created_at) };
+      const plan = { side: s.side as "long" | "short", entry: Number(s.entry), stop: Number(s.stop), target: Number(s.target), createdAt: Date.parse(s.created_at), market: s.entry_type === "market" };
       const r = resolveSignal(plan, candles, tfMs);
       if (r.outcome === s.outcome) continue;
       const cost = r.resultR !== null ? costInR(def, plan.entry, plan.stop) : 0;
@@ -252,16 +257,15 @@ async function trackSignals(db: SupabaseClient): Promise<number> {
   return updated;
 }
 
-async function queue(db: SupabaseClient, cfg: AutopilotConfig, e: Evaluation, signalId: string): Promise<string> {
+async function queue(db: SupabaseClient, cfg: AutopilotConfig, side: "long" | "short", p: { entry: number; stop: number; target: number }, signalId: string): Promise<string> {
   if (!cfg.account_ids.length) return "signal only (no accounts assigned)";
   const def = INSTRUMENTS[cfg.instrument];
-  const p = e.analysis.suggest!;
   const acc = await db.from("trading_accounts").select("id, name, balance, equity, risk_pct, active").in("id", cfg.account_ids);
   const rows = (acc.data ?? []).filter((a) => a.active).map((a) => {
     const s = sizePosition(def, { balance: Number(a.equity) || Number(a.balance), riskPct: Number(cfg.risk_pct) || Number(a.risk_pct), entry: p.entry, stop: p.stop });
     const action = s.belowMinimum ? "BLOCK" : cfg.mode === "paper" ? "PAPER" : "CONFIRM";
     return {
-      signal_id: signalId, account_id: a.id, client_order_id: clientOrderId(signalId, a.id), action, side: e.side, qty: s.size,
+      signal_id: signalId, account_id: a.id, client_order_id: clientOrderId(signalId, a.id), action, side, qty: s.size,
       entry: p.entry, stop: p.stop, target: p.target, risk_amount: s.riskAmount,
       reasons: s.belowMinimum ? ["below minimum size after rounding"] : cfg.mode === "auto" ? ["live adapters pending — confirm manually"] : [],
       status: action === "BLOCK" ? "blocked" : action === "PAPER" ? "queued" : "awaiting_confirm",
@@ -278,13 +282,15 @@ async function managePaper(db: SupabaseClient, cfg: AutopilotConfig, ltf: Candle
   const def = INSTRUMENTS[cfg.instrument];
   const tfMs = TF_MS[def.ltf];
   const notes: string[] = [];
-  const pend = await db.from("orders").select("*, signals!inner(instrument, model, session_window, rr, grade, source)").eq("action", "PAPER").eq("status", "queued").eq("signals.instrument", cfg.instrument);
+  const pend = await db.from("orders").select("*, signals!inner(instrument, model, session_window, rr, grade, source, created_at, meta)").eq("action", "PAPER").eq("status", "queued").eq("signals.instrument", cfg.instrument);
   const filledSignals = new Set<string>();
   for (const o of pend.data ?? []) {
-    const created = Date.parse(o.created_at);
+    // Orders work from the signal's bar close; market entries (model E, session strategies) fill there.
+    const created = Date.parse(o.signals.created_at ?? o.created_at);
     const bars = ltf.filter((c) => c.t + tfMs > created);
     const long = o.side === "long";
-    const fillBar = bars.find((c) => (long ? c.l <= o.entry : c.h >= o.entry));
+    const market = (o.signals.meta as { entryType?: string } | null)?.entryType === "market";
+    const fillBar = market ? { t: created } : bars.find((c) => (long ? c.l <= o.entry : c.h >= o.entry));
     const ranAway = bars.find((c) => (long ? c.h >= o.target : c.l <= o.target));
     if (fillBar && (!ranAway || fillBar.t <= ranAway.t)) {
       const upd = await db.from("orders").update({ status: "filled", fill_price: o.entry, filled_at: new Date(Math.max(fillBar.t, created)).toISOString() }).eq("id", o.id).eq("status", "queued").select("id");

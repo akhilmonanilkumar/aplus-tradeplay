@@ -6,7 +6,7 @@
 
 1. TradingView → Pine Editor → paste the file → **Add to chart**.
 2. Open a **5-minute** chart of the instrument (e.g. `OANDA:XAUUSD`, `BINANCE:XAUUSDT.P`, `BINANCE:BTCUSDT.P`, `COINBASE:BTCUSD`).
-3. Settings → **Preset** = the matching instrument (sets stop buffer, minimum stop and round-trip cost as in the app). HTF is 1H for gold and 4H for BTC on *Auto*.
+3. Settings → **Preset** = the matching instrument (sets the spread buffer and round-trip cost as in the app). HTF is 1H for gold and 4H for BTC on *Auto*.
 4. Read results in the **Strategy Tester** (money, sized at *Risk per trade* % of equity) and in the on-chart table (R after the preset's cost, plus why the gate rejected setups).
 5. Use Deep Backtesting (premium plans) for more history on 5M; bar magnifier is on where your plan allows it.
 
@@ -14,11 +14,12 @@ Leave *Commission* at 0 in Properties: the table already subtracts the preset's 
 
 ## What it reproduces
 
-- **Structure:** body-close BOS/CHoCH through the last confirmed (3,3) swing; HTF dealing range = origin of the latest break → extreme since; trend = direction of the latest break. HTF and 15M use closed bars only (no repainting).
+- **Structure:** read like LuxAlgo Smart Money Concepts. Swing points come from legs (a bar whose high is above the next `size` highs starts a bearish leg and marks a swing high; lows mirror it), a close crossing the current swing high / low once is a BOS or CHoCH and sets the bias, and premium/discount is the trailing swing top / bottom. The HTF and 15M trend and the dealing range use the swing structure (50); until the window holds a swing break, a protected-level structure on (3,3) swings stands in. Order blocks are qualified by internal (3,3) breaks. HTF and 15M use closed bars only (no repainting).
 - **Liquidity:** previous-day high/low with the day rolling at 17:00 New York, the Asia range (20:00–24:00 NY), 15M equal highs/lows (within 0.1 ATR), recent 5M (3,3) swings.
 - **Sweep:** wick through a level and close back. **Shift:** first 5M body close beyond the last (2,2) swing that formed before the sweep, within the sweep lookback.
 - **POI (box 3):** the two most recent 15M order blocks per side that left an imbalance and are untouched or first tapped within the last 12 bars; touched by price, the sweep candle or the last six bars. A block that swept liquidity when it formed passes; one that did not is a soft miss (grade A).
 - **Gate:** HTF and 15M aligned with the trade (box 1), entry in the correct half with a ±5 % no-trade band around equilibrium (box 2), POI (box 3), sweep and shift (boxes 4–5), London Q 02–05 / NY Q 07–10 NY (box 6), stop on the right side, minimum stop % and R:R ≥ 3 to the nearest real level beyond ¼R (box 7). A+ takes; grade A only when enabled.
+- **Stop:** beyond the furthest of the sweep wick, the 5M order block the entry sits on and the 15M POI being traded, plus a buffer of 0.2 × ATR(14) of the entry timeframe (never less than the preset spread buffer). No minimum stop %.
 - **Execution:** limit order at the shift bar close, cancelled if price reaches the target first (ran away), after 12 bars, or when the window closes; stop and target attached; max 2 trades and stop after 2 losses per New York day; one order at a time; optional break-even.
 
 ## Entry models

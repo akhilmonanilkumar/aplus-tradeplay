@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  DEFAULT_STRATEGY, DESKS, INSTRUMENTS, TF_MS, breakdown, breakevenWinRate, skippedImpact,
+  DEFAULT_STRATEGY, DESKS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, modelName, tradeWindows, breakdown, breakevenWinRate, skippedImpact, usHighImpactTimes,
   type BacktestResult, type BacktestTrade, type DeskId, type InstrumentId, type StrategyParams,
 } from "@aplus/engine";
 import { supabase } from "@/lib/supabase";
@@ -18,11 +18,13 @@ const WINDOWS = [
   { id: "ny_q", l: "NY Q 07–10 ET" },
   { id: "asia_q", l: "Asia 20–24 ET" },
   { id: "london_close", l: "London close 10–12 ET" },
+  { id: "india_q", l: "India Q 09:15–12:15 IST" },
 ];
+const DESK_IDS: DeskId[] = ["gold", "btc", "fx", "indices"];
 const DAYS = [{ v: "14", l: "14d" }, { v: "30", l: "30d" }, { v: "60", l: "60d" }, { v: "90", l: "90d" }] as const;
 
 /** Warm-up before the test window so structure exists on the first bar. */
-const WARM: Record<string, number> = { "1h": 15 * 86_400_000, "4h": 60 * 86_400_000, "15m": 5 * 86_400_000, "5m": 2 * 86_400_000 };
+const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 
 function Breakdown({ title, rows }: { title: string; rows: { key: string; stats: BacktestResult["stats"] }[] }) {
   return (
@@ -46,7 +48,7 @@ function Breakdown({ title, rows }: { title: string; rows: { key: string; stats:
 
 export default function Lab() {
   const params = useParams<{ desk: string }>();
-  const deskId: DeskId = params.desk === "btc" ? "btc" : "gold";
+  const deskId: DeskId = DESK_IDS.find((d) => d === params.desk) ?? "gold";
   const desk = DESKS[deskId];
   const [inst, setInst] = useState<InstrumentId>(desk.primary);
   const [days, setDays] = useState<(typeof DAYS)[number]["v"]>("30");
@@ -55,7 +57,7 @@ export default function Lab() {
   const [stratId, setStratId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [res, setRes] = useState<(BacktestResult & { source: string; approx: boolean; ms: number }) | null>(null);
+  const [res, setRes] = useState<(BacktestResult & { source: string; approx: boolean; ms: number; bars: number; partial: string | null }) | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const worker = useRef<Worker | null>(null);
 
@@ -63,6 +65,8 @@ export default function Lab() {
   // Saved lab runs always carry a strategy; strategy-less rows are the selector's daily edge measurements.
   const runs = useRows<BacktestRow>({ table: "backtests", select: "id,strategy_id,instrument,from_ts,to_ts,params,stats,summary,source,created_at", notNull: "strategy_id", order: "created_at", limit: 30 });
   useEffect(() => { setInst(desk.primary); setRes(null); setStratId(null); }, [deskId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Each market trades its own windows (the Nifty trades India Q).
+  useEffect(() => { setP((x) => ({ ...x, windows: tradeWindows(inst) })); }, [inst]);
   useEffect(() => () => worker.current?.terminate(), []);
 
   const def = INSTRUMENTS[inst];
@@ -70,15 +74,19 @@ export default function Lab() {
 
   const run = async () => {
     setError(null); setRes(null); setSaved(null);
-    const to = Date.now();
+    // The window ends on the last whole hour, so reruns within the hour replay the same bars.
+    const to = Math.floor(Date.now() / 3_600_000) * 3_600_000;
     const from = to - Number(days) * 86_400_000;
     try {
-      setStatus(`Loading ${def.htf} / ${def.poi} / ${def.ltf} history…`);
-      const [htf, poi, ltf] = await Promise.all([
-        fetchHistory(inst, def.htf, from - WARM[def.htf]!, to),
-        fetchHistory(inst, def.poi, from - WARM[def.poi]!, to),
-        fetchHistory(inst, def.ltf, from - WARM[def.ltf]!, to),
+      // The entry frame picks the feed; structure and POI frames are pinned to it, so one run never mixes sources.
+      setStatus(`Loading ${def.ltf} history…`);
+      const ltf = await fetchHistory(inst, def.ltf, from - WARM[def.ltf]!, to);
+      setStatus(`Loading ${def.htf} / ${def.poi} history from ${ltf.source}…`);
+      const [htf, poi] = await Promise.all([
+        fetchHistory(inst, def.htf, from - WARM[def.htf]!, to, ltf.source),
+        fetchHistory(inst, def.poi, from - WARM[def.poi]!, to, ltf.source),
       ]);
+      const notes = [ltf, htf, poi].map((x) => x.note).filter((x): x is string => !!x && x.startsWith("Partial"));
       setStatus(`Replaying ${ltf.candles.length.toLocaleString()} ${def.ltf} bars…`);
       worker.current?.terminate();
       const w = new Worker(new URL("../../../workers/backtest.worker.ts", import.meta.url), { type: "module" });
@@ -86,11 +94,12 @@ export default function Lab() {
       w.onmessage = (e: MessageEvent<{ ok: boolean; result?: BacktestResult; error?: string; ms?: number }>) => {
         setStatus(null);
         if (!e.data.ok || !e.data.result) return setError(e.data.error ?? "Backtest failed");
-        setRes({ ...e.data.result, source: ltf.source, approx: ltf.approx, ms: e.data.ms ?? 0 });
+        setRes({ ...e.data.result, source: ltf.source, approx: ltf.approx, ms: e.data.ms ?? 0, bars: ltf.candles.length, partial: notes[0] ?? null });
         w.terminate();
       };
       w.onerror = (e) => { setStatus(null); setError(e.message || "Worker error"); };
-      w.postMessage({ instrument: inst, data: { htf: htf.candles, poi: poi.candles, ltf: ltf.candles }, params: p });
+      // NFP and FOMC times stand in for the historical calendar (box 6 news filter, model I).
+      w.postMessage({ instrument: inst, data: { htf: htf.candles, poi: poi.candles, ltf: ltf.candles, news: usHighImpactTimes(from - 7 * 86_400_000, to) }, params: p });
     } catch (e) {
       setStatus(null);
       setError((e as Error).message);
@@ -169,15 +178,23 @@ export default function Lab() {
             <div className="between"><span style={{ fontSize: 12.5 }}>Take grade A (one soft miss)</span><Toggle on={p.allowGradeA} onChange={(v) => set("allowGradeA", v)} label="Allow grade A" /></div>
             <div className="between"><span style={{ fontSize: 12.5 }}>Require price in a 15M POI</span><Toggle on={p.requirePoi} onChange={(v) => set("requirePoi", v)} label="Require POI" /></div>
             <div className="between"><span style={{ fontSize: 12.5 }}>Require the correct half (premium / discount)</span><Toggle on={p.requireCorrectHalf} onChange={(v) => set("requireCorrectHalf", v)} label="Require correct half" /></div>
-            <div className="between"><span style={{ fontSize: 12.5 }}>Require 15M to agree with the HTF</span><Toggle on={p.requireAlignment} onChange={(v) => set("requireAlignment", v)} label="Require 15M alignment" /></div>
+            <div className="between"><span style={{ fontSize: 12.5 }}>Trade only with the HTF trend (no counter-trend)</span><Toggle on={p.requireHtfTrend} onChange={(v) => set("requireHtfTrend", v)} label="Require HTF trend" /></div>
+            <div className="between"><span style={{ fontSize: 12.5, opacity: p.requireHtfTrend ? 1 : 0.5 }}>…and the 15M trend must agree with the HTF</span><Toggle on={p.requireHtfTrend && p.requireAlignment} onChange={(v) => set("requireAlignment", v)} label="Require 15M alignment" /></div>
+            <div className="lbl-u">Entry models</div>
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              {MODEL_IDS.map((m) => <button key={m} type="button" title={ENTRY_MODELS[m].name} className={`chip ${p.models.includes(m) ? "acc" : ""}`} onClick={() => set("models", p.models.includes(m) ? p.models.filter((x) => x !== m) : [...p.models, m])}>{ENTRY_MODELS[m].short}</button>)}
+            </div>
+            <div className="between"><span style={{ fontSize: 12.5 }}>Let advanced, counter-trend and aggressive models through</span><Toggle on={p.allowAllModels} onChange={(v) => set("allowAllModels", v)} label="Allow all models" /></div>
+            <div className="between"><span className="lbl">Stop</span><Seg label="Stop" value={p.stopMode} onChange={(v) => set("stopMode", v)} options={[{ v: "structural", l: "Furthest anchor" }, { v: "zone", l: "Beyond entry zone" }]} /></div>
+            <div className="between"><span className="lbl">Target</span><Seg label="Target" value={p.targetMode} onChange={(v) => set("targetMode", v)} options={[{ v: "first_ge_min", l: "First ≥ min R" }, { v: "nearest", l: "Nearest real" }]} /></div>
             <div className="between"><span className="lbl">Entry</span><Seg label="Entry" value={p.entryMode} onChange={(v) => set("entryMode", v)} options={[{ v: "zone", l: "Limit at zone" }, { v: "shift_close", l: "Shift close" }]} /></div>
             <div className="between"><span className="lbl">History</span><Seg label="Days" value={days} onChange={setDays} options={DAYS} /></div>
-            <button className="btn pri block" onClick={run} disabled={!!status || !p.windows.length}>{status ? "Running…" : "Run backtest"}</button>
+            <button className="btn pri block" onClick={run} disabled={!!status || !p.windows.length || !p.models.length}>{status ? "Running…" : "Run backtest"}</button>
             {status && <p className="faint" style={{ fontSize: 12 }}>{status}</p>}
             <div className="row">
               <button className="btn sm" onClick={() => saveStrategy(false)}>Save</button>
               <button className="btn sm" onClick={() => saveStrategy(true)}>Save as new</button>
-              <button className="btn sm" onClick={toAutopilot}>Use for autopilot</button>
+              {!def.research && <button className="btn sm" onClick={toAutopilot}>Use for autopilot</button>}
             </div>
           </div>
         </Card>
@@ -189,14 +206,15 @@ export default function Lab() {
             </Card>
           ) : (
             <>
-              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. Add an OANDA or Twelve Data key for broker-grade XAU/USD.</Note>}
+              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. An OANDA key gives broker-grade XAU/USD history (Twelve Data&apos;s free quota is too small for repeatable long backtests).</Note>}
+              {res.partial && <Note tone="warn">{res.partial}. Results cover less than the chosen period.</Note>}
               <div className="g12">
                 <Kpi span={3} label={`Trades · ${days}d`} value={s!.n} foot={<span className="faint">{res.signals} signals · {res.cancelled.ranAway} ran away · {res.cancelled.expired + res.cancelled.windowClosed} expired</span>} />
                 <Kpi span={3} label="Win rate" value={pct(s!.winRate, 1)} tone={s!.winRate >= be ? "up" : "down"} foot={<span className="faint">break-even {pct(be, 1)} incl. costs</span>} />
                 <Kpi span={3} label="Expectancy (net)" value={fmtR(s!.avgR)} tone={s!.avgR >= 0 ? "up" : "down"} foot={<span className="faint">gross {fmtR(res.grossStats.avgR)} · PF {s!.profitFactor !== null ? num(s!.profitFactor, 2) : "—"}</span>} />
                 <Kpi span={3} label="Net R · return" value={fmtR(s!.netR, 1)} tone={s!.netR >= 0 ? "up" : "down"} foot={<span className="faint">{res.returnPct >= 0 ? "+" : ""}{res.returnPct.toFixed(1)}% at {p.riskPct}% · max DD {res.maxDrawdownPct.toFixed(1)}%</span>} />
               </div>
-              <Card title="Equity in R (net of costs)" right={<><Chip>{res.source}</Chip><Chip>{(res.ms / 1000).toFixed(1)} s</Chip><button className="btn sm pri" onClick={saveRun}>Save run</button></>}>
+              <Card title="Equity in R (net of costs)" right={<><Chip>{res.source}</Chip><Chip>{res.bars.toLocaleString()} bars to {new Date(res.to + TF_MS[def.ltf]).toISOString().slice(0, 16).replace("T", " ")} UTC</Chip><Chip>{(res.ms / 1000).toFixed(1)} s</Chip><button className="btn sm pri" onClick={saveRun}>Save run</button></>}>
                 <Spark values={curve} height={180} empty="No closed trades in this window" />
                 <div className="row faint mono" style={{ fontSize: 11.5, marginTop: 6, gap: 14 }}>
                   <span>max DD {num(s!.maxDrawdownR, 1)}R</span><span>longest losing streak {s!.longestLosingStreak}</span><span>avg win {fmtR(s!.avgWin)}</span><span>Sharpe/trade {s!.sharpePerTrade !== null ? num(s!.sharpePerTrade, 2) : "—"}</span>
@@ -225,6 +243,9 @@ export default function Lab() {
             <Breakdown title="By weekday" rows={by((t) => t.weekday)} />
             <Breakdown title="By NY hour" rows={by((t) => `${String(t.hourNy).padStart(2, "0")}:00`)} />
             <Breakdown title="By target" rows={by((t) => t.targetLabel)} />
+            <Breakdown title="By model" rows={by((t) => modelName(t.model ?? "A"))} />
+            <Breakdown title="By stop anchor" rows={by((t) => (t.stopAnchor ?? "—").replace(/sweep of .*/, "sweep wick"))} />
+            <Breakdown title="Losers: best excursion first" rows={by((t) => (t.outcome !== "loss" ? "not a loser" : (t.mfeR ?? 0) >= 1 ? "reached +1R, then stopped" : (t.mfeR ?? 0) >= 0.5 ? "reached +0.5R" : (t.mfeR ?? 0) < 0.3 ? "never went 0.3R in favour" : "0.3–0.5R"))} />
           </div>
           {impact.length > 0 && (
             <Card title="Skipped setups · what they would have done" right={<Chip>same fill rules, no caps</Chip>}>
