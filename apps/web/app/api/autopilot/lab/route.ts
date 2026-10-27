@@ -1,5 +1,6 @@
 import { isInstrument } from "@aplus/engine";
 import { hasSecret, hasVaultSecret, staffFromRequest } from "@/lib/server/auth";
+import { basisResearch } from "@/lib/server/basisResearch";
 import { errMsg } from "@/lib/server/http";
 import { strategyLab, structureReport, type Family } from "@/lib/server/strategyLab";
 
@@ -15,6 +16,10 @@ export async function GET(req: Request) {
   if (!ok) return Response.json({ error: "forbidden" }, { status: 403 });
   const q = new URL(req.url).searchParams;
   const i = q.get("i"), family = q.get("family") as Family | null;
+  if (family === ("basis" as Family)) {
+    const symbols = (q.get("symbols") || "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT").split(",").filter((s) => /^[A-Z0-9]{3,20}$/.test(s)).slice(0, 12);
+    try { return Response.json(await basisResearch(symbols)); } catch (e) { return Response.json({ error: errMsg(e) }, { status: 500 }); }
+  }
   if (!i || !isInstrument(i)) return Response.json({ error: "unknown instrument" }, { status: 400 });
   if (family === ("structure" as Family)) {
     try { return Response.json(await structureReport(i)); } catch (e) { return Response.json({ error: errMsg(e) }, { status: 500 }); }
