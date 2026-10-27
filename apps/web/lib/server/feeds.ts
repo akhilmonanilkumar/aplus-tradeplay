@@ -132,7 +132,17 @@ function twelveData(symbol: string): Provider["load"] {
     await slot("twelvedata");
     const q = new URLSearchParams({ symbol, interval: TD_TF[tf], outputsize: String(Math.min(5000, r.limit)), timezone: "UTC", order: "ASC", apikey: env("TWELVEDATA_API_KEY") });
     if (r.endTime) q.set("end_date", new Date(r.endTime).toISOString().slice(0, 19).replace("T", " "));
-    const j = await getJson<{ status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string }[] }>(`https://api.twelvedata.com/time_series?${q}`);
+    type Res = { status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string }[] };
+    // The per-minute quota is shared with other server instances: on a 429, wait for the next minute and retry.
+    let j: Res | null = null;
+    for (let attempt = 0; !j; attempt++) {
+      try {
+        j = await getJson<Res>(`https://api.twelvedata.com/time_series?${q}`);
+      } catch (e) {
+        if (attempt >= 2 || !/429/.test(errMsg(e))) throw e;
+        await new Promise((res) => setTimeout(res, 61_000));
+      }
+    }
     if (j.status !== "ok" || !j.values) throw new Error(`twelvedata: ${j.message ?? j.status}`);
     return j.values.map((x) => ({ t: Date.parse(`${x.datetime.replace(" ", "T")}Z`), o: num(x.open), h: num(x.high), l: num(x.low), c: num(x.close) }));
   };
