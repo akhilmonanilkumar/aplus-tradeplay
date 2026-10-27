@@ -134,13 +134,19 @@ export async function previewSelector(db: SupabaseClient): Promise<SelectorOutco
   return runSelector(db, { config: { ...cfg, enabled: true }, evalFor: (id) => evalFor(id), chats, killSwitch: true, dryRun: true });
 }
 
+/** Per-market and tail-job budgets inside the 300 s function limit. */
+const MARKET_MS = 150_000;
+const TAIL_MS = 90_000;
+const within = <T,>(p: Promise<T>, ms: number, label: string) =>
+  Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms / 1000}s`)), ms))]);
+
 /** One autopilot pass over every enabled instrument. Idempotent: only state changes act. */
 export async function tick(db: SupabaseClient): Promise<{ results: { instrument: string; state: string; action: string }[]; selector: SelectorOutcome | null }> {
   const { configs, settings, chats, evalFor, calendar } = await passContext(db);
   const out: { instrument: string; state: string; action: string }[] = [];
   await storeReleases(db, calendar).catch(() => undefined);
 
-  for (const cfg of configs) {
+  const pass = async (cfg: (typeof configs)[number]) => {
     if (cfg.mode === "off") {
       // Still fill and close manual paper orders from the desks.
       try {
@@ -154,7 +160,7 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       } catch (err) {
         out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message });
       }
-      continue;
+      return;
     }
     try {
       const e = await evalFor(cfg.instrument, cfg.filters);
@@ -196,33 +202,32 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       await db.from("autopilot_runs").insert({ instrument: cfg.instrument, state: "ERROR", action: "error", detail: { error: (err as Error).message } });
       out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message });
     }
-  }
+   };
+  // Markets run side by side, each with its own deadline, so one slow or metered feed cannot stall the pass.
+  await Promise.all(configs.map((cfg) => within(pass(cfg), MARKET_MS, cfg.instrument).catch((err) => { out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message }); })));
 
   const sel = selectorConfig(settings?.integrations?.selector);
   let selector: SelectorOutcome | null = null;
-  if (sel.enabled && sel.universe.length) {
-    try {
-      selector = await runSelector(db, { config: sel, evalFor: (id) => evalFor(id), chats, killSwitch: !!settings?.kill_switch });
-    } catch (err) {
-      await db.from("autopilot_runs").insert({ instrument: "SELECTOR", state: "ERROR", action: "error", detail: { error: (err as Error).message } });
-      out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
-    }
-  }
-
-  // Funding basis trade (paper): accrue settlements, exit on negative funding, enter on positive carry.
-  try {
-    const b = await basisTick(db);
-    if (b) out.push({ instrument: "BASIS", state: "PAPER", action: b });
-  } catch (err) {
-    out.push({ instrument: "BASIS", state: "ERROR", action: (err as Error).message });
-  }
-
-  try {
-    const n = await trackSignals(db);
-    if (n) out.push({ instrument: "LEDGER", state: "TRACKED", action: `${n} signal outcome${n === 1 ? "" : "s"} updated` });
-  } catch (err) {
-    out.push({ instrument: "LEDGER", state: "ERROR", action: (err as Error).message });
-  }
+  await Promise.all([
+    (async () => {
+      if (!sel.enabled || !sel.universe.length) return;
+      try {
+        selector = await within(runSelector(db, { config: sel, evalFor: (id) => evalFor(id), chats, killSwitch: !!settings?.kill_switch }), TAIL_MS, "selector");
+      } catch (err) {
+        await db.from("autopilot_runs").insert({ instrument: "SELECTOR", state: "ERROR", action: "error", detail: { error: (err as Error).message } });
+        out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
+      }
+    })(),
+    // Funding basis trade (paper): accrue settlements, exit on negative funding, enter on positive carry.
+    within(basisTick(db), TAIL_MS, "basis").then(
+      (b) => { if (b) out.push({ instrument: "BASIS", state: "PAPER", action: b }); },
+      (err) => { out.push({ instrument: "BASIS", state: "ERROR", action: (err as Error).message }); },
+    ),
+    within(trackSignals(db), TAIL_MS, "ledger").then(
+      (n) => { if (n) out.push({ instrument: "LEDGER", state: "TRACKED", action: `${n} signal outcome${n === 1 ? "" : "s"} updated` }); },
+      (err) => { out.push({ instrument: "LEDGER", state: "ERROR", action: (err as Error).message }); },
+    ),
+  ]);
   return { results: out, selector };
 }
 
