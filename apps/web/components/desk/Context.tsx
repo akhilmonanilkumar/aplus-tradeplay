@@ -1,6 +1,6 @@
 "use client";
 
-import { ALL_WINDOWS, OI_REGIME_TEXT, sessionStats, windowOnDateOf, type Candle, type OiRegime } from "@aplus/engine";
+import { ALL_WINDOWS, OI_REGIME_TEXT, type DeskId, sessionStats, windowOnDateOf, type Candle, type OiRegime } from "@aplus/engine";
 import type { Derivs } from "@/lib/server/derivs";
 import type { Macro } from "@/lib/server/macro";
 import type { CalEvent, Headline } from "@/lib/server/news";
@@ -208,7 +208,7 @@ export function NewsCard({ items, error, ai, onAi, busy, span = 6 }: { items: He
   );
 }
 
-export function CalendarCard({ events, error, desk, blockMinutes, now, span = 6 }: { events: CalEvent[] | null; error: string | null; desk: "gold" | "btc"; blockMinutes: number; now: number; span?: 4 | 6 | 12 }) {
+export function CalendarCard({ events, error, desk, blockMinutes, now, span = 6 }: { events: CalEvent[] | null; error: string | null; desk: DeskId; blockMinutes: number; now: number; span?: 4 | 6 | 12 }) {
   const list = (events ?? []).filter((e) => e.desks.includes(desk) && (e.impact === "high" || e.impact === "medium") && e.at > now - 6 * 3_600_000).slice(0, 14);
   const blocked = list.find((e) => e.impact === "high" && Math.abs(e.at - now) <= blockMinutes * 60_000);
   return (

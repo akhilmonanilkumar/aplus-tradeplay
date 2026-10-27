@@ -416,7 +416,7 @@ export interface Quote { bid: number | null; ask: number | null; last: number; m
 export async function loadQuote(id: InstrumentId): Promise<Quote> {
   return cached(`q:${id}`, 1500, async () => {
     const errors: string[] = [];
-    for (const q of QUOTES[id] ?? []) {
+    for (const q of QUOTES[id]) {
       if (q.enabled && !q.enabled()) continue;
       try { return await q.load(); } catch (e) { errors.push(`${q.name}: ${errMsg(e)}`); }
     }
@@ -437,6 +437,30 @@ const binanceFutQuote = (symbol: string, name: string): QuoteProvider => ({
   },
 });
 
+/** Swissquote's public best bid/offer across its spread profiles (keyless). */
+const swissquote = (base: string, quote: string): QuoteProvider => ({
+  name: `Swissquote ${base}/${quote}`,
+  load: async () => {
+    const j = await getJson<{ ts: number; spreadProfilePrices: { spreadProfile: string; bid: number; ask: number }[] }[]>(
+      `https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${base}/${quote}`,
+    );
+    const best = j.flatMap((x) => x.spreadProfilePrices.map((p) => ({ ...p, ts: x.ts }))).sort((a, b) => a.ask - a.bid - (b.ask - b.bid))[0];
+    if (!best) throw new Error("no prices");
+    return { bid: best.bid, ask: best.ask, last: (best.bid + best.ask) / 2, ts: best.ts, source: `Swissquote ${base}/${quote}`, approx: false };
+  },
+});
+
+/** Last 1M bar of the NSE session from Upstox (no keyless tick feed for the index). */
+const upstoxQuote = (key: string, name: string): QuoteProvider => ({
+  name,
+  load: async () => {
+    const j = await getJson<{ data: { candles: (string | number)[][] } }>(`https://api.upstox.com/v3/historical-candle/intraday/${encodeURIComponent(key)}/minutes/1`);
+    const c = j.data.candles[0];
+    if (!c) throw new Error("no session bars today");
+    return { bid: null, ask: null, last: num(c[4]), ts: Date.parse(String(c[0])) + 60_000, source: `${name} (1M bar)`, approx: true };
+  },
+});
+
 const coinbaseQuote: QuoteProvider = {
   name: "Coinbase BTC-USD",
   load: async () => {
@@ -445,8 +469,7 @@ const coinbaseQuote: QuoteProvider = {
   },
 };
 
-/** Live quotes for the traded instruments; the research desks run on candles only. */
-const QUOTES: Partial<Record<InstrumentId, QuoteProvider[]>> = {
+const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   XAUUSD: [
     {
       name: "OANDA XAU/USD",
@@ -461,17 +484,7 @@ const QUOTES: Partial<Record<InstrumentId, QuoteProvider[]>> = {
         return { bid, ask, last: (bid + ask) / 2, ts: Date.parse(p.time), source: "OANDA XAU/USD", approx: false };
       },
     },
-    {
-      name: "Swissquote XAU/USD",
-      load: async () => {
-        const j = await getJson<{ ts: number; spreadProfilePrices: { spreadProfile: string; bid: number; ask: number }[] }[]>(
-          "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD",
-        );
-        const best = j.flatMap((x) => x.spreadProfilePrices.map((p) => ({ ...p, ts: x.ts }))).sort((a, b) => a.ask - a.bid - (b.ask - b.bid))[0];
-        if (!best) throw new Error("no prices");
-        return { bid: best.bid, ask: best.ask, last: (best.bid + best.ask) / 2, ts: best.ts, source: "Swissquote XAU/USD", approx: false };
-      },
-    },
+    swissquote("XAU", "USD"),
     {
       name: "Binance XAU index",
       load: async () => {
@@ -484,6 +497,11 @@ const QUOTES: Partial<Record<InstrumentId, QuoteProvider[]>> = {
   "BTCUSDT.P": [binanceFutQuote("BTCUSDT", "Binance BTCUSDT.P")],
   "BTCUSD.SPOT": [coinbaseQuote],
   BTCUSD: [coinbaseQuote],
+  EURUSD: [swissquote("EUR", "USD")],
+  USDJPY: [swissquote("USD", "JPY")],
+  NAS100: [binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P")],
+  SPX500: [binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P")],
+  NIFTY: [upstoxQuote("NSE_INDEX|Nifty 50", "Upstox Nifty 50")],
 };
 
 export const instrumentOk = (id: string | null): id is InstrumentId => !!id && id in INSTRUMENTS;

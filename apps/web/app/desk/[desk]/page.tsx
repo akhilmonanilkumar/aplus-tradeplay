@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
-  DESKS, EDGE_RULES, EDGE_WINDOWS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, evaluateGate, guardrails, isFxWeekend, isInWindow,
-  shiftText, stateFromSetup, type DeskId, type GateInput, type InstrumentId, type ModelId,
+  DESKS, EDGE_RULES, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, WINDOWS_BY_ID, evaluateGate, guardrails, isFxWeekend, isInWindow,
+  shiftText, stateFromSetup, tradeWindows, type DeskId, type LiveDeskId, type SessionWindow, type GateInput, type InstrumentId, type ModelId,
 } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import { useMarket } from "@/lib/useMarket";
@@ -24,6 +24,7 @@ import { Card, Chip, Empty, ErrorNote, GateRow, Note, Seg, StateRail } from "@/c
 import DeskChart, { OVERLAYS, type Overlay } from "@/components/desk/DeskChart";
 import Ticket from "@/components/desk/Ticket";
 import Analyst from "@/components/desk/Analyst";
+import LivePnl from "@/components/LivePnl";
 import { CalendarCard, DerivsCard, MacroCard, NewsCard, SessionsPanel } from "@/components/desk/Context";
 
 type Tri = "auto" | "yes" | "no";
@@ -42,7 +43,9 @@ function TriChip({ label, value, auto, onChange }: { label: string; value: Tri; 
 
 export default function DeskPage() {
   const params = useParams<{ desk: string }>();
-  const deskId: DeskId = params.desk === "btc" ? "btc" : "gold";
+  const deskId: DeskId = (["gold", "btc", "fx", "indices"] as const).find((d) => d === params.desk) ?? "gold";
+  // Gold and BTC have derivatives, macro, headlines and the analyst; the forex and index desks run on price and the calendar.
+  const ctxDesk: LiveDeskId | null = deskId === "gold" || deskId === "btc" ? deskId : null;
   const desk = DESKS[deskId];
   const search = useSearchParams();
   const router = useRouter();
@@ -70,9 +73,9 @@ export default function DeskPage() {
 
   const market = useMarket(inst);
   const live = useLive(inst);
-  const derivs = useApi<Derivs>(`/api/market/derivs?symbol=${deskId === "btc" ? "BTCUSDT" : "XAUUSDT"}`, 60_000);
-  const macro = useApi<Macro>(`/api/market/macro?desk=${deskId}`, 300_000);
-  const news = useApi<{ items: Headline[]; errors: string[] }>(`/api/news?desk=${deskId}`, 300_000);
+  const derivs = useApi<Derivs>(ctxDesk ? `/api/market/derivs?symbol=${ctxDesk === "btc" ? "BTCUSDT" : "XAUUSDT"}` : null, 60_000);
+  const macro = useApi<Macro>(ctxDesk ? `/api/market/macro?desk=${ctxDesk}` : null, 300_000);
+  const news = useApi<{ items: Headline[]; errors: string[] }>(ctxDesk ? `/api/news?desk=${ctxDesk}` : null, 300_000);
   const cal = useApi<{ items: CalEvent[] }>("/api/calendar", 1_800_000);
   const accounts = useRows<TradingAccount>({ table: "trading_accounts", order: "created_at", ascending: true });
   const investors = useRows<Investor>({ table: "investors", select: "id,name", order: "name", ascending: true });
@@ -95,7 +98,8 @@ export default function DeskPage() {
 
   // timing: window, FX weekend, news (live calendar + manually added events)
   const blockMin = me.settings?.news_block_minutes ?? 15;
-  const liveWindow = EDGE_WINDOWS.find((w) => isInWindow(now, w)) ?? null;
+  const windows = useMemo(() => tradeWindows(inst).map((w) => WINDOWS_BY_ID.get(w)).filter((w): w is SessionWindow => !!w), [inst]);
+  const liveWindow = windows.find((w) => isInWindow(now, w)) ?? null;
   const closed = def.fxHours && isFxWeekend(now);
   const events: CalEvent[] = useMemo(() => [
     ...(cal.data?.items ?? []),
@@ -133,7 +137,7 @@ export default function DeskPage() {
 
   // context & confluence
   const d = derivs.data, m = macro.data;
-  const conf = confluence(deskId, tradeSide, d, m);
+  const conf: ReturnType<typeof confluence> = ctxDesk ? confluence(ctxDesk, tradeSide, d, m) : { score: 0, factors: [], caution: [] };
 
   const notes: { t: number; title: string; body: string }[] = [];
   if (gate && a) {
@@ -161,7 +165,7 @@ export default function DeskPage() {
   const readNews = async () => {
     if (!news.data?.items.length) return;
     setNewsBusy(true);
-    try { setNewsAi(await staffPost("/api/ai", { task: "news", desk: deskId, context: news.data.items.slice(0, 25).map((h, i) => ({ i, title: h.title, source: h.source, at: new Date(h.at).toISOString() })) })); }
+    try { setNewsAi(await staffPost("/api/ai", { task: "news", desk: ctxDesk ?? deskId, context: news.data.items.slice(0, 25).map((h, i) => ({ i, title: h.title, source: h.source, at: new Date(h.at).toISOString() })) })); }
     catch (e) { setNewsAi({ summary: (e as Error).message }); }
     setNewsBusy(false);
   };
@@ -198,7 +202,7 @@ export default function DeskPage() {
           <div className="col" style={{ gap: 2, alignItems: "flex-end" }}>
             <div className="row" style={{ gap: 6 }}>
               <Chip tone={go ? "solid" : gate?.verdict === "NO" ? "down" : "warn"}>{state}{gate ? ` · ${gate.grade.replace("_", " ")}` : ""}</Chip>
-              <Chip tone={conf.score > 20 ? "up" : conf.score < -20 ? "down" : ""}>Context {conf.score > 0 ? "+" : ""}{conf.score}</Chip>
+              {ctxDesk && <Chip tone={conf.score > 20 ? "up" : conf.score < -20 ? "down" : ""}>Context {conf.score > 0 ? "+" : ""}{conf.score}</Chip>}
               {closed ? <Chip tone="warn">Market closed (weekend)</Chip> : liveWindow ? <Chip tone="up" dot>{liveWindow.name} live</Chip> : <Chip>Outside windows</Chip>}
               {!newsClear && <Chip tone="down" dot>News block</Chip>}
             </div>
@@ -217,7 +221,7 @@ export default function DeskPage() {
                 <button key={o.id} type="button" className={`chip ${show[o.id] ? "acc" : ""}`} aria-pressed={show[o.id]} onClick={() => setShow({ ...show, [o.id]: !show[o.id] })}>{o.l}</button>
               ))}
             </div>
-            {market.data ? <DeskChart candles={chartCandles} forming={chartTf === "ltf" ? market.data.forming : null} tfMs={chartTfMs} live={price} analysis={a} show={show} plan={plan} side={tradeSide} digits={def.digits} markersOn={chartTf === "ltf"} /> : <div style={{ height: 520, display: "grid", placeItems: "center" }} className="faint">Loading candles…</div>}
+            {market.data ? <DeskChart candles={chartCandles} forming={chartTf === "ltf" ? market.data.forming : null} tfMs={chartTfMs} live={price} analysis={a} show={show} plan={plan} side={tradeSide} digits={def.digits} markersOn={chartTf === "ltf"} windows={windows} /> : <div style={{ height: 520, display: "grid", placeItems: "center" }} className="faint">Loading candles…</div>}
             <div className="between" style={{ padding: "8px 12px", borderTop: "1px solid var(--line)" }}>
               <span className="faint" style={{ fontSize: 11 }}>{`Engine overlays on closed candles · ${market.data?.source ?? "…"} · forming bar from live ticks · charts by TradingView Lightweight Charts™`}</span>
               <span className="faint mono" style={{ fontSize: 11 }}>{a?.range ? `range ${num(a.range.low, def.digits)} – ${num(a.range.high, def.digits)} · ${a.zone ?? ""} ${a.pos !== null ? `${a.pos.toFixed(0)}%` : ""}` : ""}</span>
@@ -243,7 +247,7 @@ export default function DeskPage() {
               )}
               {g && !g.canTrade && <p className="down" style={{ fontSize: 12, marginTop: 8 }}>Guardrail: {g.reasons.join(" · ")}</p>}
             </Card>
-            <Card span={6} title="Confluence" right={<Chip tone={conf.score > 20 ? "up" : conf.score < -20 ? "down" : ""}>{tradeSide} · {conf.score > 0 ? "+" : ""}{conf.score}</Chip>}>
+            {ctxDesk ? <Card span={6} title="Confluence" right={<Chip tone={conf.score > 20 ? "up" : conf.score < -20 ? "down" : ""}>{tradeSide} · {conf.score > 0 ? "+" : ""}{conf.score}</Chip>}>
               {conf.factors.length === 0 ? <Empty>Loading context…</Empty> : conf.factors.map((f) => (
                 <div key={f.id} className="between" style={{ padding: "6px 0", borderBottom: "1px solid var(--line)", fontSize: 12.5 }}>
                   <span className="col" style={{ gap: 0 }}><b style={{ fontWeight: 500 }}>{f.label}</b><span className="faint" style={{ fontSize: 11 }}>{f.detail}</span></span>
@@ -252,7 +256,7 @@ export default function DeskPage() {
               ))}
               {conf.caution.map((c) => <p key={c} className="warn" style={{ fontSize: 12, marginTop: 6 }}>Caution: {c}</p>)}
               <p className="faint" style={{ fontSize: 11, marginTop: 8 }}>Weighted read of dollar, yields, positioning and flow for a {tradeSide}. It informs size and conviction; the A+ gate alone decides GO.</p>
-            </Card>
+            </Card> : <LivePnl span={6} instrument={inst} />}
           </div>
         </section>
 
@@ -306,26 +310,26 @@ export default function DeskPage() {
         </aside>
       </div>
 
-      <div className="g12">
-        {deskId === "btc"
+      {ctxDesk && <div className="g12">
+        {ctxDesk === "btc"
           ? <DerivsCard d={d} error={derivs.error} liqs={inst === "BTCUSDT.P" ? live.liqs : undefined} />
           : <DerivsCard d={d} error={derivs.error} liqs={inst === "XAUUSDT.P" ? live.liqs : undefined} title="XAUUSDT.P positioning (crypto gold perp)" />}
-        <MacroCard m={m} error={macro.error} desk={deskId} />
-      </div>
+        <MacroCard m={m} error={macro.error} desk={ctxDesk} />
+      </div>}
 
       <div className="g12">
         <div className="s4 col" style={{ gap: 16 }}>
           {market.data ? <SessionsPanel candles={market.data.poi} now={now} digits={def.digits} span={12} /> : <Card title="Session analysis"><Empty>Loading…</Empty></Card>}
         </div>
         <div className="s8 col" style={{ gap: 16 }}>
-          <Analyst desk={deskId} context={aiContext} notes={notes} />
+          {ctxDesk ? <Analyst desk={ctxDesk} context={aiContext} notes={notes} /> : <CalendarCard events={cal.data ? events : null} error={cal.error} desk={deskId} blockMinutes={blockMin} now={now} span={12} />}
         </div>
       </div>
 
-      <div className="g12">
+      {ctxDesk && <div className="g12">
         <NewsCard items={news.data?.items ?? null} error={news.error} ai={newsAi} onAi={readNews} busy={newsBusy} />
         <CalendarCard events={cal.data ? events : null} error={cal.error} desk={deskId} blockMinutes={blockMin} now={now} />
-      </div>
+      </div>}
     </>
   );
 }

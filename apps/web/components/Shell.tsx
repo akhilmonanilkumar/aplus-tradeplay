@@ -52,6 +52,8 @@ const OWNER_NAV: NavItem[] = [
   { h: "Desks" },
   { href: "/desk/gold", l: "Gold desk", tl: "Gold", i: "M4 15l3-8h10l3 8zM2 19h20M9 7l1-3h4l1 3", cnt: "gold" },
   { href: "/desk/btc", l: "BTC desk", tl: "BTC", i: "M9 4v16M13 4v3M13 17v3M7 7h7a3 3 0 0 1 0 6H7M7 13h8a3 3 0 0 1 0 6H7", cnt: "btc" },
+  { href: "/desk/fx", l: "Forex desk", tl: "FX", i: "M4 7h13l-3-3M20 17H7l3 3" },
+  { href: "/desk/indices", l: "Index desk", i: "M4 20V12M9 20V8M14 20v-5M19 20V5M3 20h18" },
   { href: "/lab/gold", l: "Gold lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
   { href: "/lab/btc", l: "BTC lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },
   { href: "/lab/fx", l: "Forex lab", i: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9" },

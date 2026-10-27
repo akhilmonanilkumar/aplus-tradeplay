@@ -5,7 +5,7 @@ import {
   CandlestickSeries, ColorType, HistogramSeries, LineStyle, createChart, createSeriesMarkers,
   type IChartApi, type ISeriesApi, type SeriesMarker, type Time, type UTCTimestamp,
 } from "lightweight-charts";
-import { EDGE_WINDOWS, isInWindow, type Candle, type SetupAnalysis } from "@aplus/engine";
+import { EDGE_WINDOWS, isInWindow, type Candle, type SessionWindow, type SetupAnalysis } from "@aplus/engine";
 
 export type Overlay = "sessions" | "pd" | "pois" | "liq" | "struct" | "pos";
 export const OVERLAYS: { id: Overlay; l: string }[] = [
@@ -24,7 +24,7 @@ const ts = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
  * Engine chart: closed candles + a forming bar driven by live ticks, with the
  * detector's levels drawn on top. Overlays come from closed candles only, so they never repaint.
  */
-export default function DeskChart({ candles, forming, tfMs, live, analysis, show, plan, side, digits = 2, markersOn = true, height = 520 }: {
+export default function DeskChart({ candles, forming, tfMs, live, analysis, show, plan, side, digits = 2, markersOn = true, height = 520, windows = EDGE_WINDOWS }: {
   candles: Candle[];
   forming: Candle | null;
   tfMs: number;
@@ -36,6 +36,8 @@ export default function DeskChart({ candles, forming, tfMs, live, analysis, show
   digits?: number;
   markersOn?: boolean;
   height?: number;
+  /** Trade windows shaded by the sessions overlay (default London Q and NY Q). */
+  windows?: readonly SessionWindow[];
 }) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
@@ -83,7 +85,7 @@ export default function DeskChart({ candles, forming, tfMs, live, analysis, show
     const rows = forming && (!candles.length || forming.t > candles[candles.length - 1]!.t) ? [...candles, forming] : candles;
     bar.current = forming ? { ...forming } : null;
     s.setData(rows.map((c) => ({ time: ts(c.t), open: c.o, high: c.h, low: c.l, close: c.c })));
-    h.setData(show.sessions ? rows.map((c) => ({ time: ts(c.t), value: EDGE_WINDOWS.some((w) => isInWindow(c.t, w)) ? 1 : 0 })) : []);
+    h.setData(show.sessions ? rows.map((c) => ({ time: ts(c.t), value: windows.some((w) => isInWindow(c.t, w)) ? 1 : 0 })) : []);
     if (!fitted.current && rows.length) { chart.current?.timeScale().scrollToRealTime(); fitted.current = true; }
     for (const pl of s.priceLines()) s.removePriceLine(pl);
     const line = (price: number, color: string, title: string, style = LineStyle.Dashed, width: 1 | 2 = 1) =>
@@ -118,7 +120,7 @@ export default function DeskChart({ candles, forming, tfMs, live, analysis, show
     if (markersOn && a?.shift?.t && show.struct) marks.push({ time: ts(a.shift.t), position: side === "long" ? "aboveBar" : "belowBar", color: css("--text"), shape: "circle", text: "MSS" });
     marks.sort((x, y) => Number(x.time) - Number(y.time));
     markers.current?.setMarkers(marks);
-  }, [candles, forming, analysis, show, plan, side, markersOn]);
+  }, [candles, forming, analysis, show, plan, side, markersOn, windows]);
 
   // live ticks move the forming bar (or open a new one at the boundary)
   useEffect(() => {
