@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { INSTRUMENTS, summarize, type InstrumentId } from "@aplus/engine";
+import { INSTRUMENTS, LIVE_INSTRUMENT_IDS, summarize, type InstrumentId } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import type { Signal } from "@/lib/types";
 import { money, num, pct, r as fmtR } from "@/lib/fmt";
@@ -113,7 +113,7 @@ export default function BotLog() {
         <Seg label="Range" value={range} onChange={setRange} options={[{ v: "7", l: "7d" }, { v: "30", l: "30d" }, { v: "90", l: "90d" }, { v: "all", l: "All" }]} />
         <Seg label="Source" value={src} onChange={setSrc} options={[{ v: "all", l: "All bots" }, { v: "selector", l: "Selector" }, { v: "autopilot", l: "Autopilot" }]} />
         <Seg label="Gate" value={take} onChange={setTake} options={[{ v: "all", l: "All logged" }, { v: "tradeable", l: "Would trade" }, { v: "rejected", l: "Rejected" }]} />
-        <Seg label="Instrument" value={inst} onChange={setInst} options={[{ v: "all", l: "All" }, ...(Object.keys(INSTRUMENTS) as InstrumentId[]).map((i) => ({ v: i, l: i }))]} />
+        <Seg label="Instrument" value={inst} onChange={setInst} options={[{ v: "all", l: "All" }, ...LIVE_INSTRUMENT_IDS.map((i) => ({ v: i, l: i }))]} />
         <span style={{ flex: 1 }} />
         <button className="btn ghost sm" onClick={() => { signals.reload(); trades.reload(); alerts.reload(); }}>Refresh</button>
       </div>

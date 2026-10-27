@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { INSTRUMENTS, type InstrumentId } from "@aplus/engine";
+import { INSTRUMENTS, LIVE_INSTRUMENT_IDS, type InstrumentId } from "@aplus/engine";
 import { DEFAULT_SELECTOR_CONFIG, selectorConfig, type SelectorConfig } from "@/lib/selectorConfig";
 import { ownerOf } from "@/lib/accounts";
 import type { AutopilotRun, Investor, TradingAccount } from "@/lib/types";
@@ -67,7 +67,7 @@ export default function SelectorCard({ runs, accounts, investors }: { runs: Auto
 
       <div className="lbl-u" style={{ margin: "12px 0 6px" }}>Instruments scanned</div>
       <div className="row" style={{ gap: 6 }}>
-        {(Object.keys(INSTRUMENTS) as InstrumentId[]).map((i) => {
+        {LIVE_INSTRUMENT_IDS.map((i) => {
           const on = cfg.universe.includes(i);
           return <button key={i} type="button" className={`chip ${on ? "acc" : ""}`} onClick={() => save({ universe: on ? cfg.universe.filter((x) => x !== i) : [...cfg.universe, i] })}>{i}</button>;
         })}

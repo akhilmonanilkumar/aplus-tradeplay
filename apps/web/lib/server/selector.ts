@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  DEFAULT_SELECTOR, INSTRUMENTS, TF_MS, clientOrderId, runBacktest, usHighImpactTimes, selectOpportunities, sizePosition,
+  DEFAULT_SELECTOR, INSTRUMENTS, TF_MS, liveDesk, clientOrderId, runBacktest, usHighImpactTimes, selectOpportunities, sizePosition,
   type Candidate, type DeskId, type InstrumentId, type Scored, type Tf,
 } from "@aplus/engine";
 import { confluence } from "@/lib/confluence";
@@ -123,7 +123,7 @@ export async function runSelector(db: SupabaseClient, deps: {
 }): Promise<SelectorOutcome> {
   const cfg = deps.config;
   const ids = cfg.universe;
-  const desks = [...new Set(ids.map((i) => INSTRUMENTS[i].desk))];
+  const desks = [...new Set(ids.map((i) => liveDesk(i)))];
   const [evals, edges, ctx] = await Promise.all([
     Promise.allSettled(ids.map((i) => deps.evalFor(i))),
     recentEdges(db, ids, { allowGradeA: cfg.allowGradeA }).catch(() => new Map<InstrumentId, Edge>()),
@@ -142,8 +142,8 @@ export async function runSelector(db: SupabaseClient, deps: {
     if (r.status !== "fulfilled") return;
     const e = r.value, def = INSTRUMENTS[ids[k]!];
     byId.set(e.instrument, e);
-    const c = ctx.get(def.desk);
-    const conf = confluence(def.desk, e.side, c?.dv, c?.mc);
+    const c = ctx.get(liveDesk(def.id));
+    const conf = confluence(liveDesk(def.id), e.side, c?.dv, c?.mc);
     const p = e.analysis.suggest;
     const edge = edges.get(e.instrument);
     candidates.push({

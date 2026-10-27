@@ -4,7 +4,7 @@ import { detectModels, planSetup, type ModelSetup, type StopMode, type TargetMod
 import type { ModelId } from './models.js';
 import { evaluateGate, type Grade } from './gate.js';
 import { resolveSignal, type SignalOutcome } from './outcome.js';
-import { ALL_WINDOWS, NY, isInWindow, windowOnDateOf, zonedParts } from './sessions.js';
+import { NY, WINDOWS_BY_ID, isInWindow, windowOnDateOf, zonedParts } from './sessions.js';
 import { INSTRUMENTS, TF_MS, costInR, type InstrumentId, type Tf } from './instruments.js';
 import { summarize, type RStats } from './stats.js';
 
@@ -174,7 +174,6 @@ export interface BacktestData {
   m1?: readonly Candle[];
 }
 
-const WINDOW_BY_ID = new Map(ALL_WINDOWS.map((w) => [w.id, w]));
 
 function dayKey(t: number) {
   const p = zonedParts(t, NY);
@@ -225,7 +224,7 @@ export function scanSignals(
   const def = INSTRUMENTS[instrumentId];
   const tfs = opts.tfs ?? { htf: def.htf, poi: def.poi, ltf: def.ltf };
   const ltfMs = TF_MS[tfs.ltf], poiMs = TF_MS[tfs.poi], htfMs = TF_MS[tfs.htf];
-  const windows = opts.windows.map((id) => WINDOW_BY_ID.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
+  const windows = opts.windows.map((id) => WINDOWS_BY_ID.get(id)).filter((w): w is NonNullable<typeof w> => !!w);
   const sides: ('long' | 'short')[] = opts.sides === 'both' ? ['long', 'short'] : [opts.sides];
   const { htf, poi, ltf } = data;
   const candidates: ScanCandidate[] = [];
@@ -441,7 +440,7 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
         open = { ...base, entryAt: T, exitAt: null, exit: null, rGross: 0, rNet: 0, outcome: 'open', beMoved: false, risk: Math.abs(entry - stop), banked: 0, fillIdx: i };
         d.trades++;
       } else {
-        const win = WINDOW_BY_ID.get(windowId)!;
+        const win = WINDOWS_BY_ID.get(windowId)!;
         pending = { ...base, createdIdx: i, windowEnd: windowOnDateOf(bar.t, win).endUtc };
       }
       break;

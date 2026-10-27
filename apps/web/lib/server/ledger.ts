@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  EDGE_RULES, EDGE_WINDOWS, INSTRUMENTS, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, planSetup, runSessionModel,
+  EDGE_RULES, EDGE_WINDOWS, INSTRUMENTS, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, liveDesk, planSetup, runSessionModel,
   type Candle, type GateResult, type InstrumentId, type ModelSetup, type SetupAnalysis, type SetupPlan,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
@@ -37,7 +37,7 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
   // 1M for model H from an unmetered feed (one pull per pass).
   const m1 = await loadHistory(id, "1m", now - 300 * 60_000, now).then((x) => x.candles).catch(() => [] as Candle[]);
   const minRR = cfg.filters?.minRR ?? EDGE_RULES.minRR;
-  const desk = def.desk;
+  const desk = liveDesk(id);
   const blockMin = ctx.settings?.news_block_minutes ?? EDGE_RULES.newsBlockMinutes;
   const releases = ctx.calendar.filter((e) => e.impact === "high" && e.desks.includes(desk)).map((e) => e.at);
   const newsTimes = releases.filter((t) => t <= now);

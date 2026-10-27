@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
-  DEFAULT_STRATEGY, DESKS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, breakdown, breakevenWinRate, skippedImpact, usHighImpactTimes,
+  DEFAULT_STRATEGY, DESKS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, tradeWindows, breakdown, breakevenWinRate, skippedImpact, usHighImpactTimes,
   type BacktestResult, type BacktestTrade, type DeskId, type InstrumentId, type StrategyParams,
 } from "@aplus/engine";
 import { supabase } from "@/lib/supabase";
@@ -18,7 +18,9 @@ const WINDOWS = [
   { id: "ny_q", l: "NY Q 07–10 ET" },
   { id: "asia_q", l: "Asia 20–24 ET" },
   { id: "london_close", l: "London close 10–12 ET" },
+  { id: "india_q", l: "India Q 09:15–12:15 IST" },
 ];
+const DESK_IDS: DeskId[] = ["gold", "btc", "fx", "indices"];
 const DAYS = [{ v: "14", l: "14d" }, { v: "30", l: "30d" }, { v: "60", l: "60d" }, { v: "90", l: "90d" }] as const;
 
 /** Warm-up before the test window so structure exists on the first bar. */
@@ -46,7 +48,7 @@ function Breakdown({ title, rows }: { title: string; rows: { key: string; stats:
 
 export default function Lab() {
   const params = useParams<{ desk: string }>();
-  const deskId: DeskId = params.desk === "btc" ? "btc" : "gold";
+  const deskId: DeskId = DESK_IDS.find((d) => d === params.desk) ?? "gold";
   const desk = DESKS[deskId];
   const [inst, setInst] = useState<InstrumentId>(desk.primary);
   const [days, setDays] = useState<(typeof DAYS)[number]["v"]>("30");
@@ -63,6 +65,8 @@ export default function Lab() {
   // Saved lab runs always carry a strategy; strategy-less rows are the selector's daily edge measurements.
   const runs = useRows<BacktestRow>({ table: "backtests", select: "id,strategy_id,instrument,from_ts,to_ts,params,stats,summary,source,created_at", notNull: "strategy_id", order: "created_at", limit: 30 });
   useEffect(() => { setInst(desk.primary); setRes(null); setStratId(null); }, [deskId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Each market trades its own windows (the Nifty trades India Q).
+  useEffect(() => { setP((x) => ({ ...x, windows: tradeWindows(inst) })); }, [inst]);
   useEffect(() => () => worker.current?.terminate(), []);
 
   const def = INSTRUMENTS[inst];
@@ -190,7 +194,7 @@ export default function Lab() {
             <div className="row">
               <button className="btn sm" onClick={() => saveStrategy(false)}>Save</button>
               <button className="btn sm" onClick={() => saveStrategy(true)}>Save as new</button>
-              <button className="btn sm" onClick={toAutopilot}>Use for autopilot</button>
+              {!def.research && <button className="btn sm" onClick={toAutopilot}>Use for autopilot</button>}
             </div>
           </div>
         </Card>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  INSTRUMENTS, costInR, sizePosition, normalizeInstrument, pnlMultiplier,
+  INSTRUMENTS, LIVE_INSTRUMENT_IDS, WINDOWS_BY_ID, isInWindow, tradeWindows, costInR, sizePosition, normalizeInstrument, pnlMultiplier,
   oiRegime, fundingState, syntheticDxy, pearson, correlation, contextScore, basisPct, fundingApr, sessionStats, emaTrend,
   runBacktest, scanSignals, simulate, skippedImpact, breakdown, analyzeSetup, shiftText, DEFAULT_STRATEGY, TF_MS, type Candle,
 } from './index.js';
@@ -37,8 +37,16 @@ function agg(base: Candle[], ms: number): Candle[] {
 }
 
 describe('instruments', () => {
-  it('has the five desk instruments', () => {
-    expect(Object.keys(INSTRUMENTS).sort()).toEqual(['BTCUSD', 'BTCUSD.SPOT', 'BTCUSDT.P', 'XAUUSD', 'XAUUSDT.P']);
+  it('trades five instruments live and keeps the forex and index desks research-only', () => {
+    expect([...LIVE_INSTRUMENT_IDS].sort()).toEqual(['BTCUSD', 'BTCUSD.SPOT', 'BTCUSDT.P', 'XAUUSD', 'XAUUSDT.P']);
+    expect(Object.keys(INSTRUMENTS).filter((id) => INSTRUMENTS[id as keyof typeof INSTRUMENTS].research).sort()).toEqual(['EURUSD', 'NAS100', 'NIFTY', 'SPX500', 'USDJPY']);
+  });
+  it('trades the Nifty in India Q and everything else in London Q and NY Q', () => {
+    expect(tradeWindows('NIFTY')).toEqual(['india_q']);
+    expect(tradeWindows('EURUSD')).toEqual(['london_q', 'ny_q']);
+    const india = WINDOWS_BY_ID.get('india_q')!;
+    expect(isInWindow(Date.UTC(2026, 9, 27, 3, 45), india)).toBe(true);  // Tue 09:15 IST
+    expect(isInWindow(Date.UTC(2026, 9, 27, 6, 45), india)).toBe(false); // 12:15 IST
   });
   it('normalises legacy and TradingView ids', () => {
     expect(normalizeInstrument('BINANCE:BTCUSDT.P')).toBe('BTCUSDT.P');

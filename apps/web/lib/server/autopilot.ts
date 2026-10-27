@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  ALL_WINDOWS, EDGE_WINDOWS, INSTRUMENTS, TF_MS, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
+  ALL_WINDOWS, EDGE_WINDOWS, INSTRUMENTS, liveDesk, TF_MS, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
   shiftText, sizePosition, stateFromSetup, type Candle, type GateResult, type InstrumentId, type SetupAnalysis,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
@@ -50,7 +50,7 @@ export async function evaluate(id: InstrumentId, opts: { bias?: "long" | "short"
   const now = Date.now();
   const allowed = opts.filters?.windows?.length ? ALL_WINDOWS.filter((w) => opts.filters!.windows!.includes(w.id)) : EDGE_WINDOWS;
   const win = allowed.find((w) => isInWindow(now, w)) ?? null;
-  const newsClear = !newsBlocked(opts.calendar, def.desk, now, opts.settings?.news_block_minutes ?? 15);
+  const newsClear = !newsBlocked(opts.calendar, liveDesk(id), now, opts.settings?.news_block_minutes ?? 15);
   // Counter-trend pullbacks (Model G, grade A at most) only when both settings allow them.
   const counterTrend = !!(opts.settings?.counter_trend_allowed && opts.settings?.advanced_models_allowed);
   const run = (side: "long" | "short") => {

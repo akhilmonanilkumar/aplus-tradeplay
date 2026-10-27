@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { INSTRUMENT_IDS } from "@aplus/engine";
+import { LIVE_INSTRUMENT_IDS as INSTRUMENT_IDS } from "@aplus/engine";
 import { supabase } from "@/lib/supabase";
 import { useRows } from "@/lib/useRows";
 import { drawdown, matchesOwner, ownerOf, ownerOptions } from "@/lib/accounts";

@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, NY, SESSION_VARIANTS, TF_MS, FRAME_BARS, lossDiagnostics, usHighImpactTimes, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
+  ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, tradeWindows, NY, SESSION_VARIANTS, TF_MS, FRAME_BARS, lossDiagnostics, usHighImpactTimes, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
   type InstrumentId, type ScanTfs, type StrategyParams, type Tf,
 } from "@aplus/engine";
 import { historyEnd, loadFrames, loadHistory } from "@/lib/server/feeds";
@@ -97,7 +97,7 @@ function modelVariants(): { id: string; label: string; model: string; params: Pa
   return out;
 }
 
-export async function strategyLab(id: InstrumentId, family: Family, days = 180, opts: { m1?: boolean } = {}) {
+export async function strategyLab(id: InstrumentId, family: Family, days = 180, opts: { m1?: boolean; source?: string } = {}) {
   const t0 = Date.now();
   const def = INSTRUMENTS[id];
   days = Math.min(Math.max(days, 30), 200);
@@ -108,7 +108,7 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180, 
   const to = historyEnd();
   const from = to - days * 86_400_000;
   const frames = (family === "session" ? [tfs.ltf, tfs.htf] : [tfs.ltf, tfs.htf, tfs.poi]).map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) }));
-  const [ltf, htf, poi = null] = await loadFrames(id, frames, to);
+  const [ltf, htf, poi = null] = await loadFrames(id, frames, to, { source: opts.source });
   const m1 = withM1 ? (await loadFrames(id, [{ tf: "1m", from }], to, { source: ltf.source }))[0]!.candles : undefined;
   // NFP and FOMC releases (no historical calendar): box 6 news filter and model I.
   const news = usHighImpactTimes(from - 7 * 86_400_000, to);
@@ -125,10 +125,11 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180, 
     const data = { htf: htf.candles, poi: poi!.candles, ltf: ltf.candles, news, m1 };
     // On 15M bars the sweep search and the order lifetime cover the same clock time as on 5M.
     const scale = family === "a15" ? { sweepLookback: 12, expiryBars: 4 } : { sweepLookback: 36, expiryBars: 12 };
-    const scan = scanSignals(id, data, { windows: ["london_q", "ny_q"], sides: "both", sweepLookback: scale.sweepLookback, tfs });
+    const windows = tradeWindows(id);
+    const scan = scanSignals(id, data, { windows, sides: "both", sweepLookback: scale.sweepLookback, tfs });
     const variants = family === "models" ? modelVariants() : A_VARIANTS.map((v) => ({ ...v, model: undefined, diagnose: false }));
     rows = variants.map((v) => {
-      const r = simulate(id, data, scan, { ...v.params, ...scale });
+      const r = simulate(id, data, scan, { ...v.params, ...scale, windows });
       const closed = r.trades.filter((t) => t.outcome !== "open");
       return {
         ...row(v.id, v.label, closed, r.stats, mid),

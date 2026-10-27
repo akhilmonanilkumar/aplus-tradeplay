@@ -2,11 +2,19 @@ import type { CfdSpec, PerpSpec } from './sizing.js';
 import { BTCUSDT_PERP_DEFAULT, XAUUSD_DEFAULT } from './specs.js';
 
 /**
- * The five instruments the desks trade. Two desks (gold, bitcoin), each with its
- * own data sources, sizing model and session behaviour. No Indian markets.
+ * Instruments by desk. Gold and BTC are traded live; the forex and index desks
+ * (EURUSD, USDJPY, NAS100, SPX500, NIFTY) are research desks: lab and backtests only.
  */
-export type DeskId = 'gold' | 'btc';
-export type InstrumentId = 'XAUUSD' | 'XAUUSDT.P' | 'BTCUSD' | 'BTCUSDT.P' | 'BTCUSD.SPOT';
+export type DeskId = 'gold' | 'btc' | 'fx' | 'indices';
+/** Desks with live trading, news, macro and derivatives context. */
+export type LiveDeskId = Extract<DeskId, 'gold' | 'btc'>;
+/** The live desk of an instrument the autopilot runs (research instruments never reach live code). */
+export const liveDesk = (id: InstrumentId): LiveDeskId => {
+  const d = INSTRUMENTS[id].desk;
+  if (d !== 'gold' && d !== 'btc') throw new Error(`${id} is a research instrument`);
+  return d;
+};
+export type InstrumentId = 'XAUUSD' | 'XAUUSDT.P' | 'BTCUSD' | 'BTCUSDT.P' | 'BTCUSD.SPOT' | 'EURUSD' | 'USDJPY' | 'NAS100' | 'SPX500' | 'NIFTY';
 export type Tf = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
 export const TF_MS: Record<Tf, number> = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000 };
@@ -40,11 +48,20 @@ export interface InstrumentDef {
   fxHours: boolean;
   /** What the engine's candles represent. */
   priceBasis: string;
+  /** Trade windows (session ids). Default: London Q and NY Q. */
+  windows?: string[];
+  /** Research only: backtested in the lab, never traded or paper-logged by the autopilot. */
+  research?: boolean;
 }
 
 const BTC_CFD: CfdSpec = { tickSize: 0.01, tickValue: 0.01, volumeStep: 0.01, minVolume: 0.01 };
 /** Binance USDⓈ-M XAUUSDT: 1 contract = 1 oz. Verify against exchangeInfo before live. */
 const XAU_PERP: PerpSpec = { qtyStep: 0.001, minQty: 0.001, minNotional: 5, takerFee: 0.0005, mmr: 0.01, maintAmount: 0 };
+/** Standard lot 100,000 units; JPY tick value moves with the rate (≈ $0.67 at 150). Verify against the broker. */
+const EURUSD_CFD: CfdSpec = { tickSize: 0.00001, tickValue: 1, volumeStep: 0.01, minVolume: 0.01 };
+const USDJPY_CFD: CfdSpec = { tickSize: 0.001, tickValue: 0.67, volumeStep: 0.01, minVolume: 0.01 };
+/** Index CFD, 1 lot = 1 unit of account currency per point. */
+const INDEX_CFD: CfdSpec = { tickSize: 0.01, tickValue: 0.01, volumeStep: 0.01, minVolume: 0.01 };
 const BTC_SPOT: SpotSpec = { qtyStep: 0.00001, minQty: 0.00001, minNotional: 5, takerFee: 0.001 };
 
 export const INSTRUMENTS: Record<InstrumentId, InstrumentDef> = {
@@ -83,14 +100,58 @@ export const INSTRUMENTS: Record<InstrumentId, InstrumentDef> = {
     sizing: { kind: 'spot', spec: BTC_SPOT, unit: 'BTC' },
     fxHours: false, priceBasis: 'Coinbase BTC-USD last trade',
   },
+  EURUSD: {
+    id: 'EURUSD', desk: 'fx', label: 'EURUSD · CFD', short: 'EURUSD', kind: 'cfd',
+    htf: '1h', poi: '15m', ltf: '5m', digits: 5,
+    stopBuffer: (p) => p * 0.00005, costRate: 0.00007,
+    sizing: { kind: 'cfd', spec: EURUSD_CFD, unit: 'lot' },
+    fxHours: true, priceBasis: 'EUR/USD mid', research: true,
+  },
+  USDJPY: {
+    id: 'USDJPY', desk: 'fx', label: 'USDJPY · CFD', short: 'USDJPY', kind: 'cfd',
+    htf: '1h', poi: '15m', ltf: '5m', digits: 3,
+    stopBuffer: (p) => p * 0.00005, costRate: 0.00007,
+    sizing: { kind: 'cfd', spec: USDJPY_CFD, unit: 'lot' },
+    fxHours: true, priceBasis: 'USD/JPY mid', research: true,
+  },
+  NAS100: {
+    id: 'NAS100', desk: 'indices', label: 'NAS100 · CFD', short: 'NAS100', kind: 'cfd',
+    htf: '1h', poi: '15m', ltf: '5m', digits: 2,
+    stopBuffer: (p) => p * 0.0001, costRate: 0.0001,
+    sizing: { kind: 'cfd', spec: INDEX_CFD, unit: 'lot' },
+    fxHours: true, priceBasis: 'Nasdaq-100 (QQQ tracker; R results carry over, points do not)', research: true,
+  },
+  SPX500: {
+    id: 'SPX500', desk: 'indices', label: 'SPX500 · CFD', short: 'SPX500', kind: 'cfd',
+    htf: '1h', poi: '15m', ltf: '5m', digits: 2,
+    stopBuffer: (p) => p * 0.0001, costRate: 0.0001,
+    sizing: { kind: 'cfd', spec: INDEX_CFD, unit: 'lot' },
+    fxHours: true, priceBasis: 'S&P 500 (SPY tracker; R results carry over, points do not)', research: true,
+  },
+  NIFTY: {
+    // NSE cash session 09:15–15:30 IST; costs as Nifty futures (STT, exchange fees, half-point slippage).
+    id: 'NIFTY', desk: 'indices', label: 'NIFTY 50 · futures', short: 'NIFTY', kind: 'cfd',
+    htf: '1h', poi: '15m', ltf: '5m', digits: 2,
+    stopBuffer: (p) => p * 0.00005, costRate: 0.0004,
+    sizing: { kind: 'cfd', spec: INDEX_CFD, unit: 'lot' },
+    fxHours: true, priceBasis: 'NSE Nifty 50 index', windows: ['india_q'], research: true,
+  },
 };
+
+/** Trade windows of an instrument. */
+export const tradeWindows = (id: InstrumentId): string[] => INSTRUMENTS[id].windows ?? ['london_q', 'ny_q'];
 
 export const INSTRUMENT_IDS = Object.keys(INSTRUMENTS) as InstrumentId[];
 
 export const DESKS: Record<DeskId, { id: DeskId; name: string; instruments: InstrumentId[]; primary: InstrumentId }> = {
   gold: { id: 'gold', name: 'Gold desk', instruments: ['XAUUSD', 'XAUUSDT.P'], primary: 'XAUUSD' },
   btc: { id: 'btc', name: 'BTC desk', instruments: ['BTCUSDT.P', 'BTCUSD', 'BTCUSD.SPOT'], primary: 'BTCUSDT.P' },
+  fx: { id: 'fx', name: 'Forex lab', instruments: ['EURUSD', 'USDJPY'], primary: 'EURUSD' },
+  indices: { id: 'indices', name: 'Index lab', instruments: ['NAS100', 'SPX500', 'NIFTY'], primary: 'NAS100' },
 };
+
+/** Instruments the autopilot trades and paper-logs. */
+export const LIVE_INSTRUMENT_IDS = (Object.keys(INSTRUMENTS) as InstrumentId[]).filter((id) => !INSTRUMENTS[id].research);
 
 export function instrument(id: string): InstrumentDef {
   const d = INSTRUMENTS[id as InstrumentId];
