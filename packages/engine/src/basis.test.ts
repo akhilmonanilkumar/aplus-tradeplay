@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { basisPnl, basisSignal, breakEvenSettlements, settlementApr, fundingForShort, roundTripCost } from './index.js';
+import { basisAllocation, basisPnl, basisSignal, breakEvenSettlements, liquidationBuffer, marginTopUp, maxLeverageFor, settlementApr, fundingForShort, roundTripCost, shortLiquidationPrice } from './index.js';
 
 const rules = { entryRate: 0.0001, exitRate: 0, spotFee: 0.001, perpFee: 0.0005 };
 const leg = { qty: 0.1, spotEntry: 100_000, perpEntry: 100_050, spotFee: 0.001, perpFee: 0.0005 };
@@ -34,5 +34,24 @@ describe('basis trade', () => {
     expect(breakEvenSettlements(0.0001, rules)).toBe(30);
     expect(breakEvenSettlements(-0.0001, rules)).toBeNull();
     expect(settlementApr(0.0001)).toBeCloseTo(0.1095);
+  });
+});
+
+describe('basis account', () => {
+  it('splits capital by leverage and finds the liquidation buffer', () => {
+    const a = basisAllocation({ capital: 1000, leverage: 1 });
+    expect(a.notional).toBeCloseTo(500);
+    expect(a.margin).toBeCloseTo(500);
+    const qty = a.notional / 100;
+    const liq = shortLiquidationPrice(100, qty, a.margin, 0.005);
+    expect(liquidationBuffer(100, liq)).toBeCloseTo(2 / 1.005 - 1, 6);
+    expect(maxLeverageFor(liquidationBuffer(100, liq), 0.005)).toBeCloseTo(1, 6);
+  });
+  it('tops up margin to restore the buffer after a rise', () => {
+    const qty = 5, margin = 250; // 2x on 500 notional at 100
+    const add = marginTopUp(130, qty, margin, 100, 0.005, 1);
+    const liq = shortLiquidationPrice(100, qty, margin + add, 0.005);
+    expect(liquidationBuffer(130, liq)).toBeCloseTo(1, 6);
+    expect(marginTopUp(100, qty, 1000, 100, 0.005, 0.5)).toBe(0);
   });
 });

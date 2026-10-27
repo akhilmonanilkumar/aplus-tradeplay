@@ -19,42 +19,51 @@ const r6 = (x: number | null) => (x === null ? null : Number(x.toFixed(6)));
 const r2 = (x: number | null) => (x === null ? null : Number(x.toFixed(2)));
 
 async function fundingHistory(symbol: string): Promise<{ t: number; rate: number }[]> {
-  // Two pages of 1,000 settlements reach back ~22 months at 8h.
+  // Pages of up to 1,000 settlements (the venue may return fewer), back ~1 year at 8h.
   const out: { t: number; rate: number }[] = [];
   let end = Date.now();
-  for (let page = 0; page < 2; page++) {
+  for (let page = 0; page < 3; page++) {
     const rows = await getJson<Settled[]>(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1000&endTime=${end}`, { timeoutMs: 15_000 });
     if (!rows.length) break;
     out.unshift(...rows.map((x) => ({ t: x.fundingTime, rate: Number(x.fundingRate) })));
     end = rows[0]!.fundingTime - 1;
-    if (rows.length < 1000) break;
   }
   return out.sort((a, b) => a.t - b.t);
 }
 
-/** Enter when the last settled rate ≥ entry and the last 9 average > 0; exit when a settlement < exit. */
-function simulate(h: { t: number; rate: number }[], entry: number, exit: number, roundTrip: number) {
+type Rule = (h: { t: number; rate: number }[], i: number, open: boolean) => boolean;
+const avg = (h: { rate: number }[], i: number, n: number) => h.slice(Math.max(0, i - n + 1), i + 1).reduce((a, b) => a + b.rate, 0) / Math.min(n, i + 1);
+/** Rule = should the position be open after settlement i (given whether it is open now). */
+const RULES: Record<string, Rule> = {
+  // Enter on a settled rate >= 0.01% with the 3-day average positive; exit on any settlement below 0.
+  exitOnNegative: (h, i, open) => (open ? h[i]!.rate >= 0 : h[i]!.rate >= 0.0001 && avg(h, i, 9) > 0),
+  // Hold through single dips: enter when the 3-day average >= 0.005%, exit when the 3-day average < 0.
+  avg3d: (h, i, open) => (open ? avg(h, i, 9) >= 0 : avg(h, i, 9) >= 0.00005),
+  // Slower still: 7-day average in and out.
+  avg7d: (h, i, open) => (open ? avg(h, i, 21) >= 0 : avg(h, i, 21) >= 0.00005),
+  // Benchmark: open at the start, never close.
+  hold: () => true,
+};
+
+function simulate(h: { t: number; rate: number }[], rule: Rule, roundTrip: number) {
   const trades: { start: number; end: number; n: number; funding: number; net: number }[] = [];
   let open: { start: number; funding: number; n: number } | null = null;
-  for (let i = 9; i < h.length; i++) {
+  for (let i = 21; i < h.length; i++) {
     const x = h[i]!;
-    if (open) {
-      open.funding += x.rate; open.n++;
-      if (x.rate < exit) { trades.push({ start: open.start, end: x.t, n: open.n, funding: open.funding, net: open.funding - roundTrip }); open = null; }
-      continue;
-    }
-    const avg = h.slice(i - 8, i + 1).reduce((a, b) => a + b.rate, 0) / 9;
-    if (x.rate >= entry && avg > 0) open = { start: x.t, funding: 0, n: 0 };
+    if (open) { open.funding += x.rate; open.n++; }
+    const want = rule(h, i, !!open);
+    if (open && !want) { trades.push({ start: open.start, end: x.t, n: open.n, funding: open.funding, net: open.funding - roundTrip }); open = null; }
+    else if (!open && want) open = { start: x.t, funding: 0, n: 0 };
   }
   if (open) trades.push({ start: open.start, end: h.at(-1)!.t, n: open.n, funding: open.funding, net: open.funding - roundTrip });
-  const days = h.length ? (h.at(-1)!.t - h[9]!.t) / 86_400_000 : 0;
+  const days = h.length > 21 ? (h.at(-1)!.t - h[21]!.t) / 86_400_000 : 0;
   const total = trades.reduce((a, t) => a + t.net, 0);
   const inMarket = trades.reduce((a, t) => a + (t.end - t.start), 0) / 86_400_000;
   return {
     trades: trades.length, wins: trades.filter((t) => t.net > 0).length,
     avgHoldDays: r2(trades.length ? inMarket / trades.length : null), timeInMarket: r2(days ? inMarket / days : null),
     netPctOnNotional: r2(total * 100), aprOnNotional: r2(days ? total * 100 * (365 / days) : null),
-    feesPct: r2(trades.length * roundTrip * 100), bestPct: r2(trades.length ? Math.max(...trades.map((t) => t.net)) * 100 : null), worstPct: r2(trades.length ? Math.min(...trades.map((t) => t.net)) * 100 : null),
+    feesPct: r2(trades.length * roundTrip * 100), worstPct: r2(trades.length ? Math.min(...trades.map((t) => t.net)) * 100 : null),
   };
 }
 
@@ -76,6 +85,16 @@ function spikes(k: Kline[]) {
 
 export async function basisResearch(symbols: string[], fees = { spot: 0.001, perp: 0.0005 }) {
   const roundTrip = 2 * (fees.spot + fees.perp);
+  type Filter = { filterType: string; notional?: string; minNotional?: string; minQty?: string };
+  const [fx, sx] = await Promise.all([
+    getJson<{ symbols: { symbol: string; filters: Filter[] }[] }>("https://fapi.binance.com/fapi/v1/exchangeInfo", { timeoutMs: 15_000 }).catch(() => null),
+    getJson<{ symbols: { symbol: string; filters: Filter[] }[] }>(`https://api.binance.com/api/v3/exchangeInfo?symbols=${encodeURIComponent(JSON.stringify(symbols))}`, { timeoutMs: 15_000 }).catch(() => null),
+  ]);
+  const minNotional = (info: typeof fx, symbol: string) => {
+    const f = info?.symbols.find((x) => x.symbol === symbol)?.filters ?? [];
+    const n = f.find((x) => x.filterType === "MIN_NOTIONAL" || x.filterType === "NOTIONAL");
+    return n ? Number(n.notional ?? n.minNotional) : null;
+  };
   const rows = await Promise.all(symbols.map(async (symbol) => {
     try {
       const [h, k] = await Promise.all([
@@ -95,13 +114,10 @@ export async function basisResearch(symbols: string[], fees = { spot: 0.001, per
         mean: r6(rates.reduce((a, b) => a + b, 0) / (rates.length || 1)), median: r6(pct(rates, 0.5)), p10: r6(pct(rates, 0.1)), p90: r6(pct(rates, 0.9)), min: r6(Math.min(...rates)), max: r6(Math.max(...rates)),
         mean90d: r6(last90.length ? last90.reduce((a, b) => a + b, 0) / last90.length : null),
         longestNegativeRun: longestNeg, negativeRuns: negRuns,
-        rule: {
-          base: simulate(h, 0.0001, 0, roundTrip),
-          exitBelowHalf: simulate(h, 0.0001, 0.00005, roundTrip),
-          entry2bp: simulate(h, 0.0002, 0, roundTrip),
-          makerFees: simulate(h, 0.0001, 0, 2 * (0.00075 + 0.0002)),
-        },
-        perpSpikes: spikes(k),
+        rule: Object.fromEntries(Object.entries(RULES).map(([k, f]) => [k, simulate(h, f, roundTrip)])),
+        makerRule: Object.fromEntries(Object.entries(RULES).map(([k, f]) => [k, simulate(h, f, 2 * (0.00075 + 0.0002))])),
+        perpSpikes: spikes(k), lastClose: Number(k.at(-1)?.[4] ?? 0),
+        minNotional: { perp: minNotional(fx, symbol), spot: minNotional(sx, symbol) },
       };
     } catch (e) {
       return { symbol, error: (e as Error).message };

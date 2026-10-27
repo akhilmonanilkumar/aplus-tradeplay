@@ -72,3 +72,54 @@ export function basisSignal(open: boolean, f: { predicted: number; lastSettled: 
   if (open) return f.predicted < rules.exitRate || (f.lastSettled !== null && f.lastSettled < rules.exitRate) ? 'exit' : 'hold';
   return f.predicted >= rules.entryRate && (f.avg3d ?? 0) > 0 ? 'enter' : 'wait';
 }
+
+/**
+ * A funded basis account: capital split between the spot wallet (buys the long leg outright) and the
+ * futures wallet (margin for the short perp). With the short at leverage L, notional N needs N/L of
+ * margin, so capital C funds N = C·L/(L+1) of spot and C/(L+1) of margin. Lower leverage leaves more
+ * margin per unit notional: the buffer against a spike before the short is liquidated.
+ */
+export interface BasisAccountRules {
+  capital: number;
+  /** Short-leg leverage (1 = fully margined: spot and margin each half the capital). */
+  leverage: number;
+  /** Maintenance margin rate of the perp tier (Binance BTC/ETH ≈ 0.4%, alts 0.5–1%). */
+  mmr: number;
+  /** Move margin back over to restore the buffer when the perp has risen this share of the way to liquidation. */
+  rebalanceAt: number;
+  /** Smallest order the venue accepts per leg, in quote. */
+  minNotional: number;
+}
+
+export interface BasisAllocation { notional: number; spot: number; margin: number; reserve: number }
+
+/** Split capital into spot, margin and an untouched reserve (kept aside to top up margin). */
+export function basisAllocation(r: Pick<BasisAccountRules, 'capital' | 'leverage'>, reserveShare = 0): BasisAllocation {
+  const reserve = r.capital * reserveShare;
+  const working = r.capital - reserve;
+  const notional = (working * r.leverage) / (r.leverage + 1);
+  return { notional, spot: notional, margin: working - notional, reserve };
+}
+
+/** Isolated-margin liquidation price of a short: where margin + funding falls to maintenance. */
+export function shortLiquidationPrice(entry: number, qty: number, margin: number, mmr: number): number {
+  if (!(qty > 0)) return Infinity;
+  return (margin + entry * qty) / (qty * (1 + mmr));
+}
+
+/** How far (as a fraction) the perp can rise from `mark` before the short is liquidated. */
+export const liquidationBuffer = (mark: number, liq: number) => (Number.isFinite(liq) && mark > 0 ? liq / mark - 1 : Infinity);
+
+/** Highest leverage whose buffer survives a rise of `spike` (e.g. 0.6 for +60%) with maintenance margin `mmr`. */
+export const maxLeverageFor = (spike: number, mmr: number) => 1 / ((1 + spike) * (1 + mmr) - 1);
+
+/**
+ * Margin to move from the spot wallet (by selling spot gains) so the buffer is back at `target` at
+ * `mark`. The spot leg has gained what the short lost, so the hedge stays whole; this is a transfer
+ * plus a small sale, not a loss.
+ */
+export function marginTopUp(mark: number, qty: number, margin: number, perpEntry: number, mmr: number, target: number): number {
+  const needLiq = mark * (1 + target);
+  const needMargin = needLiq * qty * (1 + mmr) - perpEntry * qty;
+  return Math.max(0, needMargin - margin);
+}
