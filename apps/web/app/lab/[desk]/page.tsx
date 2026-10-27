@@ -55,7 +55,7 @@ export default function Lab() {
   const [stratId, setStratId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [res, setRes] = useState<(BacktestResult & { source: string; approx: boolean; ms: number }) | null>(null);
+  const [res, setRes] = useState<(BacktestResult & { source: string; approx: boolean; ms: number; bars: number; partial: string | null }) | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const worker = useRef<Worker | null>(null);
 
@@ -70,15 +70,19 @@ export default function Lab() {
 
   const run = async () => {
     setError(null); setRes(null); setSaved(null);
-    const to = Date.now();
+    // The window ends on the last whole hour, so reruns within the hour replay the same bars.
+    const to = Math.floor(Date.now() / 3_600_000) * 3_600_000;
     const from = to - Number(days) * 86_400_000;
     try {
-      setStatus(`Loading ${def.htf} / ${def.poi} / ${def.ltf} history…`);
-      const [htf, poi, ltf] = await Promise.all([
-        fetchHistory(inst, def.htf, from - WARM[def.htf]!, to),
-        fetchHistory(inst, def.poi, from - WARM[def.poi]!, to),
-        fetchHistory(inst, def.ltf, from - WARM[def.ltf]!, to),
+      // The entry frame picks the feed; structure and POI frames are pinned to it, so one run never mixes sources.
+      setStatus(`Loading ${def.ltf} history…`);
+      const ltf = await fetchHistory(inst, def.ltf, from - WARM[def.ltf]!, to);
+      setStatus(`Loading ${def.htf} / ${def.poi} history from ${ltf.source}…`);
+      const [htf, poi] = await Promise.all([
+        fetchHistory(inst, def.htf, from - WARM[def.htf]!, to, ltf.source),
+        fetchHistory(inst, def.poi, from - WARM[def.poi]!, to, ltf.source),
       ]);
+      const notes = [ltf, htf, poi].map((x) => x.note).filter((x): x is string => !!x && x.startsWith("Partial"));
       setStatus(`Replaying ${ltf.candles.length.toLocaleString()} ${def.ltf} bars…`);
       worker.current?.terminate();
       const w = new Worker(new URL("../../../workers/backtest.worker.ts", import.meta.url), { type: "module" });
@@ -86,7 +90,7 @@ export default function Lab() {
       w.onmessage = (e: MessageEvent<{ ok: boolean; result?: BacktestResult; error?: string; ms?: number }>) => {
         setStatus(null);
         if (!e.data.ok || !e.data.result) return setError(e.data.error ?? "Backtest failed");
-        setRes({ ...e.data.result, source: ltf.source, approx: ltf.approx, ms: e.data.ms ?? 0 });
+        setRes({ ...e.data.result, source: ltf.source, approx: ltf.approx, ms: e.data.ms ?? 0, bars: ltf.candles.length, partial: notes[0] ?? null });
         w.terminate();
       };
       w.onerror = (e) => { setStatus(null); setError(e.message || "Worker error"); };
@@ -190,14 +194,15 @@ export default function Lab() {
             </Card>
           ) : (
             <>
-              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. Add an OANDA or Twelve Data key for broker-grade XAU/USD.</Note>}
+              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. An OANDA key gives broker-grade XAU/USD history (Twelve Data&apos;s free quota is too small for repeatable long backtests).</Note>}
+              {res.partial && <Note tone="warn">{res.partial}. Results cover less than the chosen period.</Note>}
               <div className="g12">
                 <Kpi span={3} label={`Trades · ${days}d`} value={s!.n} foot={<span className="faint">{res.signals} signals · {res.cancelled.ranAway} ran away · {res.cancelled.expired + res.cancelled.windowClosed} expired</span>} />
                 <Kpi span={3} label="Win rate" value={pct(s!.winRate, 1)} tone={s!.winRate >= be ? "up" : "down"} foot={<span className="faint">break-even {pct(be, 1)} incl. costs</span>} />
                 <Kpi span={3} label="Expectancy (net)" value={fmtR(s!.avgR)} tone={s!.avgR >= 0 ? "up" : "down"} foot={<span className="faint">gross {fmtR(res.grossStats.avgR)} · PF {s!.profitFactor !== null ? num(s!.profitFactor, 2) : "—"}</span>} />
                 <Kpi span={3} label="Net R · return" value={fmtR(s!.netR, 1)} tone={s!.netR >= 0 ? "up" : "down"} foot={<span className="faint">{res.returnPct >= 0 ? "+" : ""}{res.returnPct.toFixed(1)}% at {p.riskPct}% · max DD {res.maxDrawdownPct.toFixed(1)}%</span>} />
               </div>
-              <Card title="Equity in R (net of costs)" right={<><Chip>{res.source}</Chip><Chip>{(res.ms / 1000).toFixed(1)} s</Chip><button className="btn sm pri" onClick={saveRun}>Save run</button></>}>
+              <Card title="Equity in R (net of costs)" right={<><Chip>{res.source}</Chip><Chip>{res.bars.toLocaleString()} bars to {new Date(res.to + TF_MS[def.ltf]).toISOString().slice(0, 16).replace("T", " ")} UTC</Chip><Chip>{(res.ms / 1000).toFixed(1)} s</Chip><button className="btn sm pri" onClick={saveRun}>Save run</button></>}>
                 <Spark values={curve} height={180} empty="No closed trades in this window" />
                 <div className="row faint mono" style={{ fontSize: 11.5, marginTop: 6, gap: 14 }}>
                   <span>max DD {num(s!.maxDrawdownR, 1)}R</span><span>longest losing streak {s!.longestLosingStreak}</span><span>avg win {fmtR(s!.avgWin)}</span><span>Sharpe/trade {s!.sharpePerTrade !== null ? num(s!.sharpePerTrade, 2) : "—"}</span>

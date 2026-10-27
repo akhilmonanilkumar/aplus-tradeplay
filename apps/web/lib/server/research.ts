@@ -1,9 +1,9 @@
 import "server-only";
 import {
-  INSTRUMENTS, NY, TF_MS, scanSignals, simulate, skippedImpact, wallToUtc, zonedParts,
+  INSTRUMENTS, NY, scanSignals, simulate, skippedImpact, wallToUtc, zonedParts,
   type InstrumentId, type ScanTrace, type StrategyParams,
 } from "@aplus/engine";
-import { loadHistory } from "@/lib/server/feeds";
+import { historyEnd, loadFrames } from "@/lib/server/feeds";
 
 /**
  * Rule research: one walk-forward scan of the last N days, simulated under the live rules and a
@@ -47,13 +47,9 @@ export async function research(id: InstrumentId, opts: { days?: number; day?: st
   const t0 = Date.now();
   const def = INSTRUMENTS[id];
   const days = Math.min(Math.max(opts.days ?? 30, 5), 90);
-  const to = Math.floor(Date.now() / TF_MS[def.ltf]) * TF_MS[def.ltf];
+  const to = historyEnd();
   const from = to - days * 86_400_000;
-  const [htf, poi, ltf] = await Promise.all([
-    loadHistory(id, def.htf, from - (WARM[def.htf] ?? 0), to),
-    loadHistory(id, def.poi, from - (WARM[def.poi] ?? 0), to),
-    loadHistory(id, def.ltf, from - (WARM[def.ltf] ?? 0), to),
-  ]);
+  const [ltf, htf, poi] = await loadFrames(id, [def.ltf, def.htf, def.poi].map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) })), to);
   const data = { htf: htf.candles, poi: poi.candles, ltf: ltf.candles };
 
   // The New York day to replay (default: today in New York).
@@ -91,7 +87,7 @@ export async function research(id: InstrumentId, opts: { days?: number; day?: st
   });
 
   return {
-    instrument: id, source: ltf.source, approx: ltf.approx, days, bars: ltf.candles.length,
+    instrument: id, source: ltf.source, approx: ltf.approx, partial: ltf.note?.startsWith("Partial") ? ltf.note : null, days, bars: ltf.candles.length,
     day: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
     variants,
     replay: { long: segments(trace, "long"), short: segments(trace, "short") },

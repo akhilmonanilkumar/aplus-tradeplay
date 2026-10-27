@@ -238,7 +238,7 @@ async function trackSignals(db: SupabaseClient): Promise<number> {
     const tfMs = TF_MS[def.ltf];
     const oldest = Math.min(...list.map((s) => Date.parse(s.created_at)));
     let candles = (await loadCandles(id, def.ltf, 300)).candles;
-    if (!candles.length || candles[0]!.t > oldest - tfMs) candles = (await loadHistory(id, def.ltf, oldest - tfMs, Date.now())).candles;
+    if (!candles.length || candles[0]!.t > oldest - tfMs) candles = (await loadHistory(id, def.ltf, oldest - tfMs, Date.now(), { allowMetered: true })).candles;
     for (const s of list) {
       const plan = { side: s.side as "long" | "short", entry: Number(s.entry), stop: Number(s.stop), target: Number(s.target), createdAt: Date.parse(s.created_at) };
       const r = resolveSignal(plan, candles, tfMs);

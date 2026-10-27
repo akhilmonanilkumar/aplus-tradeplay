@@ -3,7 +3,7 @@ import {
   ASIA_Q, INSTRUMENTS, LONDON_Q, NY, NY_Q, TF_MS, FRAME_BARS, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
   type InstrumentId, type ScanTfs, type SessionModelParams, type StrategyParams, type Tf,
 } from "@aplus/engine";
-import { loadHistory } from "@/lib/server/feeds";
+import { historyEnd, loadFrames, loadHistory } from "@/lib/server/feeds";
 
 /**
  * Strategy lab: candidate strategy families on a long walk-forward window, each judged against
@@ -96,10 +96,10 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180) 
   days = Math.min(Math.max(days, 30), 200);
   const tfs: ScanTfs = family === "a15" ? { htf: "4h", poi: "1h", ltf: "15m" } : { htf: def.htf, poi: def.poi, ltf: def.ltf };
   const ltfMs = TF_MS[tfs.ltf];
-  const to = Math.floor(Date.now() / ltfMs) * ltfMs;
+  const to = historyEnd();
   const from = to - days * 86_400_000;
-  const load = (tf: Tf) => loadHistory(id, tf, from - (WARM[tf] ?? 0), to);
-  const [htf, poi, ltf] = await Promise.all([load(tfs.htf), family === "session" ? Promise.resolve(null) : load(tfs.poi), load(tfs.ltf)]);
+  const frames = (family === "session" ? [tfs.ltf, tfs.htf] : [tfs.ltf, tfs.htf, tfs.poi]).map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) }));
+  const [ltf, htf, poi = null] = await loadFrames(id, frames, to);
   const loadedMs = Date.now() - t0;
   const mid = (from + to) / 2;
   let rows: Row[];
@@ -126,7 +126,7 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180) 
   }
 
   return {
-    instrument: id, family, days, tfs, source: ltf.source, approx: ltf.approx, bars: ltf.candles.length,
+    instrument: id, family, days, tfs, source: ltf.source, approx: ltf.approx, partial: ltf.note?.startsWith("Partial") ? ltf.note : null, bars: ltf.candles.length,
     from: new Date(from).toISOString(), to: new Date(to).toISOString(),
     criteria: `≥${PASS.minTrades} trades, PF ≥ ${PASS.minPf}, positive in both halves`,
     rows, loadMs: loadedMs, ms: Date.now() - t0,

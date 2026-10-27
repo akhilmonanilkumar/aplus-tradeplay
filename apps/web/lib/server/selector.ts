@@ -6,7 +6,7 @@ import {
 } from "@aplus/engine";
 import { confluence } from "@/lib/confluence";
 import { loadDerivs, type Derivs } from "@/lib/server/derivs";
-import { loadHistory } from "@/lib/server/feeds";
+import { historyEnd, loadFrames } from "@/lib/server/feeds";
 import { loadMacro, type Macro } from "@/lib/server/macro";
 import { telegramExecutor, type TradeTicket } from "@/lib/server/execution";
 import type { Chat } from "@/lib/server/telegram";
@@ -51,13 +51,9 @@ export async function recentEdges(db: SupabaseClient, ids: InstrumentId[], opts:
   for (const id of stale.slice(0, refresh)) {
     try {
       const def = INSTRUMENTS[id];
-      const to = Math.floor(Date.now() / TF_MS[def.ltf]) * TF_MS[def.ltf];
+      const to = historyEnd();
       const from = to - EDGE_DAYS * 86_400_000;
-      const [htf, poi, ltf] = await Promise.all([
-        loadHistory(id, def.htf, from - (WARM[def.htf] ?? 0), to),
-        loadHistory(id, def.poi, from - (WARM[def.poi] ?? 0), to),
-        loadHistory(id, def.ltf, from - (WARM[def.ltf] ?? 0), to),
-      ]);
+      const [ltf, htf, poi] = await loadFrames(id, [def.ltf, def.htf, def.poi].map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) })), to);
       const res = runBacktest(id, { htf: htf.candles, poi: poi.candles, ltf: ltf.candles }, { allowGradeA: opts.allowGradeA });
       const at = new Date().toISOString();
       await db.from("backtests").insert({

@@ -39,5 +39,5 @@ export async function staffGet<T>(path: string): Promise<T> {
 export const fetchCandles = (i: InstrumentId | string, tf: Tf, limit = 300, signal?: AbortSignal) =>
   api<CandleSet>(`/api/market/candles?i=${encodeURIComponent(i)}&tf=${tf}&limit=${limit}`, signal);
 
-export const fetchHistory = (i: InstrumentId, tf: Tf, from: number, to: number) =>
-  api<CandleSet>(`/api/market/history?i=${encodeURIComponent(i)}&tf=${tf}&from=${from}&to=${to}`);
+export const fetchHistory = (i: InstrumentId, tf: Tf, from: number, to: number, source?: string) =>
+  api<CandleSet>(`/api/market/history?i=${encodeURIComponent(i)}&tf=${tf}&from=${from}&to=${to}${source ? `&source=${encodeURIComponent(source)}` : ""}`);

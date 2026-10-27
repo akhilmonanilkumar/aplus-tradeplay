@@ -19,6 +19,8 @@ type Provider = {
   base?: Tf;
   /** Bars per request when paging history. */
   pageSize?: number;
+  /** Tight request quota: a long history pull can run out mid-way, so backtests skip it unless asked for by name. */
+  metered?: boolean;
 };
 
 const num = (x: unknown) => Number(x);
@@ -144,7 +146,7 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   XAUUSD: [
     { name: "OANDA XAU/USD", approx: false, enabled: hasOanda, load: oanda("XAU_USD") },
     // Free tier: 8 requests/min, 800/day — one 5,000-bar 5M pull per bar close covers 5M, 15M and 1H.
-    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD"), base: "5m", pageSize: 5000 },
+    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD"), base: "5m", pageSize: 5000, metered: true },
     { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA or Twelve Data key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
     { name: "PAXG/USDT proxy", approx: true, note: "1 PAXG ≈ 1 oz; trades at a small premium to spot", load: binanceSpot("PAXGUSDT") },
   ],
@@ -215,15 +217,34 @@ async function fromBase(id: InstrumentId, p: Provider, tf: Tf): Promise<Candle[]
   return tf === base ? rows : aggregate(rows, TF_MS[tf]);
 }
 
-/** Closed candles between `from` and `to`, paging backwards through the first provider that answers. */
-export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: number): Promise<CandleSet> {
+export interface HistoryOpts {
+  /** Use only this provider (by name) and fail rather than fall back to another. */
+  source?: string;
+  /** Allow metered providers in the automatic chain (live tracking, not backtests). */
+  allowMetered?: boolean;
+}
+
+/**
+ * Closed candles between `from` and `to`, paging backwards through one provider.
+ * Repeatable by design: metered vendors are skipped unless named, and a provider whose history
+ * starts well after `from` is passed over for one that covers the window, so the same request
+ * gets the same source and the same bars instead of whichever vendor happened to answer.
+ */
+export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: number, opts: HistoryOpts = {}): Promise<CandleSet> {
   const errors: string[] = [];
-  for (const p of CHAINS[id].filter((x) => !x.enabled || x.enabled())) {
+  const enabled = CHAINS[id].filter((x) => !x.enabled || x.enabled());
+  const chain = opts.source ? enabled.filter((x) => x.name === opts.source) : enabled.filter((x) => opts.allowMetered || !x.metered);
+  if (!chain.length) throw new Error(opts.source ? `source not available: ${opts.source}` : "no provider");
+  // Weekends and holidays leave CFD history without bars for up to a few days.
+  const slack = (INSTRUMENTS[id].fxHours ? 4 : 1) * 86_400_000 + TF_MS[tf];
+  const end0 = Math.min(to, Date.now());
+  let partial: CandleSet | null = null;
+  for (const p of chain) {
     const page = p.pageSize ?? 1000;
     try {
       const out: Candle[] = [];
-      let end = Math.min(to, Date.now());
-      for (let guard = 0; guard < 60 && end > from; guard++) {
+      let end = end0;
+      for (let guard = 0; guard < 80 && end > from; guard++) {
         const batch = dedupe(await p.load(tf, { limit: page, endTime: end }));
         const older = batch.filter((c) => c.t < (out[0]?.t ?? Infinity) && c.t >= from - TF_MS[tf]);
         if (!older.length) break;
@@ -231,15 +252,33 @@ export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: nu
         end = older[0]!.t - 1;
         if (batch.length < page * 0.3) break;
       }
-      const closed = openHours(id, out).filter((c) => c.t >= from && c.t + TF_MS[tf] <= Math.min(to, Date.now()));
+      const closed = openHours(id, out).filter((c) => c.t >= from && c.t + TF_MS[tf] <= end0);
       if (closed.length < 50) throw new Error(`only ${closed.length} candles`);
-      return { candles: closed, forming: null, source: p.name, approx: p.approx, note: p.note };
+      const set: CandleSet = { candles: closed, forming: null, source: p.name, approx: p.approx, note: p.note };
+      if (closed[0]!.t <= from + slack) return set;
+      errors.push(`${p.name}: history starts ${new Date(closed[0]!.t).toISOString().slice(0, 10)}`);
+      if (!partial || closed[0]!.t < partial.candles[0]!.t) partial = set;
     } catch (e) {
       errors.push(`${p.name}: ${errMsg(e)}`);
     }
   }
+  if (partial) return { ...partial, note: `Partial history: starts ${new Date(partial.candles[0]!.t).toISOString().slice(0, 10)}, not ${new Date(from).toISOString().slice(0, 10)}` };
   throw new Error(errors.join(" · "));
 }
+
+/**
+ * Several timeframes for one backtest from a single provider: the first frame picks the source,
+ * the others must come from it too, so structure, POIs and entries all read the same prices.
+ */
+export async function loadFrames(id: InstrumentId, frames: { tf: Tf; from: number }[], to: number, opts: HistoryOpts = {}): Promise<CandleSet[]> {
+  const [first, ...rest] = frames;
+  const lead = await loadHistory(id, first!.tf, first!.from, to, opts);
+  const others = await Promise.all(rest.map((f) => loadHistory(id, f.tf, f.from, to, { source: lead.source })));
+  return [lead, ...others];
+}
+
+/** Backtest windows end on the last whole hour, so reruns within the hour replay the same bars. */
+export const historyEnd = (now = Date.now()) => Math.floor(now / 3_600_000) * 3_600_000;
 
 /** Drop bars printed while a CFD market is shut (weekend, daily break). Crypto trades 24/7. */
 function openHours(id: InstrumentId, rows: Candle[]): Candle[] {
