@@ -15,8 +15,9 @@ export interface Sketch {
 }
 
 const W = 320, H = 190, PAD = { l: 8, r: 40, t: 14, b: 18 };
-const ZONE: Record<string, string> = { poi: "var(--info-bg)", ob: "var(--accent-bg, rgba(242,193,78,.16))", fvg: "rgba(120,160,255,.14)", flip: "rgba(255,120,120,.14)", range: "rgba(160,160,180,.12)" };
-const ZONE_EDGE: Record<string, string> = { poi: "var(--info, #6aa5ff)", ob: "var(--accent)", fvg: "#7aa0ff", flip: "var(--down)", range: "var(--faint)" };
+// Theme tokens only, so the charts follow light and dark mode and the accent theme.
+const ZONE: Record<string, string> = { poi: "var(--info-bg)", ob: "var(--accent-bg)", fvg: "var(--up-bg)", flip: "var(--down-bg)", range: "var(--surface-3)" };
+const ZONE_EDGE: Record<string, string> = { poi: "var(--info)", ob: "var(--accent-ink)", fvg: "var(--up)", flip: "var(--down)", range: "var(--faint)" };
 
 export default function PlaybookChart({ s, title }: { s: Sketch; title: string }) {
   const n = s.closes.length;
@@ -33,10 +34,10 @@ export default function PlaybookChart({ s, title }: { s: Sketch; title: string }
   const y = (v: number) => PAD.t + (1 - (v - (lo - pad)) / (hi - lo + 2 * pad)) * (H - PAD.t - PAD.b);
   const tag = (px: number, py: number, text: string, color: string, anchor: "start" | "end" | "middle" = "start") => (
     <text x={px} y={py} fill={color} fontSize={8.5} fontFamily="var(--font-geist-mono), ui-monospace, monospace" textAnchor={anchor} dominantBaseline="middle"
-      stroke="var(--surface-2, var(--surface))" strokeWidth={3} paintOrder="stroke" strokeLinejoin="round">{text}</text>
+      stroke="var(--surface-2)" strokeWidth={3} paintOrder="stroke" strokeLinejoin="round">{text}</text>
   );
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={title} style={{ width: "100%", height: "auto", display: "block", background: "var(--surface-2, var(--surface))", borderRadius: 10 }}>
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={title} style={{ width: "100%", height: "auto", display: "block", background: "var(--surface-2)", borderRadius: 10 }}>
       {(s.zones ?? []).map((z, k) => (
         <g key={`z${k}`}>
           <rect x={x(z.x0) - cw / 2} y={y(z.y1)} width={(z.x1 - z.x0 + 1) * cw} height={Math.max(2, y(z.y0) - y(z.y1))} fill={ZONE[z.tone]} stroke={ZONE_EDGE[z.tone]} strokeOpacity={0.55} strokeDasharray={z.tone === "range" ? "3 3" : undefined} rx={2} />
@@ -65,7 +66,7 @@ export default function PlaybookChart({ s, title }: { s: Sketch; title: string }
           <g>
             <rect x={x0} y={y(p.target)} width={x1 - x0} height={y(p.entry) - y(p.target)} fill="var(--up)" opacity={0.08} />
             <rect x={x0} y={y(p.entry)} width={x1 - x0} height={y(p.stop) - y(p.entry)} fill="var(--down)" opacity={0.1} />
-            {[{ v: p.target, l: "TP", c: "var(--up)" }, { v: p.entry, l: "LIMIT", c: "var(--accent)" }, { v: p.stop, l: "SL", c: "var(--down)" }].map((r) => (
+            {[{ v: p.target, l: "TP", c: "var(--up)" }, { v: p.entry, l: "LIMIT", c: "var(--accent-ink)" }, { v: p.stop, l: "SL", c: "var(--down)" }].map((r) => (
               <g key={r.l}>
                 <line x1={x0} x2={x1} y1={y(r.v)} y2={y(r.v)} stroke={r.c} strokeWidth={1.2} strokeDasharray={r.l === "LIMIT" ? undefined : "4 3"} />
                 {tag(x1 + 4, y(r.v), r.l, r.c)}
@@ -75,7 +76,7 @@ export default function PlaybookChart({ s, title }: { s: Sketch; title: string }
         );
       })()}
       {(s.marks ?? []).map((m, k) => {
-        const col = m.tone === "sweep" ? "var(--warn)" : m.tone === "shift" ? "var(--text)" : "var(--accent)";
+        const col = m.tone === "sweep" ? "var(--warn)" : m.tone === "shift" ? "var(--text)" : "var(--accent-ink)";
         const below = m.tone === "sweep";
         return (
           <g key={`m${k}`}>
