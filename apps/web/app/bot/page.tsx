@@ -14,6 +14,7 @@ import { Card, Chip, Empty, ErrorNote, Kpi, Seg, Table } from "@/components/ui";
 
 type Range = "7" | "30" | "90" | "all";
 type Src = "all" | "selector" | "autopilot";
+type Take = "all" | "tradeable" | "rejected";
 type Row = Signal & { paperPnl: number | null; paperTrades: number; telegram: "sent" | "failed" | null };
 
 const OUTCOME: Record<string, { l: string; tone: "up" | "down" | "info" | "warn" | "" }> = {
@@ -23,6 +24,9 @@ const OUTCOME: Record<string, { l: string; tone: "up" | "down" | "info" | "warn"
 const WINDOW: Record<string, string> = { london_q: "London Q", ny_q: "NY Q", asia_q: "Asia Q", london_close: "London close" };
 const closed = (s: Signal) => s.outcome === "win" || s.outcome === "loss";
 const ist = (iso: string) => new Date(iso).toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+/** Model letter, or the session strategy id for model S. */
+const modelOf = (s: Signal) => (s.model === "S" ? `S · ${s.meta?.strategy ?? "session"}` : s.model);
+const gateOf = (s: Signal) => (s.meta?.tradeable === undefined ? "—" : s.meta.tradeable ? "would trade" : s.meta.paper?.blockers?.[0] ?? (s.meta.paper?.waitingFor?.length ? "gate not complete" : `grade ${s.grade}`));
 const bucket = (score: number | undefined) => (score === undefined ? "—" : score >= 80 ? "80+" : score >= 70 ? "70–79" : score >= 60 ? "60–69" : "< 60");
 
 function group(rows: Row[], key: (s: Row) => string) {
@@ -75,6 +79,7 @@ export default function BotLog() {
   const [range, setRange] = useState<Range>("30");
   const [src, setSrc] = useState<Src>("all");
   const [inst, setInst] = useState<"all" | InstrumentId>("all");
+  const [take, setTake] = useState<Take>("all");
   const signals = useRows<Signal>({ table: "signals", inList: ["source", ["autopilot", "selector"]], order: "created_at", limit: 2000 });
   const trades = useRows<{ signal_id: string | null; pnl: number | null; exit: number | null }>({ table: "trades", select: "signal_id,pnl,exit", notNull: "signal_id", order: "opened_at", limit: 5000 });
   const alerts = useRows<{ signal_id: string | null; status: string }>({ table: "telegram_alerts", select: "signal_id,status", notNull: "signal_id", order: "at", limit: 5000 });
@@ -86,9 +91,10 @@ export default function BotLog() {
     const tg = new Map<string, "sent" | "failed">();
     for (const a of alerts.rows ?? []) if (a.signal_id && tg.get(a.signal_id) !== "sent") tg.set(a.signal_id, a.status === "sent" ? "sent" : "failed");
     return (signals.rows ?? [])
-      .filter((s) => Date.parse(s.created_at) >= since && (src === "all" || s.source === src) && (inst === "all" || s.instrument === inst))
+      .filter((s) => Date.parse(s.created_at) >= since && (src === "all" || s.source === src) && (inst === "all" || s.instrument === inst)
+        && (take === "all" || (take === "tradeable" ? s.meta?.tradeable !== false : s.meta?.tradeable === false)))
       .map((s) => ({ ...s, paperPnl: pnl.get(s.id)?.sum ?? null, paperTrades: pnl.get(s.id)?.n ?? 0, telegram: tg.get(s.id) ?? null }));
-  }, [signals.rows, trades.rows, alerts.rows, range, src, inst]);
+  }, [signals.rows, trades.rows, alerts.rows, range, src, inst, take]);
 
   const done = rows.filter(closed).sort((a, b) => Date.parse(a.closed_at ?? a.created_at) - Date.parse(b.closed_at ?? b.created_at));
   const st = summarize(done.map((s) => Number(s.net_r ?? 0)));
@@ -106,6 +112,7 @@ export default function BotLog() {
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         <Seg label="Range" value={range} onChange={setRange} options={[{ v: "7", l: "7d" }, { v: "30", l: "30d" }, { v: "90", l: "90d" }, { v: "all", l: "All" }]} />
         <Seg label="Source" value={src} onChange={setSrc} options={[{ v: "all", l: "All bots" }, { v: "selector", l: "Selector" }, { v: "autopilot", l: "Autopilot" }]} />
+        <Seg label="Gate" value={take} onChange={setTake} options={[{ v: "all", l: "All logged" }, { v: "tradeable", l: "Would trade" }, { v: "rejected", l: "Rejected" }]} />
         <Seg label="Instrument" value={inst} onChange={setInst} options={[{ v: "all", l: "All" }, ...(Object.keys(INSTRUMENTS) as InstrumentId[]).map((i) => ({ v: i, l: i }))]} />
         <span style={{ flex: 1 }} />
         <button className="btn ghost sm" onClick={() => { signals.reload(); trades.reload(); alerts.reload(); }}>Refresh</button>
@@ -128,6 +135,9 @@ export default function BotLog() {
 
       <section className="g12">
         <Breakdown title="By bot" rows={group(rows, (s) => (s.source === "selector" ? "Selector" : "Autopilot"))} />
+        <Breakdown title="By entry model / strategy" rows={group(rows, modelOf)} />
+        <Breakdown title="By gate result" rows={group(rows, gateOf)} />
+        <Breakdown title="By stop anchor" rows={group(rows.filter((s) => s.meta?.stopAnchor), (s) => s.meta!.stopAnchor!.replace(/sweep of .*/, "sweep wick"))} />
         <Breakdown title="By instrument" rows={group(rows, (s) => s.instrument)} />
         <Breakdown title="By session" rows={group(rows, (s) => WINDOW[s.session_window ?? ""] ?? "Outside window")} />
         <Breakdown title="By side & grade" rows={group(rows, (s) => `${s.side} · ${s.grade}`)} />
@@ -135,16 +145,16 @@ export default function BotLog() {
       </section>
 
       <Card title="Signal log" right={<Chip>{rows.length}</Chip>}>
-        {rows.length === 0 ? <Empty>No bot signals in this range yet. They appear when the autopilot or the selector finds a tradeable setup.</Empty> : (
+        {rows.length === 0 ? <Empty>No bot signals in this range yet. The autopilot logs every entry-model setup and session-strategy signal it detects; the selector logs its picks.</Empty> : (
           <Table head={["Time (IST)", "Bot", "Setup", "Grade / score", "Entry · SL · TP", "R:R", "Outcome", "Result", "Paper P&L", "Telegram"]} right={[5, 7, 8]}>
             {rows.slice(0, 300).map((s) => {
               const d = INSTRUMENTS[s.instrument as InstrumentId]?.digits ?? 2;
               const o = OUTCOME[s.outcome ?? ""] ?? { l: "Untracked", tone: "" as const };
               return (
-                <tr key={s.id} title={s.meta?.why?.join(" · ")}>
+                <tr key={s.id} title={s.meta?.why?.join(" · ") ?? s.meta?.detail}>
                   <td className="mono faint">{ist(s.created_at)}</td>
                   <td><Chip tone={s.source === "selector" ? "acc" : ""}>{s.source === "selector" ? "Selector" : `Autopilot${s.meta?.mode ? ` · ${s.meta.mode}` : ""}`}</Chip></td>
-                  <td>{s.instrument} <span className={s.side === "long" ? "up" : "down"}>{s.side}</span> <span className="faint">{WINDOW[s.session_window ?? ""] ?? ""}</span></td>
+                  <td>{s.instrument} <span className={s.side === "long" ? "up" : "down"}>{s.side}</span> <Chip>{modelOf(s)}</Chip> <span className="faint">{WINDOW[s.session_window ?? ""] ?? ""}</span>{s.meta?.tradeable === false ? <span className="faint" style={{ fontSize: 11 }}> · {gateOf(s)}</span> : null}</td>
                   <td>{s.grade}{s.meta?.score !== undefined ? <span className="faint"> · {s.meta.score}/100</span> : null}</td>
                   <td className="mono faint">{num(Number(s.entry), d)} · {num(Number(s.stop), d)} · {num(Number(s.target), d)}</td>
                   <td className="r mono">{s.rr !== null ? num(Number(s.rr), 2) : "—"}</td>
@@ -158,7 +168,7 @@ export default function BotLog() {
           </Table>
         )}
         <p className="faint" style={{ fontSize: 11.5, marginTop: 8 }}>
-          Outcomes are tracked on the instrument&apos;s 5M candles with the backtester&apos;s rules: limit fills on touch, a target before the fill is &quot;ran away&quot;, no fill in 12 bars is &quot;expired&quot;, stop checked before target. Net R subtracts the instrument&apos;s round-trip cost. Hover a row for the selector&apos;s reasons.
+          Outcomes are tracked on the instrument&apos;s 5M candles with the backtester&apos;s rules: limit fills on touch, a target before the fill is &quot;ran away&quot;, no fill in 12 bars is &quot;expired&quot;, stop checked before target. Net R subtracts the instrument&apos;s round-trip cost. Market entries (model E, session strategies) fill when logged. Rejected setups are tracked too, to show what each rule costs or saves. Hover a row for the trigger or the selector&apos;s reasons.
         </p>
       </Card>
     </>

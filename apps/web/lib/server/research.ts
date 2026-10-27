@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  INSTRUMENTS, NY, scanSignals, simulate, skippedImpact, wallToUtc, zonedParts,
+  INSTRUMENTS, NY, scanSignals, usHighImpactTimes, simulate, skippedImpact, wallToUtc, zonedParts,
   type InstrumentId, type ScanTrace, type StrategyParams,
 } from "@aplus/engine";
 import { historyEnd, loadFrames } from "@/lib/server/feeds";
@@ -50,7 +50,7 @@ export async function research(id: InstrumentId, opts: { days?: number; day?: st
   const to = historyEnd();
   const from = to - days * 86_400_000;
   const [ltf, htf, poi] = await loadFrames(id, [def.ltf, def.htf, def.poi].map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) })), to);
-  const data = { htf: htf.candles, poi: poi.candles, ltf: ltf.candles };
+  const data = { htf: htf.candles, poi: poi.candles, ltf: ltf.candles, news: usHighImpactTimes(from - 7 * 86_400_000, to) };
 
   // The New York day to replay (default: today in New York).
   const nyNow = zonedParts(Date.now(), NY);

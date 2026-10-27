@@ -29,4 +29,16 @@ export function hasSecret(req: Request, secret: string | undefined): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * The scheduler's bearer token, checked against the secret pg_cron reads from Supabase Vault
+ * (`autopilot_secret_ok`, service role only). The secret is generated in the database and never copied.
+ */
+export async function hasVaultSecret(req: Request): Promise<boolean> {
+  const got = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  const db = serviceClient();
+  if (got.length < 32 || !db) return false;
+  const r = await db.rpc("autopilot_secret_ok", { token: got });
+  return !r.error && r.data === true;
+}
+
 export const unauthorized = () => Response.json({ error: "Staff with two-factor only" }, { status: 403 });

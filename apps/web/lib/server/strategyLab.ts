@@ -1,7 +1,7 @@
 import "server-only";
 import {
-  ASIA_Q, INSTRUMENTS, LONDON_Q, NY, NY_Q, TF_MS, FRAME_BARS, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
-  type InstrumentId, type ScanTfs, type SessionModelParams, type StrategyParams, type Tf,
+  ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, NY, SESSION_VARIANTS, TF_MS, FRAME_BARS, lossDiagnostics, usHighImpactTimes, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
+  type InstrumentId, type ScanTfs, type StrategyParams, type Tf,
 } from "@aplus/engine";
 import { historyEnd, loadFrames, loadHistory } from "@/lib/server/feeds";
 
@@ -11,7 +11,7 @@ import { historyEnd, loadFrames, loadHistory } from "@/lib/server/feeds";
  * positive in both the earlier and the later half of the period.
  */
 
-export type Family = "a5" | "a15" | "session";
+export type Family = "a5" | "a15" | "session" | "models";
 
 const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -27,27 +27,7 @@ const A_VARIANTS: { id: string; label: string; params: Partial<StrategyParams> }
   { id: "coreHtfP", label: "Trend core HTF only 1.5R, half off at 1R", params: { allowGradeA: true, requirePoi: false, requireCorrectHalf: false, requireAlignment: false, minRR: 1.5, partialAtR: 1 } },
 ];
 
-function sessionVariants(): { id: string; label: string; params: Omit<SessionModelParams, "costRate"> }[] {
-  const out: { id: string; label: string; params: Omit<SessionModelParams, "costRate"> }[] = [];
-  const ranges = [
-    { id: "asia", name: "Asia range in London", rangeWindow: ASIA_Q, tradeWindow: LONDON_Q },
-    { id: "ldn", name: "London range in NY", rangeWindow: LONDON_Q, tradeWindow: NY_Q },
-  ];
-  for (const r of ranges) {
-    for (const trendFilter of [false, true]) {
-      const tf = trendFilter ? " · with HTF trend" : "";
-      out.push(
-        { id: `${r.id}-fade${trendFilter ? "-t" : ""}`, label: `${r.name}: fade to opposite edge${tf}`, params: { kind: "fade", rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: "opposite", rr: 2, minRR: 1, partialAtR: null, minRiskAtr: 0.5 } },
-        { id: `${r.id}-fade-p${trendFilter ? "-t" : ""}`, label: `${r.name}: fade, half off at 1R${tf}`, params: { kind: "fade", rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: "opposite", rr: 2, minRR: 1, partialAtR: 1, minRiskAtr: 0.5 } },
-        { id: `${r.id}-bo${trendFilter ? "-t" : ""}`, label: `${r.name}: breakout 2R${tf}`, params: { kind: "breakout", rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: "rr", rr: 2, minRR: 1, partialAtR: null, minRiskAtr: 0.5 } },
-        { id: `${r.id}-bo-p${trendFilter ? "-t" : ""}`, label: `${r.name}: breakout 3R, half off at 1R${tf}`, params: { kind: "breakout", rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: "rr", rr: 3, minRR: 1, partialAtR: 1, minRiskAtr: 0.5 } },
-      );
-    }
-  }
-  return out;
-}
-
-interface Row { id: string; label: string; trades: number; winRate: number; netR: number; avgR: number; pf: number | null; maxDDR: number; halves: [number, number]; pass: boolean; signals?: number; topRejects?: [string, number][] }
+interface Row { id: string; label: string; model?: string; diagnostics?: ReturnType<typeof lossDiagnostics>; trades: number; winRate: number; netR: number; avgR: number; pf: number | null; maxDDR: number; halves: [number, number]; pass: boolean; signals?: number; topRejects?: [string, number][] }
 
 function row(id: string, label: string, trades: { signalAt: number; rNet: number }[], stats: { n: number; winRate: number; netR: number; avgR: number; profitFactor: number | null; maxDrawdownR: number }, mid: number): Row {
   const early = trades.filter((t) => t.signalAt < mid).reduce((a, t) => a + t.rNet, 0);
@@ -90,35 +70,62 @@ export async function structureReport(id: InstrumentId) {
   return { instrument: id, frames: out };
 }
 
-export async function strategyLab(id: InstrumentId, family: Family, days = 180) {
+/**
+ * Each entry model alone, under three rule sets: the live rules (stop beyond the furthest anchor,
+ * nearest target paying 2R), the playbook's (stop just beyond the entry zone, nearest real target,
+ * 3R minimum, never stretched), and the playbook stop with the live target rule.
+ */
+function modelVariants(): { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] {
+  const out: { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] = [];
+  for (const m of MODEL_IDS) {
+    const em = ENTRY_MODELS[m];
+    const base: Partial<StrategyParams> = { models: [m], allowAllModels: true, allowGradeA: !em.aPlusEligible };
+    out.push(
+      { id: `${m}-live`, label: `${m} · ${em.name} — live rules (furthest stop, first target ≥ 2R)`, model: m, params: base, diagnose: true },
+      { id: `${m}-spec`, label: `${m} · ${em.name} — playbook (zone stop, nearest target, 3R)`, model: m, params: { ...base, stopMode: "zone", targetMode: "nearest", minRR: 3 }, diagnose: true },
+      { id: `${m}-zone`, label: `${m} · ${em.name} — zone stop, first target ≥ 2R`, model: m, params: { ...base, stopMode: "zone" }, diagnose: false },
+    );
+  }
+  return out;
+}
+
+export async function strategyLab(id: InstrumentId, family: Family, days = 180, opts: { m1?: boolean } = {}) {
   const t0 = Date.now();
   const def = INSTRUMENTS[id];
   days = Math.min(Math.max(days, 30), 200);
   const tfs: ScanTfs = family === "a15" ? { htf: "4h", poi: "1h", ltf: "15m" } : { htf: def.htf, poi: def.poi, ltf: def.ltf };
+  // 1M for model H is heavy; the lab loads it only when asked and for at most 60 days.
+  const withM1 = family === "models" && opts.m1 === true && days <= 60;
   const ltfMs = TF_MS[tfs.ltf];
   const to = historyEnd();
   const from = to - days * 86_400_000;
   const frames = (family === "session" ? [tfs.ltf, tfs.htf] : [tfs.ltf, tfs.htf, tfs.poi]).map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) }));
   const [ltf, htf, poi = null] = await loadFrames(id, frames, to);
+  const m1 = withM1 ? (await loadFrames(id, [{ tf: "1m", from }], to, { source: ltf.source }))[0]!.candles : undefined;
+  // NFP and FOMC releases (no historical calendar): box 6 news filter and model I.
+  const news = usHighImpactTimes(from - 7 * 86_400_000, to);
   const loadedMs = Date.now() - t0;
   const mid = (from + to) / 2;
   let rows: Row[];
 
   if (family === "session") {
-    rows = sessionVariants().map((v) => {
+    rows = SESSION_VARIANTS.map((v) => {
       const r = runSessionModel(id, { htf: htf.candles, ltf: ltf.candles.filter((c) => c.t >= from), htfMs: TF_MS[tfs.htf], ltfMs }, v.params);
       return row(v.id, v.label, r.trades, r.stats, mid);
     });
   } else {
-    const data = { htf: htf.candles, poi: poi!.candles, ltf: ltf.candles };
+    const data = { htf: htf.candles, poi: poi!.candles, ltf: ltf.candles, news, m1 };
     // On 15M bars the sweep search and the order lifetime cover the same clock time as on 5M.
     const scale = family === "a15" ? { sweepLookback: 12, expiryBars: 4 } : { sweepLookback: 36, expiryBars: 12 };
     const scan = scanSignals(id, data, { windows: ["london_q", "ny_q"], sides: "both", sweepLookback: scale.sweepLookback, tfs });
-    rows = A_VARIANTS.map((v) => {
+    const variants = family === "models" ? modelVariants() : A_VARIANTS.map((v) => ({ ...v, model: undefined, diagnose: false }));
+    rows = variants.map((v) => {
       const r = simulate(id, data, scan, { ...v.params, ...scale });
       const closed = r.trades.filter((t) => t.outcome !== "open");
       return {
         ...row(v.id, v.label, closed, r.stats, mid),
+        ...(v.model ? { model: v.model } : {}),
+        ...(v.diagnose && closed.length ? { diagnostics: lossDiagnostics(closed) } : {}),
         signals: r.signals,
         topRejects: Object.entries(r.rejected).sort((a, b) => b[1] - a[1]).slice(0, 3),
       };
@@ -126,7 +133,7 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180) 
   }
 
   return {
-    instrument: id, family, days, tfs, source: ltf.source, approx: ltf.approx, partial: ltf.note?.startsWith("Partial") ? ltf.note : null, bars: ltf.candles.length,
+    instrument: id, family, days, tfs, news: news.length, m1Bars: m1?.length ?? 0, source: ltf.source, approx: ltf.approx, partial: ltf.note?.startsWith("Partial") ? ltf.note : null, bars: ltf.candles.length,
     from: new Date(from).toISOString(), to: new Date(to).toISOString(),
     criteria: `≥${PASS.minTrades} trades, PF ≥ ${PASS.minPf}, positive in both halves`,
     rows, loadMs: loadedMs, ms: Date.now() - t0,

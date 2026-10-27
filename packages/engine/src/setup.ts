@@ -1,6 +1,6 @@
-import { equalLevels, fairValueGaps, isSweep, marketShift, pivots, premiumDiscount, smcStructure, swingStructure, atr, type Candle, type Trend } from './smc.js';
+import { equalLevels, fairValueGaps, isSweep, marketShift, pivots, premiumDiscount, smcStructure, structureBreaks, swingStructure, atr, type Candle, type Trend } from './smc.js';
 import { orderBlocks, previousDayLevels, sessionRange } from './zones.js';
-import { ASIA_Q } from './sessions.js';
+import { ASIA_Q, LONDON_Q } from './sessions.js';
 import { EDGE_RULES } from './specs.js';
 
 /**
@@ -54,6 +54,14 @@ export interface SetupAnalysis {
   suggest: { entry: number; stop: number; target: number; targetLabel: string; basis: 'sweep' | 'shift'; stopAnchor: string; stopBuffer: number } | null;
   /** Real levels beyond the entry in order of distance, with the R each would pay. */
   targets: { level: number; label: string; r: number }[];
+  /** Every target candidate on the trade side (liquidity, swings, unfilled FVGs), before filtering by entry. */
+  pool: { level: number; label: string }[];
+  /** Stop buffer beyond an anchor: max(spread buffer, `stopAtrMult` × entry-TF ATR). */
+  stopBuf: number;
+  /** Entry-TF ATR(14). */
+  ltfAtr: number;
+  /** London Q high/low of the current New York day once that window has closed (session liquidity for NY). */
+  london: { high: number; low: number } | null;
   /** After the shift: did price return to the entry (filled) or run to target first (ran away)? */
   after: { filled: boolean; ranAway: boolean } | null;
   atr: number;
@@ -117,26 +125,50 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
   const pdl = previousDayLevels(poi, now);
   const asiaRaw = sessionRange(poi, ASIA_Q, now - 12 * 3_600_000);
   const asia = asiaRaw && asiaRaw.endUtc <= now ? { high: asiaRaw.high, low: asiaRaw.low } : null;
+  const londonRaw = sessionRange(poi, LONDON_Q, now);
+  const london = londonRaw && londonRaw.endUtc <= now ? { high: londonRaw.high, low: londonRaw.low } : null;
   const a = atr(poi, 14);
 
   // Liquidity pools: PDH/PDL, Asia range, equal highs/lows on the POI timeframe.
   const liquidity: LiquidityLevel[] = [];
   if (pdl) liquidity.push({ level: pdl.pdh, label: 'PDH', side: 'buy_side' }, { level: pdl.pdl, label: 'PDL', side: 'sell_side' });
   if (asia) liquidity.push({ level: asia.high, label: 'Asia high', side: 'buy_side' }, { level: asia.low, label: 'Asia low', side: 'sell_side' });
+  if (london) liquidity.push({ level: london.high, label: 'London high', side: 'buy_side' }, { level: london.low, label: 'London low', side: 'sell_side' });
   for (const e of equalLevels(pivots(poi.slice(-200), 3, 3), a * 0.1).slice(-4)) {
     liquidity.push({ level: e.level, label: e.kind, side: e.kind === 'EQH' ? 'buy_side' : 'sell_side' });
   }
 
-  // 15M POIs on the trade side: fresh order blocks with imbalance, unfilled FVGs.
+  // 15M POIs on the trade side (§2.3): order blocks whose candle took the previous candle's low (high)
+  // and whose displacement left an imbalance and broke structure; unfilled FVGs.
   const want: Trend = side === 'long' ? 'up' : 'down';
   // A zone stays "fresh" until the tap that is happening now: first mitigation inside the last 12 POI bars still counts.
   const tapCut = poi.length - 12;
-  const obs = orderBlocks(poi, 3, 3).filter((o) => o.direction === want && o.hasImbalance && (o.mitigatedAt === null || o.mitigatedAt >= tapCut));
+  const poiPiv = pivots(poi, 3, 3);
+  const poiBreaks = structureBreaks(poi, 3, 3).breaks;
+  const sellSide = side === 'long';
+  // Liquidity story (§4): the zone swept liquidity when it formed (its leg ran a prior swing on the
+  // stop side), or a liquidity pool sits just in front of it that price must take first.
+  const liquidityStory = (top: number, bottom: number, formedAt: number): boolean => {
+    const prior = poiPiv.filter((p) => p.kind === (sellSide ? 'low' : 'high') && p.confirmedAt < formedAt && p.index >= formedAt - 40);
+    const swept = prior.some((p) => (sellSide ? bottom < p.price && p.price < top + a : top > p.price && p.price > bottom - a));
+    const front = liquidity.some((l) => l.side === (sellSide ? 'sell_side' : 'buy_side') && (sellSide ? l.level >= top && l.level <= top + a : l.level <= bottom && l.level >= bottom - a))
+      || poiPiv.some((p) => p.kind === (sellSide ? 'low' : 'high') && p.index > formedAt && (sellSide ? p.price >= top && p.price <= top + a : p.price <= bottom && p.price >= bottom - a));
+    return swept || front;
+  };
+  const obs = orderBlocks(poi, 3, 3).filter((o) => o.direction === want && o.hasImbalance && o.tookLiquidity && (o.mitigatedAt === null || o.mitigatedAt >= tapCut));
   const fvgs = fairValueGaps(poi).filter((f) => f.direction === want && (f.filledAt === null || f.filledAt >= tapCut)).slice(-4);
   const zones: SetupZone[] = [
     ...(opts.manual ?? []),
-    ...obs.slice(-3).map((o) => ({ kind: 'order_block' as const, side, top: o.top, bottom: o.bottom, t: poi[o.index]!.t, label: `15M OB${o.tookLiquidity ? ' · swept' : ''}`, fresh: true, liquidityStory: o.tookLiquidity, createdBos: true })),
-    ...fvgs.map((f) => ({ kind: 'fvg' as const, side, top: f.top, bottom: f.bottom, t: poi[f.index]!.t, label: '15M FVG', fresh: f.touchedAt === null || f.touchedAt >= tapCut, liquidityStory: false, createdBos: false })),
+    ...obs.slice(-3).map((o) => {
+      const story = liquidityStory(o.top, o.bottom, o.index);
+      return { kind: 'order_block' as const, side, top: o.top, bottom: o.bottom, t: poi[o.index]!.t, label: `15M OB${story ? ' · liquidity' : ''}`, fresh: true, liquidityStory: story, createdBos: true };
+    }),
+    ...fvgs.map((f) => ({
+      kind: 'fvg' as const, side, top: f.top, bottom: f.bottom, t: poi[f.index]!.t, label: '15M FVG',
+      fresh: f.touchedAt === null || f.touchedAt >= tapCut, liquidityStory: liquidityStory(f.top, f.bottom, f.index),
+      // The displacement that left the gap broke structure within three bars.
+      createdBos: poiBreaks.some((b) => b.direction === want && b.index >= f.index - 1 && b.index <= f.index + 3),
+    })),
   ];
 
   // Sweep on the entry TF: a liquidity pool or a recent swing on the opposite side.
@@ -179,8 +211,8 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
     .slice(-8)
     .map((f) => ({ v: side === 'long' ? f.bottom : f.top, l: label }));
   const pool = side === 'long'
-    ? [{ v: pdl?.pdh, l: 'PDH' }, { v: hr?.high, l: 'Range high' }, { v: asia?.high, l: 'Asia high' }, ...liquidity.filter((x) => x.label === 'EQH').map((x) => ({ v: x.level, l: 'EQH' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '15M swing high' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '5M swing high' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')]
-    : [{ v: pdl?.pdl, l: 'PDL' }, { v: hr?.low, l: 'Range low' }, { v: asia?.low, l: 'Asia low' }, ...liquidity.filter((x) => x.label === 'EQL').map((x) => ({ v: x.level, l: 'EQL' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '15M swing low' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '5M swing low' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')];
+    ? [{ v: pdl?.pdh, l: 'PDH' }, { v: hr?.high, l: 'Range high' }, { v: asia?.high, l: 'Asia high' }, { v: london?.high, l: 'London high' }, ...liquidity.filter((x) => x.label === 'EQH').map((x) => ({ v: x.level, l: 'EQH' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '15M swing high' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'high').slice(-6).map((p) => ({ v: p.price, l: '5M swing high' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')]
+    : [{ v: pdl?.pdl, l: 'PDL' }, { v: hr?.low, l: 'Range low' }, { v: asia?.low, l: 'Asia low' }, { v: london?.low, l: 'London low' }, ...liquidity.filter((x) => x.label === 'EQL').map((x) => ({ v: x.level, l: 'EQL' })), ...pivots(poi, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '15M swing low' })), ...pivots(ltf, 3, 3).filter((p) => p.kind === 'low').slice(-6).map((p) => ({ v: p.price, l: '5M swing low' })), ...fvgTargets(poi, '15M FVG'), ...fvgTargets(ltf, '5M FVG')];
   const minRR = opts.minRR ?? EDGE_RULES.minRR;
   const ltfAtr = atr(ltf, 14);
   const atrBuf = Number.isFinite(ltfAtr) ? ltfAtr * (opts.stopAtrMult ?? 0.2) : 0;
@@ -240,6 +272,10 @@ export function analyzeSetup(side: 'long' | 'short', htf: readonly Candle[], poi
   }
 
   return {
+    pool: pool.filter((x): x is { v: number; l: string } => typeof x.v === 'number' && Number.isFinite(x.v)).map((x) => ({ level: x.v, label: x.l })),
+    stopBuf: Math.max(atrBuf, (opts.stopBuffer ?? (() => 0))(price)),
+    ltfAtr,
+    london,
     price,
     htfTrend: hr?.trend ?? null,
     poiTrend,

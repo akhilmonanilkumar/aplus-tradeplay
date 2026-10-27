@@ -135,7 +135,13 @@ export interface Signal {
   state: string;
   created_at: string;
   source?: string;
-  meta?: { score?: number; parts?: Record<string, number>; context?: number | null; why?: string[]; mode?: string; targetLabel?: string; dataSource?: string } | null;
+  meta?: {
+    score?: number; parts?: Record<string, number>; context?: number | null; why?: string[]; mode?: string; targetLabel?: string; dataSource?: string;
+    /** Paper ledger (lib/server/ledger.ts). */
+    key?: string; detail?: string; strategy?: string; tradeable?: boolean; stopAnchor?: string; entryType?: string;
+    paper?: { verdict: string; blockers: string[]; softMisses: string[]; waitingFor: string[] };
+    edge?: { verdict: string; grade: string; blockers: string[] };
+  } | null;
   outcome?: "pending" | "filled" | "win" | "loss" | "expired" | "ran_away" | "cancelled" | null;
   filled_at?: string | null;
   closed_at?: string | null;

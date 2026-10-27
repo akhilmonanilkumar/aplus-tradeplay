@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  DEFAULT_SELECTOR, INSTRUMENTS, TF_MS, clientOrderId, runBacktest, selectOpportunities, sizePosition,
+  DEFAULT_SELECTOR, INSTRUMENTS, TF_MS, clientOrderId, runBacktest, usHighImpactTimes, selectOpportunities, sizePosition,
   type Candidate, type DeskId, type InstrumentId, type Scored, type Tf,
 } from "@aplus/engine";
 import { confluence } from "@/lib/confluence";
@@ -54,7 +54,7 @@ export async function recentEdges(db: SupabaseClient, ids: InstrumentId[], opts:
       const to = historyEnd();
       const from = to - EDGE_DAYS * 86_400_000;
       const [ltf, htf, poi] = await loadFrames(id, [def.ltf, def.htf, def.poi].map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) })), to);
-      const res = runBacktest(id, { htf: htf.candles, poi: poi.candles, ltf: ltf.candles }, { allowGradeA: opts.allowGradeA });
+      const res = runBacktest(id, { htf: htf.candles, poi: poi.candles, ltf: ltf.candles, news: usHighImpactTimes(from - 7 * 86_400_000, to) }, { allowGradeA: opts.allowGradeA });
       const at = new Date().toISOString();
       await db.from("backtests").insert({
         strategy_id: null, instrument: id, from_ts: new Date(res.from).toISOString(), to_ts: new Date(res.to).toISOString(),

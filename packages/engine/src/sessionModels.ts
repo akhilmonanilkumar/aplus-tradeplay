@@ -2,7 +2,7 @@ import type { Candle } from './smc.js';
 import { atr } from './smc.js';
 import { frameStructure } from './setup.js';
 import { FRAME_BARS } from './backtest.js';
-import { NY, wallToUtc, windowOnDateOf, zonedParts, type SessionWindow } from './sessions.js';
+import { ASIA_Q, LONDON_Q, NY, NY_Q, wallToUtc, windowOnDateOf, zonedParts, type SessionWindow } from './sessions.js';
 import { INSTRUMENTS, costInR, type InstrumentId } from './instruments.js';
 import { summarize, type RStats } from './stats.js';
 
@@ -177,3 +177,26 @@ export function runSessionModel(
 
   return { trades, stats: summarize(trades.map((t) => t.rNet)), from: ltf[0]?.t ?? 0, to: ltf[ltf.length - 1]?.t ?? 0 };
 }
+
+function sessionVariants(): { id: string; label: string; params: Omit<SessionModelParams, 'costRate'> }[] {
+  const out: { id: string; label: string; params: Omit<SessionModelParams, 'costRate'> }[] = [];
+  const ranges = [
+    { id: 'asia', name: 'Asia range in London', rangeWindow: ASIA_Q, tradeWindow: LONDON_Q },
+    { id: 'ldn', name: 'London range in NY', rangeWindow: LONDON_Q, tradeWindow: NY_Q },
+  ];
+  for (const r of ranges) {
+    for (const trendFilter of [false, true]) {
+      const tf = trendFilter ? ' · with HTF trend' : '';
+      out.push(
+        { id: `${r.id}-fade${trendFilter ? '-t' : ''}`, label: `${r.name}: fade to opposite edge${tf}`, params: { kind: 'fade', rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: 'opposite', rr: 2, minRR: 1, partialAtR: null, minRiskAtr: 0.5 } },
+        { id: `${r.id}-fade-p${trendFilter ? '-t' : ''}`, label: `${r.name}: fade, half off at 1R${tf}`, params: { kind: 'fade', rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: 'opposite', rr: 2, minRR: 1, partialAtR: 1, minRiskAtr: 0.5 } },
+        { id: `${r.id}-bo${trendFilter ? '-t' : ''}`, label: `${r.name}: breakout 2R${tf}`, params: { kind: 'breakout', rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: 'rr', rr: 2, minRR: 1, partialAtR: null, minRiskAtr: 0.5 } },
+        { id: `${r.id}-bo-p${trendFilter ? '-t' : ''}`, label: `${r.name}: breakout 3R, half off at 1R${tf}`, params: { kind: 'breakout', rangeWindow: r.rangeWindow, tradeWindow: r.tradeWindow, trendFilter, target: 'rr', rr: 3, minRR: 1, partialAtR: 1, minRiskAtr: 0.5 } },
+      );
+    }
+  }
+  return out;
+}
+
+/** Session-range strategy variants traded in the lab and logged live: Asia range in London, London range in NY, fades and breakouts, with and without the HTF trend filter. */
+export const SESSION_VARIANTS: readonly { id: string; label: string; params: Omit<SessionModelParams, 'costRate'> }[] = sessionVariants();

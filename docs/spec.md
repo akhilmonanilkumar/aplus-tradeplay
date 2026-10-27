@@ -110,3 +110,12 @@ Scope change from the owner: the platform is now the firm's own tool (team trade
 - **Orders vs log:** orders are still created only in Paper / Confirm / Auto and never under the kill switch; the ledger records the signal either way, so the bot is measured independently of any account.
 - **Bot log page (`/bot`):** KPIs (signals, fill rate, win rate, net R, expectancy, profit factor, max drawdown, paper P&L, Telegram delivery), net-R equity curve, breakdowns by bot, instrument, session, side & grade and selector score bucket, and the full signal log with outcome, result, paper P&L and Telegram status.
 - **TradingView removed:** no embedded TradingView chart, chart-symbol settings or TradingView alert webhook. Charts still use TradingView's open-source Lightweight Charts library (attribution kept under the chart, as its licence requires).
+
+## 13. Edge audit, every entry model, paper ledger (27 Oct 2026)
+
+- **Audit:** `docs/edge-audit.md` checks every rule of the A+ Edge spec and the Trade Finder Pro guide against the engine and records the owner's departures (2R minimum, furthest-anchor stop, first target ≥ 2R, no BTC minimum stop).
+- **Detector fixes:** 15M order blocks must take the previous candle's low/high, leave an imbalance and break structure; "liquidity story" now means the zone swept a prior swing when it formed or sits just beyond a pool; FVG POIs can pass when their displacement broke structure; London high/low joined the liquidity list.
+- **Entry models:** `packages/engine/src/detect.ts` detects A–I (H needs 1M candles); `planSetup` builds stop and target under the live rules or the playbook's (`stopMode`, `targetMode`). The backtester trades any set of models, records each trade's model, stop anchor and best/worst excursion, and `lossDiagnostics` explains where the R goes. Backtests apply NFP and FOMC times as the news filter.
+- **Lab:** `/api/autopilot/lab?family=models` backtests each model alone under three rule sets with loss diagnostics; the lab page selects models, stop and target rules.
+- **Paper ledger:** every autopilot pass logs each model setup and each session-strategy signal (model `S`) once to `signals` with the gate verdict and both plans; outcomes of rejected setups are tracked too. Paper orders go to the paper account for setups the gate would trade. `/bot` breaks results down by model, gate result and stop anchor.
+- **Scheduler:** pg_cron's bearer secret is generated in Vault and checked by `autopilot_secret_ok()` (migration `20261027020000_paper_ledger.sql`).
