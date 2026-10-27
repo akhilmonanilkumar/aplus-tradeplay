@@ -12,7 +12,8 @@ import { cached, errMsg, getJson } from "@/lib/server/http";
  */
 
 export interface CandleSet { candles: Candle[]; forming: Candle | null; source: string; approx: boolean; note?: string }
-type Range = { limit: number; endTime?: number };
+/** `patient`: a backtest may wait for a metered vendor's quota; a live pass must fail over at once. */
+type Range = { limit: number; endTime?: number; patient?: boolean };
 type Provider = {
   name: string; approx: boolean; note?: string; enabled?: () => boolean; load: (tf: Tf, r: Range) => Promise<Candle[]>;
   /** Rate-limited vendors: fetch only this timeframe (once per bar) and aggregate the others from it. */
@@ -129,23 +130,106 @@ function oanda(instrumentName: string): Provider["load"] {
 const TD_TF: Record<Tf, string> = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" };
 function twelveData(symbol: string): Provider["load"] {
   return async (tf, r) => {
-    await slot("twelvedata");
+    coolingCheck("twelvedata");
+    await slot("twelvedata", r.patient);
     const q = new URLSearchParams({ symbol, interval: TD_TF[tf], outputsize: String(Math.min(5000, r.limit)), timezone: "UTC", order: "ASC", apikey: env("TWELVEDATA_API_KEY") });
     if (r.endTime) q.set("end_date", new Date(r.endTime).toISOString().slice(0, 19).replace("T", " "));
     type Res = { status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string }[] };
-    // The per-minute quota is shared with other server instances: on a 429, wait for the next minute and retry.
+    // The quota is shared with other server instances. A backtest waits for the next minute and retries;
+    // a live pass trips the cooldown and falls through to the next provider straight away.
     let j: Res | null = null;
     for (let attempt = 0; !j; attempt++) {
       try {
         j = await getJson<Res>(`https://api.twelvedata.com/time_series?${q}`);
       } catch (e) {
-        if (attempt >= 2 || !/429/.test(errMsg(e))) throw e;
+        if (!/429/.test(errMsg(e))) throw e;
+        if (!r.patient || attempt >= 2) { trip("twelvedata"); throw e; }
         await new Promise((res) => setTimeout(res, 61_000));
       }
     }
-    if (j.status !== "ok" || !j.values) throw new Error(`twelvedata: ${j.message ?? j.status}`);
+    // Out of daily credits comes back as HTTP 200 with code 429 in the body.
+    if (j.status !== "ok" || !j.values) {
+      if (/credits|limit/i.test(j.message ?? "")) trip("twelvedata", /day/i.test(j.message ?? "") ? untilUtcMidnight() : undefined);
+      throw new Error(`twelvedata: ${j.message ?? j.status}`);
+    }
     return j.values.map((x) => ({ t: Date.parse(`${x.datetime.replace(" ", "T")}Z`), o: num(x.open), h: num(x.high), l: num(x.low), c: num(x.close) }));
   };
+}
+
+/* ---------------- Yahoo Finance (keyless) ---------------- */
+
+/**
+ * Yahoo chart API: FX, futures and cash indices with no key. Intraday depth is limited (1M for 7 days,
+ * 5M/15M for 60 days, 1H for two years); 4H is built from 1H.
+ */
+const YAHOO_TF: Record<Tf, [string, number]> = { "1m": ["1m", 7], "5m": ["5m", 59], "15m": ["15m", 59], "1h": ["60m", 729], "4h": ["60m", 729], "1d": ["1d", 3650] };
+function yahoo(symbol: string): Provider["load"] {
+  return async (tf, r) => {
+    const [interval, maxDays] = YAHOO_TF[tf];
+    const end = Math.floor((r.endTime ?? Date.now()) / 1000);
+    // Room for weekends and holidays, never past the interval's depth.
+    const span = Math.min(maxDays * 86_400, Math.ceil((r.limit * TF_MS[tf] * 1.7) / 1000) + 4 * 86_400);
+    const floor = Math.floor(Date.now() / 1000) - maxDays * 86_400;
+    const start = Math.max(floor, end - span);
+    if (start >= end) return [];
+    const q = new URLSearchParams({ interval, period1: String(start), period2: String(end), includePrePost: "false" });
+    type Res = { chart: { result: { timestamp?: number[]; indicators: { quote: { open: (number | null)[]; high: (number | null)[]; low: (number | null)[]; close: (number | null)[]; volume?: (number | null)[] }[] } }[] | null; error: { description: string } | null } };
+    const j = await getJson<Res>(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${q}`);
+    const res = j.chart.result?.[0];
+    if (!res) throw new Error(`yahoo: ${j.chart.error?.description ?? "no data"}`);
+    const ts = res.timestamp ?? [], k = res.indicators.quote[0]!;
+    const rows: Candle[] = [];
+    ts.forEach((t, i) => {
+      const o = k.open[i], h = k.high[i], l = k.low[i], c = k.close[i];
+      if (o === null || h === null || l === null || c === null || o === undefined) return;
+      rows.push({ t: t * 1000, o, h, l, c, v: Number(k.volume?.[i] ?? 0) });
+    });
+    const out = tf === "4h" ? aggregate(rows, TF_MS["4h"]) : rows;
+    return out.slice(-r.limit);
+  };
+}
+
+/** Free providers not wired into a chain yet, probed by the feed health report. */
+export const CANDIDATES: Partial<Record<InstrumentId, Provider[]>> = {
+  XAUUSD: [{ name: "Yahoo XAU/USD (XAUUSD=X)", approx: false, load: yahoo("XAUUSD=X") }, { name: "Yahoo gold futures (GC=F)", approx: true, load: yahoo("GC=F") }],
+  EURUSD: [{ name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") }],
+  USDJPY: [{ name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") }],
+  NAS100: [{ name: "Yahoo Nasdaq-100 (^NDX)", approx: false, load: yahoo("^NDX") }, { name: "Yahoo Nasdaq-100 futures (NQ=F)", approx: true, load: yahoo("NQ=F") }],
+  SPX500: [{ name: "Yahoo S&P 500 (^GSPC)", approx: false, load: yahoo("^GSPC") }, { name: "Yahoo S&P 500 futures (ES=F)", approx: true, load: yahoo("ES=F") }],
+  NIFTY: [{ name: "Yahoo Nifty 50 (^NSEI)", approx: false, load: yahoo("^NSEI") }],
+};
+
+/**
+ * Feed health: every provider in every chain (plus the candidates) asked for its last 5M bars, with
+ * timing, bar count and the age of the newest bar. Metered vendors are skipped unless `metered`.
+ */
+export async function feedHealth(opts: { metered?: boolean } = {}) {
+  const probe = async (id: InstrumentId, p: Provider, chain: boolean) => {
+    const t0 = Date.now();
+    if (p.enabled && !p.enabled()) return { id, provider: p.name, chain, status: "disabled" };
+    if (p.metered && !opts.metered) return { id, provider: p.name, chain, status: "skipped (metered)" };
+    try {
+      const rows = openHours(id, dedupe(await p.load("5m", { limit: 60 })));
+      const last = rows.at(-1);
+      return { id, provider: p.name, chain, status: rows.length >= 10 ? "ok" : "thin", bars: rows.length, lastBarAgeMin: last ? Math.round((Date.now() - last.t) / 60_000) : null, lastClose: last?.c ?? null, ms: Date.now() - t0 };
+    } catch (e) {
+      return { id, provider: p.name, chain, status: "error", error: errMsg(e), ms: Date.now() - t0 };
+    }
+  };
+  const ids = Object.keys(CHAINS) as InstrumentId[];
+  const [rows, live] = await Promise.all([
+    Promise.all(ids.flatMap((id) => [...CHAINS[id].map((p) => probe(id, p, true)), ...(CANDIDATES[id] ?? []).map((p) => probe(id, p, false))])),
+    Promise.all(ids.map(async (id) => {
+      const t0 = Date.now();
+      try { const c = await loadCandles(id, "5m", 100); return { id, source: c.source, approx: c.approx, bars: c.candles.length, lastBarAgeMin: Math.round((Date.now() - (c.candles.at(-1)?.t ?? 0)) / 60_000), ms: Date.now() - t0 }; }
+      catch (e) { return { id, error: errMsg(e), ms: Date.now() - t0 }; }
+    })),
+  ]);
+  const quotes = await Promise.all(ids.map(async (id) => {
+    try { const q = await loadQuote(id); return { id, source: q.source, last: q.last, ageSec: Math.round((Date.now() - q.ts) / 1000) }; }
+    catch (e) { return { id, error: errMsg(e) }; }
+  }));
+  return { at: new Date().toISOString(), cooldowns: vendorCooldowns(), live, quotes, providers: rows };
 }
 
 /* ---------------- NSE (Upstox, keyless) ---------------- */
@@ -175,19 +259,39 @@ function upstox(key: string): Provider["load"] {
   };
 }
 
-/** Requests per minute a metered vendor allows; paging waits for a free slot instead of failing. */
+/** Requests per minute a metered vendor allows; backtest paging waits for a free slot, live pulls fail over. */
 const RATE: Record<string, number> = { twelvedata: 8 };
 const calls = new Map<string, number[]>();
-async function slot(vendor: string): Promise<void> {
+async function slot(vendor: string, patient = false): Promise<void> {
   const perMin = RATE[vendor];
   if (!perMin) return;
   for (;;) {
     const now = Date.now();
     const recent = (calls.get(vendor) ?? []).filter((t) => t > now - 61_000);
     if (recent.length < perMin) { calls.set(vendor, [...recent, now]); return; }
+    if (!patient) throw new Error(`${vendor}: ${perMin}/min quota in use`);
     await new Promise((res) => setTimeout(res, recent[0]! + 61_000 - now));
   }
 }
+
+/**
+ * Cooldown after a quota refusal: the vendor is skipped (fails at once) until it ends. A refusal soon
+ * after a cooldown means the daily credits are gone, so the next one runs much longer.
+ */
+const cooling = new Map<string, { until: number; strikes: number }>();
+const untilUtcMidnight = () => Math.ceil(Date.now() / 86_400_000) * 86_400_000 + 60_000;
+function trip(vendor: string, until?: number) {
+  const now = Date.now();
+  const prev = cooling.get(vendor);
+  const strikes = prev && now - prev.until < 15 * 60_000 ? prev.strikes + 1 : 1;
+  cooling.set(vendor, { until: until ?? now + (strikes >= 3 ? 60 : strikes === 2 ? 15 : 2) * 60_000, strikes });
+}
+function coolingCheck(vendor: string) {
+  const c = cooling.get(vendor);
+  if (c && Date.now() < c.until) throw new Error(`${vendor}: quota cooldown until ${new Date(c.until).toISOString().slice(11, 16)} UTC`);
+}
+/** Vendors in a quota cooldown, for the feed health report. */
+export const vendorCooldowns = () => Object.fromEntries([...cooling].filter(([, c]) => Date.now() < c.until).map(([k, c]) => [k, new Date(c.until).toISOString()]));
 
 /* ---------------- chains ---------------- */
 
@@ -327,7 +431,7 @@ export async function loadHistory(id: InstrumentId, tf: Tf, from: number, to: nu
         const out: Candle[] = [];
         let end = end0;
         for (let guard = 0; guard < 80 && end > start; guard++) {
-          const batch = dedupe(await p.load(t, { limit: page, endTime: end }));
+          const batch = dedupe(await p.load(t, { limit: page, endTime: end, patient: !opts.allowMetered }));
           const older = batch.filter((c) => c.t < (out[0]?.t ?? Infinity) && c.t >= start - TF_MS[t]);
           if (!older.length) break;
           out.unshift(...older);
