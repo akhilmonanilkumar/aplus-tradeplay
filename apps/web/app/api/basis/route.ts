@@ -1,5 +1,5 @@
 import { staffFromRequest, unauthorized } from "@/lib/server/auth";
-import { basisTick, closePosition, fundingBoard, loadConfig, openPosition, positionPnl, type PositionRow } from "@/lib/server/basis";
+import { basisAccount, basisTick, closePosition, fundingBoard, loadConfig, openPosition, positionPnl, type PositionRow } from "@/lib/server/basis";
 import { errMsg, json } from "@/lib/server/http";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +27,7 @@ export async function GET(req: Request) {
     const sum = (rows: typeof o, k: "net" | "funding" | "fees" | "basis") => rows.reduce((a, r) => a + r.pnl[k], 0);
     const wins = c.filter((r) => r.pnl.net > 0).length;
     return json({
-      at: Date.now(), config: cfg, board, open: o, closed: c,
+      at: Date.now(), config: cfg, board, open: o, closed: c, account: basisAccount(cfg, open, c.map((r) => r.pnl)),
       totals: {
         openNet: sum(o, "net"), openFunding: sum(o, "funding"), closedNet: sum(c, "net"), closedFunding: sum(c, "funding"), closedFees: sum(c, "fees"), closedBasis: sum(c, "basis"),
         closedR: c.reduce((a, r) => a + r.pnl.r, 0), closedCount: c.length, winRate: c.length ? wins / c.length : null,
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
     const body = (await req.json().catch(() => ({}))) as { action?: string; symbol?: string; id?: string; patch?: Record<string, unknown> };
     const cfg = await loadConfig(db);
     if (body.action === "config") {
-      const allowed = ["enabled", "mode", "symbols", "notional", "entry_rate", "exit_rate", "max_open", "spot_fee", "perp_fee"];
+      const allowed = ["enabled", "mode", "symbols", "max_open", "spot_fee", "perp_fee", "capital", "leverage", "mmr", "reserve_share", "rebalance_at", "min_notional", "venue", "entry_avg", "exit_avg"];
       const patch = Object.fromEntries(Object.entries(body.patch ?? {}).filter(([k]) => allowed.includes(k)));
       const r = await db.from("basis_config").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", 1);
       if (r.error) throw new Error(r.error.message);
@@ -59,7 +59,10 @@ export async function POST(req: Request) {
       if (open.some((p) => p.symbol === body.symbol)) return json({ error: `${body.symbol} already has an open basis position` }, 0, 400);
       const row = board.find((b) => b.symbol === body.symbol);
       if (!row) return json({ error: "unknown symbol" }, 0, 400);
-      return json({ ok: true, id: await openPosition(db, cfg, row, "manual") });
+      if (open.length >= cfg.max_open) return json({ error: `the account already holds ${open.length} of ${cfg.max_open} positions` }, 0, 400);
+      const closedRes = await db.from("basis_positions").select("*").eq("status", "closed");
+      const account = basisAccount(cfg, open, ((closedRes.data ?? []) as PositionRow[]).map((c) => positionPnl(c, board)));
+      return json({ ok: true, id: await openPosition(db, cfg, row, "manual", account) });
     }
     if (body.action === "close" && body.id) {
       const p = open.find((x) => x.id === body.id);

@@ -22,13 +22,16 @@ describe('basis trade', () => {
     expect(p.r).toBeCloseTo(2, 6);
     expect(p.apr).toBeCloseTo(((3 * cost) / 10_000) * 36.5, 6);
   });
-  it('enters on positive carry with a positive 3-day average and exits when funding turns negative', () => {
-    expect(basisSignal(false, { predicted: 0.00012, lastSettled: 0.0001, avg3d: 0.00008 }, rules)).toBe('enter');
-    expect(basisSignal(false, { predicted: 0.00012, lastSettled: 0.0001, avg3d: -0.00001 }, rules)).toBe('wait');
-    expect(basisSignal(false, { predicted: 0.00005, lastSettled: 0.0001, avg3d: 0.0001 }, rules)).toBe('wait');
-    expect(basisSignal(true, { predicted: 0.00003, lastSettled: 0.00002, avg3d: 0.0001 }, rules)).toBe('hold');
-    expect(basisSignal(true, { predicted: -0.00001, lastSettled: 0.00002, avg3d: 0.0001 }, rules)).toBe('exit');
-    expect(basisSignal(true, { predicted: 0.00001, lastSettled: -0.00002, avg3d: 0.0001 }, rules)).toBe('exit');
+  it('enters and exits on the funding average, holding through single negative prints', () => {
+    const r = { entryRate: 0.00005, exitRate: 0 };
+    expect(basisSignal(false, { predicted: 0.0001, lastSettled: 0.0001, avg3d: 0.00006 }, r)).toBe('enter');
+    expect(basisSignal(false, { predicted: -0.00001, lastSettled: 0.0001, avg3d: 0.00008 }, r)).toBe('wait');
+    expect(basisSignal(false, { predicted: 0.0001, lastSettled: 0.0001, avg3d: 0.00004 }, r)).toBe('wait');
+    // One negative print with the 3-day average still positive: hold.
+    expect(basisSignal(true, { predicted: -0.00002, lastSettled: -0.00001, avg3d: 0.00003 }, r)).toBe('hold');
+    expect(basisSignal(true, { predicted: 0.00001, lastSettled: 0.00001, avg3d: -0.000001 }, r)).toBe('exit');
+    // The 7-day average wins over the 3-day one when present.
+    expect(basisSignal(true, { predicted: -0.00001, lastSettled: -0.00001, avg3d: -0.00002, avg7d: 0.00002 }, r)).toBe('hold');
   });
   it('counts the settlements needed to repay the round trip', () => {
     expect(breakEvenSettlements(0.0001, rules)).toBe(30);

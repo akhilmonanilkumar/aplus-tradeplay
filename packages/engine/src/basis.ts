@@ -8,9 +8,9 @@
  */
 
 export interface BasisRules {
-  /** Enter when the predicted rate per settlement is at least this (0.0001 = 0.01%). */
+  /** Enter when the 7-day average rate per settlement is at least this (0.00005 = 0.005%). */
   entryRate: number;
-  /** Exit when a settled or predicted rate falls below this. */
+  /** Exit when the 7-day average falls below this. */
   exitRate: number;
   spotFee: number;
   perpFee: number;
@@ -65,12 +65,16 @@ export const settlementApr = (rate: number, perDay = 3) => rate * perDay * 365;
 export type BasisSignal = 'enter' | 'hold' | 'exit' | 'wait';
 
 /**
- * Entry and exit rules. Enter: predicted rate ≥ entryRate and the 3-day average positive (one hot
- * print is not a carry). Exit: the last settled rate or the predicted rate below exitRate.
+ * Entry and exit rules on the 7-day average (21 settlements), not single prints. Funding dips below
+ * zero for a few settlements often, and exiting on each dip pays the 0.3% round trip again: over
+ * 2025-06..2026-10 exit-on-negative lost on five of six majors (BTC −2.4%, DOGE −16.9% on notional)
+ * while the 7-day rule made money on five (BTC +4.0%). Falls back to the 3-day average while history
+ * is short. Enter: average ≥ entryRate and the predicted rate not negative. Exit: average < exitRate.
  */
-export function basisSignal(open: boolean, f: { predicted: number; lastSettled: number | null; avg3d: number | null }, rules: Pick<BasisRules, 'entryRate' | 'exitRate'>): BasisSignal {
-  if (open) return f.predicted < rules.exitRate || (f.lastSettled !== null && f.lastSettled < rules.exitRate) ? 'exit' : 'hold';
-  return f.predicted >= rules.entryRate && (f.avg3d ?? 0) > 0 ? 'enter' : 'wait';
+export function basisSignal(open: boolean, f: { predicted: number; lastSettled: number | null; avg3d: number | null; avg7d?: number | null }, rules: Pick<BasisRules, 'entryRate' | 'exitRate'>): BasisSignal {
+  const avg = f.avg7d ?? f.avg3d ?? f.lastSettled ?? f.predicted;
+  if (open) return avg < rules.exitRate ? 'exit' : 'hold';
+  return avg >= rules.entryRate && f.predicted >= 0 ? 'enter' : 'wait';
 }
 
 /**
