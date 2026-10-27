@@ -26,5 +26,5 @@ alter table public.basis_positions
 
 -- Start the account on the researched defaults (bot stays off until switched on from the page).
 update public.basis_config
-set symbols = array['BTCUSDT', 'ETHUSDT'], max_open = 2, notional = 0
+set symbols = array['BTCUSDT'], max_open = 1, notional = 0
 where id = 1;
