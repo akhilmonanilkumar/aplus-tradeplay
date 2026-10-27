@@ -11,7 +11,7 @@ import { historyEnd, loadFrames, loadHistory } from "@/lib/server/feeds";
  * positive in both the earlier and the later half of the period.
  */
 
-export type Family = "a5" | "a15" | "session" | "models";
+export type Family = "a5" | "a15" | "session" | "models" | "improve";
 
 const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -77,6 +77,29 @@ export async function structureReport(id: InstrumentId) {
  */
 const LOOSE: Partial<StrategyParams> = { requireCorrectHalf: false, requirePoi: false, allowGradeA: true };
 
+/**
+ * Rule changes learned from the 180-day loss analysis, tested one at a time and together on the
+ * trend-following models (G off): POI quality, liquidity targets, skipped hours, a cost cap. Each is
+ * judged against the same base so its effect is its own.
+ */
+const LEARNED: Partial<StrategyParams> = { poiQuality: "ob_liquidity", targetSet: "liquidity", skipHoursNy: [2, 8], maxCostR: 0.25 };
+function improveVariants(): { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] {
+  const models = MODEL_IDS.filter((m) => m !== "G" && m !== "H");
+  const base: Partial<StrategyParams> = { models, allowAllModels: true, ...LOOSE };
+  return [
+    { id: "base", label: "Base · models A–F, location boxes off", model: "all", params: base, diagnose: true },
+    { id: "poi", label: "+ POI must be a 15M OB with a liquidity story", model: "all", params: { ...base, poiQuality: "ob_liquidity" }, diagnose: false },
+    { id: "targets", label: "+ liquidity targets only (no FVG targets)", model: "all", params: { ...base, targetSet: "liquidity" }, diagnose: false },
+    { id: "hours", label: "+ skip 02:00 and 08:00 New York", model: "all", params: { ...base, skipHoursNy: [2, 8] }, diagnose: false },
+    { id: "cost", label: "+ skip setups costing more than 0.25R", model: "all", params: { ...base, maxCostR: 0.25 }, diagnose: false },
+    { id: "learned", label: "All four changes · location boxes off", model: "all", params: { ...base, ...LEARNED }, diagnose: true },
+    { id: "learned-gate", label: "All four changes · full gate, grade A allowed", model: "all", params: { models, allowAllModels: true, allowGradeA: true, ...LEARNED }, diagnose: true },
+    { id: "learned-aplus", label: "All four changes · full gate, A+ only", model: "all", params: { models, allowAllModels: true, ...LEARNED }, diagnose: false },
+    { id: "learned-A", label: "All four changes · model A only, location boxes off", model: "A", params: { models: ["A"], allowAllModels: true, ...LOOSE, ...LEARNED }, diagnose: false },
+    { id: "learned-B", label: "All four changes · model B only, location boxes off", model: "B", params: { models: ["B"], allowAllModels: true, ...LOOSE, ...LEARNED }, diagnose: false },
+  ];
+}
+
 function modelVariants(): { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] {
   const out: { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] = [];
   for (const m of MODEL_IDS) {
@@ -127,7 +150,7 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180, 
     const scale = family === "a15" ? { sweepLookback: 12, expiryBars: 4 } : { sweepLookback: 36, expiryBars: 12 };
     const windows = tradeWindows(id);
     const scan = scanSignals(id, data, { windows, sides: "both", sweepLookback: scale.sweepLookback, tfs });
-    const variants = family === "models" ? modelVariants() : A_VARIANTS.map((v) => ({ ...v, model: undefined, diagnose: false }));
+    const variants = family === "models" ? modelVariants() : family === "improve" ? improveVariants() : A_VARIANTS.map((v) => ({ ...v, model: undefined, diagnose: false }));
     rows = variants.map((v) => {
       const r = simulate(id, data, scan, { ...v.params, ...scale, windows });
       const closed = r.trades.filter((t) => t.outcome !== "open");

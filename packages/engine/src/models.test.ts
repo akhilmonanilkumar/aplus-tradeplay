@@ -105,6 +105,19 @@ describe('model detector', () => {
     }
   });
 
+  it('applies the learned filters: POI quality, liquidity targets, skipped hours, cost cap', () => {
+    const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
+    const loose = { allowAllModels: true, allowGradeA: true, requirePoi: false, requireCorrectHalf: false, models: ['A', 'B', 'C', 'D', 'E'] as const };
+    const r = simulate('XAUUSD', data, scan, { ...loose, models: [...loose.models], poiQuality: 'ob_liquidity', targetSet: 'liquidity', skipHoursNy: [2, 8], maxCostR: 0.25 });
+    for (const t of r.trades) {
+      expect(t.zone).toMatch(/OB · liquidity/);
+      expect(t.targetLabel).not.toMatch(/FVG/);
+      expect([2, 8]).not.toContain(zonedParts(t.signalAt - TF_MS['5m'], NY).hour);
+      expect(t.costR).toBeLessThanOrEqual(0.25 + 1e-9);
+    }
+    expect(Object.keys(r.rejected).some((k) => k.startsWith('filter:'))).toBe(true);
+  });
+
   it('diagnoses losses from the trades', () => {
     const scan = scanSignals('XAUUSD', data, { windows: ['london_q', 'ny_q'], sides: 'both', sweepLookback: 36 });
     const r = simulate('XAUUSD', data, scan, { allowGradeA: true, requirePoi: false, requireCorrectHalf: false, requireAlignment: false });

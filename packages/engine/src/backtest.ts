@@ -57,6 +57,14 @@ export interface StrategyParams {
   targetMode: TargetMode;
   /** Let advanced, counter-trend and aggressive models through the gate (grade A at most where the playbook says so). */
   allowAllModels: boolean;
+  /** POI quality: any zone, or only a 15M order block with a liquidity story (the documents' "quality POI"). */
+  poiQuality: 'any' | 'ob_liquidity';
+  /** Target pool: every structural level, or liquidity only (no FVG targets). */
+  targetSet: 'all' | 'liquidity';
+  /** New York hours (0–23) in which no new setup is taken; London Q and NY Q only (the Nifty keeps its window). */
+  skipHoursNy: number[];
+  /** Skip setups whose round-trip cost exceeds this many R (null = no cap). */
+  maxCostR: number | null;
   riskPct: number;
   startBalance: number;
 }
@@ -85,6 +93,10 @@ export const DEFAULT_STRATEGY: StrategyParams = {
   stopMode: 'structural',
   targetMode: 'first_ge_min',
   allowAllModels: false,
+  poiQuality: 'any',
+  targetSet: 'all',
+  skipHoursNy: [],
+  maxCostR: null,
   riskPct: 0.5,
   startBalance: 10_000,
 };
@@ -394,10 +406,18 @@ export function simulate(instrumentId: InstrumentId, data: BacktestData, scan: S
       used.add(setup.key);
       const model = asModel(setup.model);
       const market = setup.entryType === 'market' || p.entryMode === 'shift_close';
-      const plan = planSetup(market ? { ...setup, entry: bar.c } : setup, a, { stopMode: p.stopMode, targetMode: p.targetMode, minRR: p.minRR });
+      const pool = p.targetSet === 'liquidity' ? a.pool.filter((x) => !/FVG/.test(x.label)) : a.pool;
+      const plan = planSetup(market ? { ...setup, entry: bar.c } : setup, { ...a, pool }, { stopMode: p.stopMode, targetMode: p.targetMode, minRR: p.minRR });
       if (!plan) continue;
       signals++;
       const { entry, stop, target } = plan;
+      // Filters learned from the loss analysis: POI quality, hours, cost.
+      const filtered =
+        p.poiQuality === 'ob_liquidity' && !(a.inside && /OB/.test(a.inside.label) && a.inside.liquidityStory) ? 'filter: POI not a 15M OB with a liquidity story'
+        : p.skipHoursNy.length && windowId !== 'india_q' && p.skipHoursNy.includes(zonedParts(bar.t, NY).hour) ? 'filter: skipped hour'
+        : p.maxCostR !== null && costInR({ costRate }, entry, stop) > p.maxCostR ? `filter: cost above ${p.maxCostR}R`
+        : null;
+      if (filtered) { rejected[filtered] = (rejected[filtered] ?? 0) + 1; continue; }
       const lastNews = news.filter((n) => n <= T).pop();
       const g = evaluateGate({
         htfTrend: a.htfTrend, poiTfTrend: a.poiTrend, side, price: a.price,
