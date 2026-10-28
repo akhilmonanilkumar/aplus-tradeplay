@@ -322,7 +322,8 @@ export default function DeskPage() {
           {market.data ? <SessionsPanel candles={market.data.poi} now={now} digits={def.digits} span={12} /> : <Card title="Session analysis"><Empty>Loading…</Empty></Card>}
         </div>
         <div className="s8 col" style={{ gap: 16 }}>
-          {ctxDesk ? <Analyst desk={ctxDesk} context={aiContext} notes={notes} /> : <CalendarCard events={cal.data ? events : null} error={cal.error} desk={deskId} blockMinutes={blockMin} now={now} span={12} />}
+          <Analyst desk={deskId} context={aiContext} notes={notes} />
+          {!ctxDesk && <CalendarCard events={cal.data ? events : null} error={cal.error} desk={deskId} blockMinutes={blockMin} now={now} span={12} />}
         </div>
       </div>
 

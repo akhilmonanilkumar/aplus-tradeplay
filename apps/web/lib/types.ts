@@ -163,4 +163,4 @@ export interface BacktestRow { id: string; strategy_id: string | null; instrumen
 export type AutopilotMode = "off" | "alerts" | "paper" | "confirm" | "auto";
 export interface AutopilotConfig { id: string; instrument: string; mode: AutopilotMode; strategy_id: string | null; account_ids: string[]; risk_pct: number; events: string[]; filters: { allowGradeA?: boolean }; updated_at: string }
 export interface AutopilotRun { id: number; at: string; instrument: string; side: string | null; state: string; grade: string | null; verdict: string | null; price: number | null; action: string | null; detail: Record<string, unknown> }
-export interface Integrations { telegram_chats: { id: string; label: string }[]; ai_model: string | null; selector?: Partial<SelectorConfig> }
+export interface Integrations { telegram_chats: { id: string; label: string }[]; ai_model: string | null; selector?: Partial<SelectorConfig>; notify?: Partial<import("@/lib/notify").TelegramRouting> }

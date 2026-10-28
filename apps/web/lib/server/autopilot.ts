@@ -7,6 +7,7 @@ import {
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
+import { dispatchTelegram, headsUps, pruneNotifications } from "@/lib/server/notify";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 import { modelLedger, storeReleases } from "@/lib/server/ledger";
 import { basisTick } from "@/lib/server/basis";
@@ -135,8 +136,8 @@ export async function previewSelector(db: SupabaseClient): Promise<SelectorOutco
 }
 
 /** Per-market and tail-job budgets inside the 300 s function limit. */
-const MARKET_MS = 150_000;
-const TAIL_MS = 90_000;
+const MARKET_MS = 130_000;
+const TAIL_MS = 80_000;
 const within = <T,>(p: Promise<T>, ms: number, label: string) =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms / 1000}s`)), ms))]);
 
@@ -228,6 +229,31 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       (err) => { out.push({ instrument: "LEDGER", state: "ERROR", action: (err as Error).message }); },
     ),
   ]);
+
+  // Proactive heads-ups, then Telegram for every notification category routed there in Settings.
+  const integ = settings?.integrations as { notify?: unknown; ai_model?: string } | undefined;
+  try {
+    const briefContext = async (desk: "gold" | "btc") => {
+      const e = await evalFor(desk === "gold" ? "XAUUSD" : "BTCUSDT.P");
+      return {
+        instrument: e.instrument, side: e.side, state: e.state, price: e.price, window: e.window, newsClear: e.newsClear,
+        gate: e.gate && { verdict: e.gate.verdict, grade: e.gate.grade, waitingFor: e.gate.waitingFor, blockers: e.gate.blockers, boxes: e.gate.boxes.map((b) => ({ label: b.label, status: b.status, reason: b.reason })) },
+        suggest: e.analysis.suggest ?? null,
+        nextEvents: calendar.filter((x) => x.impact === "high" && x.at > Date.now()).slice(0, 4).map((x) => ({ title: `${x.currency} ${x.title}`, at: new Date(x.at).toISOString() })),
+      };
+    };
+    const n = await within(headsUps(db, { calendar, briefContext, model: integ?.ai_model ?? null }), 45_000, "heads-ups");
+    if (n) out.push({ instrument: "NOTIFY", state: "HEADSUP", action: `${n} heads-up${n === 1 ? "" : "s"}` });
+  } catch (err) {
+    out.push({ instrument: "NOTIFY", state: "ERROR", action: (err as Error).message });
+  }
+  try {
+    const sent = await within(dispatchTelegram(db, chats, integ?.notify), 25_000, "telegram");
+    if (sent) out.push({ instrument: "NOTIFY", state: "TELEGRAM", action: `${sent} sent` });
+    if (new Date().getUTCMinutes() < 5) await pruneNotifications(db);
+  } catch (err) {
+    out.push({ instrument: "NOTIFY", state: "ERROR", action: (err as Error).message });
+  }
   return { results: out, selector };
 }
 

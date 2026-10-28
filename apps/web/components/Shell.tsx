@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import type { Session } from "@supabase/supabase-js";
 import { configured, supabase } from "@/lib/supabase";
 import type { Integrations, Role } from "@/lib/types";
+import NotificationBell from "@/components/Notifications";
 import { Logo } from "@/components/Brand";
 import { Icon } from "@/components/ui";
 import MfaGate from "@/components/MfaGate";
@@ -73,6 +74,7 @@ const OWNER_NAV: NavItem[] = [
   { href: "/bias", l: "Daily bias", i: "M6 3h9l4 4v14H6zM9 12h7M9 16h5M9 8h3" },
   { href: "/discipline", l: "Discipline & mood", i: "M3 12h4l2-5 4 10 2-5h6" },
   { h: "System" },
+  { href: "/notifications", l: "Notifications", i: "M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" },
   { href: "/alerts", l: "Telegram alerts", i: "M22 3L11 13M22 3l-7 18-4-8-8-4z", cnt: "alerts" },
   { href: "/admin", l: "Payouts & audit", i: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z", cnt: "payouts" },
   { href: "/settings", l: "Settings", i: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4" },
@@ -334,6 +336,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
                 <span className="dot" />{settings.mode}
               </button>
             )}
+            {isStaff && !investorView && <NotificationBell />}
             <Look />
             {isStaff && !investorView && settings && (
               <button className={`btn danger sm hide-m${settings.kill_switch ? " pri" : ""}`} onClick={() => updateSettings({ kill_switch: !settings.kill_switch })} aria-pressed={settings.kill_switch} aria-label="Global kill switch">
