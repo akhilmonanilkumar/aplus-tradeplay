@@ -1,6 +1,7 @@
 import { isInstrument } from "@aplus/engine";
 import { hasSecret, hasVaultSecret, staffFromRequest } from "@/lib/server/auth";
 import { basisResearch } from "@/lib/server/basisResearch";
+import { deltaProbe } from "@/lib/server/delta";
 import { feedHealth } from "@/lib/server/feeds";
 import { errMsg } from "@/lib/server/http";
 import { strategyLab, structureReport, type Family } from "@/lib/server/strategyLab";
@@ -18,6 +19,9 @@ export async function GET(req: Request) {
   if (!ok) return Response.json({ error: "forbidden" }, { status: 403 });
   const q = new URL(req.url).searchParams;
   const i = q.get("i"), family = q.get("family") as Family | null;
+  if (family === ("delta" as Family)) {
+    try { return Response.json(await deltaProbe()); } catch (e) { return Response.json({ error: errMsg(e) }, { status: 500 }); }
+  }
   if (family === ("feeds" as Family)) {
     try { return Response.json(await feedHealth({ metered: q.get("metered") === "1" })); } catch (e) { return Response.json({ error: errMsg(e) }, { status: 500 }); }
   }
