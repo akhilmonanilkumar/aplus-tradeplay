@@ -8,6 +8,7 @@ import { loadCandles, loadHistory } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
 import { dispatchTelegram, headsUps, pruneNotifications } from "@/lib/server/notify";
+import { evaluateCandidates, routeLiveSignals } from "@/lib/server/promotion";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 import { modelLedger, storeReleases } from "@/lib/server/ledger";
 import { basisTick } from "@/lib/server/basis";
@@ -137,7 +138,7 @@ export async function previewSelector(db: SupabaseClient): Promise<SelectorOutco
 
 /** Per-market and tail-job budgets inside the 300 s function limit. */
 const MARKET_MS = 130_000;
-const TAIL_MS = 80_000;
+const TAIL_MS = 70_000;
 const within = <T,>(p: Promise<T>, ms: number, label: string) =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms / 1000}s`)), ms))]);
 
@@ -242,13 +243,25 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
         nextEvents: calendar.filter((x) => x.impact === "high" && x.at > Date.now()).slice(0, 4).map((x) => ({ title: `${x.currency} ${x.title}`, at: new Date(x.at).toISOString() })),
       };
     };
-    const n = await within(headsUps(db, { calendar, briefContext, model: integ?.ai_model ?? null }), 45_000, "heads-ups");
+    const n = await within(headsUps(db, { calendar, briefContext, model: integ?.ai_model ?? null }), 35_000, "heads-ups");
     if (n) out.push({ instrument: "NOTIFY", state: "HEADSUP", action: `${n} heads-up${n === 1 ? "" : "s"}` });
   } catch (err) {
     out.push({ instrument: "NOTIFY", state: "ERROR", action: (err as Error).message });
   }
+  // Paper never stops: re-score every candidate, promote / bench per the rules, route live signals.
+  const promo = settings?.integrations as { promotion?: unknown; live_chats?: Chat[] } | undefined;
   try {
-    const sent = await within(dispatchTelegram(db, chats, integ?.notify), 25_000, "telegram");
+    const summary = await within(evaluateCandidates(db, promo?.promotion), 30_000, "promotion");
+    out.push({ instrument: "STRATEGIES", state: "SCORED", action: summary });
+    // Live alerts go to the live chats when set (Live page), else to the firm's alert chats.
+    const liveChats = (promo?.live_chats ?? []).filter((c) => c?.id);
+    const routed = await within(routeLiveSignals(db, liveChats.length ? liveChats : chats), 20_000, "live routing");
+    if (routed) out.push({ instrument: "STRATEGIES", state: "LIVE", action: `${routed} live signal${routed === 1 ? "" : "s"} routed` });
+  } catch (err) {
+    out.push({ instrument: "STRATEGIES", state: "ERROR", action: (err as Error).message });
+  }
+  try {
+    const sent = await within(dispatchTelegram(db, chats, integ?.notify), 20_000, "telegram");
     if (sent) out.push({ instrument: "NOTIFY", state: "TELEGRAM", action: `${sent} sent` });
     if (new Date().getUTCMinutes() < 5) await pruneNotifications(db);
   } catch (err) {

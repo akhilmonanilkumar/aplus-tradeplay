@@ -62,6 +62,7 @@ const OWNER_NAV: NavItem[] = [
   { href: "/basis", l: "Funding basis", i: "M4 17l5-5 4 3 7-8M4 21h16M15 7h5v5" },
   { href: "/playbook", l: "Playbook", i: "M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2zM8 7h6M8 11h6M18 3v18" },
   { href: "/autopilot", l: "Autopilot", i: "M12 2v4M12 18v4M2 12h4M18 12h4M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z", cnt: "autopilot" },
+  { href: "/live", l: "Live strategies", i: "M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2" },
   { href: "/bot", l: "Bot log", i: "M4 5h16M4 10h16M4 15h10M4 20h7M17 14l2 2 3-4" },
   { h: "Accounts" },
   { href: "/accounts", l: "Accounts", tl: "Accounts", i: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 13h2", cnt: "accounts" },

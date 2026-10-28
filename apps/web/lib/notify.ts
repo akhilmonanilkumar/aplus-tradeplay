@@ -5,6 +5,7 @@
 
 export const CATEGORIES = [
   { id: "headsup", label: "Heads-ups", what: "Proactive: news coming up, trades near stop or target, pre-session briefs" },
+  { id: "strategy", label: "Live strategies", what: "Strategies promoted to live or benched, and live signals" },
   { id: "setup", label: "Setups", what: "Autopilot states: swept, shifted, armed" },
   { id: "trade", label: "Trades & orders", what: "Orders queued or cancelled, trades opened and closed (paper and real)" },
   { id: "news", label: "News", what: "High-impact releases 30 minutes ahead" },
@@ -35,7 +36,7 @@ export interface NotifyPrefs {
 
 const on = (popup: boolean, sound = false): CategoryPrefs => ({ bell: true, popup, sound });
 export const DEFAULT_PREFS: NotifyPrefs = {
-  cats: { headsup: on(true, true), setup: on(true), trade: on(true), news: on(true, true), feed: on(true), basis: on(true), account: on(false), system: on(true, true) },
+  cats: { strategy: on(true, true), headsup: on(true, true), setup: on(true), trade: on(true), news: on(true, true), feed: on(true), basis: on(true), account: on(false), system: on(true, true) },
   minSeverity: "info",
   quiet: { on: false, from: "23:00", to: "07:00" },
   mutedInstruments: [],
@@ -56,7 +57,7 @@ export function prefsFrom(raw: unknown): NotifyPrefs {
  * already go out per market from the autopilot settings, so they are off here by default. */
 export interface TelegramRouting { cats: Record<Category, boolean>; minSeverity: Severity }
 export const DEFAULT_TELEGRAM: TelegramRouting = {
-  cats: { headsup: true, setup: false, trade: false, news: true, feed: true, basis: true, account: true, system: true },
+  cats: { strategy: true, headsup: true, setup: false, trade: false, news: true, feed: true, basis: true, account: true, system: true },
   minSeverity: "info",
 };
 export function telegramFrom(raw: unknown): TelegramRouting {

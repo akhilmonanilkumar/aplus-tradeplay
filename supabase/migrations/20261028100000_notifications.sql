@@ -7,7 +7,7 @@
 create table if not exists public.notifications (
   id bigserial primary key,
   at timestamptz not null default now(),
-  category text not null check (category in ('setup', 'trade', 'headsup', 'news', 'feed', 'basis', 'account', 'system')),
+  category text not null check (category in ('setup', 'trade', 'headsup', 'news', 'feed', 'basis', 'account', 'system', 'strategy')),
   severity text not null default 'info' check (severity in ('info', 'success', 'warn', 'critical')),
   title text not null,
   body text,
