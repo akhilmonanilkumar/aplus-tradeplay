@@ -9,6 +9,7 @@ import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
 import { dispatchTelegram, headsUps, pruneNotifications } from "@/lib/server/notify";
 import { evaluateCandidates, routeLiveSignals } from "@/lib/server/promotion";
+import { liveExecTick } from "@/lib/server/liveExec";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 import { modelLedger, storeReleases } from "@/lib/server/ledger";
 import { basisTick } from "@/lib/server/basis";
@@ -137,7 +138,7 @@ export async function previewSelector(db: SupabaseClient): Promise<SelectorOutco
 }
 
 /** Per-market and tail-job budgets inside the 300 s function limit. */
-const MARKET_MS = 130_000;
+const MARKET_MS = 110_000;
 const TAIL_MS = 70_000;
 const within = <T,>(p: Promise<T>, ms: number, label: string) =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms / 1000}s`)), ms))]);
@@ -259,6 +260,16 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
     if (routed) out.push({ instrument: "STRATEGIES", state: "LIVE", action: `${routed} live signal${routed === 1 ? "" : "s"} routed` });
   } catch (err) {
     out.push({ instrument: "STRATEGIES", state: "ERROR", action: (err as Error).message });
+  }
+  // Real-money orders for promoted strategies (Delta Exchange), behind the live risk gate.
+  try {
+    const live = await within(liveExecTick(db, {
+      killSwitch: !!settings?.kill_switch, calendar,
+      newsBlocked: (events, id, now, minutes) => newsBlocked(events, INSTRUMENTS[id].desk, now, minutes),
+    }), 40_000, "live execution");
+    if (live) out.push({ instrument: "DELTA", state: "LIVE", action: live });
+  } catch (err) {
+    out.push({ instrument: "DELTA", state: "ERROR", action: (err as Error).message });
   }
   try {
     const sent = await within(dispatchTelegram(db, chats, integ?.notify), 20_000, "telegram");

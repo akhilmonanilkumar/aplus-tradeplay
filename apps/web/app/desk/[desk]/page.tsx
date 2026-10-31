@@ -24,6 +24,7 @@ import { Card, Chip, Empty, ErrorNote, GateRow, Note, Seg, StateRail } from "@/c
 import DeskChart, { OVERLAYS, type Overlay } from "@/components/desk/DeskChart";
 import Ticket from "@/components/desk/Ticket";
 import Analyst from "@/components/desk/Analyst";
+import DeltaVenue from "@/components/desk/DeltaVenue";
 import LivePnl from "@/components/LivePnl";
 import { CalendarCard, DerivsCard, MacroCard, NewsCard, SessionsPanel } from "@/components/desk/Context";
 
@@ -312,9 +313,10 @@ export default function DeskPage() {
 
       {ctxDesk && <div className="g12">
         {ctxDesk === "btc"
-          ? <DerivsCard d={d} error={derivs.error} liqs={inst === "BTCUSDT.P" ? live.liqs : undefined} />
-          : <DerivsCard d={d} error={derivs.error} liqs={inst === "XAUUSDT.P" ? live.liqs : undefined} title="XAUUSDT.P positioning (crypto gold perp)" />}
-        <MacroCard m={m} error={macro.error} desk={ctxDesk} />
+          ? <DerivsCard span={4} d={d} error={derivs.error} liqs={inst === "BTCUSDT.P" ? live.liqs : undefined} />
+          : <DerivsCard span={4} d={d} error={derivs.error} liqs={inst === "XAUUSDT.P" ? live.liqs : undefined} title="XAUUSDT.P positioning (crypto gold perp)" />}
+        <MacroCard span={4} m={m} error={macro.error} desk={ctxDesk} />
+        <DeltaVenue desk={ctxDesk} />
       </div>}
 
       <div className="g12">

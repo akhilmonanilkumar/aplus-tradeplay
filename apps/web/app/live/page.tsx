@@ -5,8 +5,10 @@ import { modelName, strategyName } from "@aplus/engine";
 import { supabase } from "@/lib/supabase";
 import { useMe } from "@/components/Shell";
 import { DEFAULT_RULES, promotionChecks, rulesFrom, type CandidateStats, type PromotionRules } from "@/lib/promotion";
+import { DELTA_SYMBOL } from "@/lib/liveRisk";
 import { r as fmtR, pct } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Kpi, Note, Toggle } from "@/components/ui";
+import LiveExecution from "@/components/LiveExecution";
 
 /**
  * Live strategies: candidates promoted from the never-ending paper run. Paper keeps scoring every
@@ -16,7 +18,7 @@ import { Card, Chip, Empty, ErrorNote, Kpi, Note, Toggle } from "@/components/ui
 
 type Stats = { window: CandidateStats; recent: CandidateStats; live: CandidateStats; allTime: CandidateStats; ready: boolean };
 interface Cand {
-  key: string; instrument: string; model: string; strategy: string | null; status: "paper" | "live" | "benched"; pinned: boolean; route_alerts: boolean;
+  key: string; instrument: string; model: string; strategy: string | null; status: "paper" | "live" | "benched"; pinned: boolean; route_alerts: boolean; execute?: boolean;
   stats: Partial<Stats>; live_since: string | null; benched_at: string | null; status_reason: string | null; updated_at: string;
 }
 interface Ev { id: number; at: string; key: string; from_status: string | null; to_status: string; reason: string | null }
@@ -94,7 +96,7 @@ export default function LivePage() {
       <section className="card" style={{ padding: 14, fontSize: 13 }}>
         <b>Paper never stops.</b> Every market × entry model (and each session strategy) is paper traded and scored on its last {rules.windowDays} days in net R after costs.
         Clear the rules and it is <b>promoted to live</b>: its new signals go to the live alert chats. When its record decays it is <b>benched</b> and the best waiting candidate takes the slot.
-        <span className="faint"> Live means live alerts and a live-era record. Orders are still placed by hand; broker execution is not wired yet.</span>
+        <span className="faint"> Live strategies on BTC and gold can also place orders on Delta Exchange (dry run → testnet → production) through the risk gate below; the rest stay alert-only.</span>
       </section>
 
       <section className="g12">
@@ -118,6 +120,7 @@ export default function LivePage() {
                 <div className="row" style={{ gap: 6, marginTop: 2, flexWrap: "wrap" }}>
                   <Toggle on={c.route_alerts} onChange={(v) => act(c, { route_alerts: v })} label="Route to live alerts" />
                   <span className="faint" style={{ fontSize: 11 }}>alerts</span>
+                  {DELTA_SYMBOL[c.instrument] ? <><Toggle on={c.execute !== false} onChange={(v) => act(c, { execute: v })} label="Place orders on Delta" /><span className="faint" style={{ fontSize: 11 }}>orders · {DELTA_SYMBOL[c.instrument]}</span></> : <span className="faint" style={{ fontSize: 11 }}>alerts only (not on Delta)</span>}
                   <span style={{ flex: 1 }} />
                   <button className="btn ghost sm" onClick={() => act(c, { pinned: !c.pinned })}>{c.pinned ? "Unpin" : "Pin"}</button>
                   <button className="btn sm" onClick={() => act(c, { pinned: false }, "benched", "benched by hand")}>Bench</button>
@@ -127,6 +130,8 @@ export default function LivePage() {
           </div>
         )}
       </Card>
+
+      <LiveExecution />
 
       <Card title="Candidates · best first" right={<span className="faint" style={{ fontSize: 11 }}>score = expectancy × √trades over {rules.windowDays} days</span>}>
         {waiting.length === 0 ? <Empty>No candidates scored yet: the autopilot scores them on its next pass.</Empty> : (

@@ -1,6 +1,7 @@
 import "server-only";
 import { INSTRUMENTS, TF_MS, isFxClosed, type Candle, type InstrumentId, type Tf } from "@aplus/engine";
 import { cached, errMsg, getJson } from "@/lib/server/http";
+import { deltaCandles } from "@/lib/server/delta";
 
 /**
  * Candle and quote providers with ordered fallbacks per instrument. Each result says
@@ -259,11 +260,13 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   "XAUUSDT.P": [
     { name: "Binance XAUUSDT.P mark", approx: false, load: binanceFutures("markPriceKlines", "XAUUSDT") },
     { name: "Binance XAUUSDT.P last", approx: false, load: binanceFutures("klines", "XAUUSDT") },
+    { name: "Delta XAUTUSD perp", approx: true, note: "Binance unreachable — Delta Exchange Tether Gold perpetual", load: (tf, r) => deltaCandles("XAUTUSD", tf, r) },
   ],
   "BTCUSDT.P": [
     { name: "Binance BTCUSDT.P mark", approx: false, load: binanceFutures("markPriceKlines", "BTCUSDT") },
     { name: "Bybit BTCUSDT mark", approx: true, note: "Binance unreachable — Bybit mark price", load: bybit("BTCUSDT", true) },
     { name: "OKX BTC-USDT-SWAP", approx: true, note: "Binance unreachable — OKX last price", load: okx("BTC-USDT-SWAP") },
+    { name: "Delta BTCUSD perp", approx: true, note: "Binance unreachable — Delta Exchange India perpetual", load: (tf, r) => deltaCandles("BTCUSD", tf, r) },
   ],
   "BTCUSD.SPOT": [
     { name: "Coinbase BTC-USD", approx: false, load: coinbase("BTC-USD") },
