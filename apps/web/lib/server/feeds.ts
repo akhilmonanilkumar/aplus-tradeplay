@@ -1,14 +1,15 @@
 import "server-only";
 import { INSTRUMENTS, TF_MS, isFxClosed, type Candle, type InstrumentId, type Tf } from "@aplus/engine";
 import { cached, errMsg, getJson } from "@/lib/server/http";
+import { deltaCandles } from "@/lib/server/delta";
 
 /**
  * Candle and quote providers with ordered fallbacks per instrument. Each result says
  * which source answered and whether it is an approximation of the traded price.
  *
- * Gold CFD accuracy: OANDA (free practice key) or Twelve Data give real XAU/USD.
- * Without a key we fall back to the Binance XAUUSDT index (a multi-venue spot-gold
- * composite), then PAXG — both are labelled.
+ * Free, keyless sources only (an OANDA practice key, if set, goes first). Gold uses the Binance
+ * XAUUSDT index (a multi-venue spot-gold composite), then PAXG; forex and Nifty use Yahoo;
+ * crypto uses the exchanges; approximations are labelled.
  */
 
 export interface CandleSet { candles: Candle[]; forming: Candle | null; source: string; approx: boolean; note?: string }
@@ -126,26 +127,78 @@ function oanda(instrumentName: string): Provider["load"] {
   };
 }
 
-const TD_TF: Record<Tf, string> = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" };
-function twelveData(symbol: string): Provider["load"] {
+/* ---------------- Yahoo Finance (keyless) ---------------- */
+
+/**
+ * Yahoo chart API: FX, futures and cash indices with no key. Intraday depth is limited (1M for 7 days,
+ * 5M/15M for 60 days, 1H for two years); 4H is built from 1H.
+ */
+const YAHOO_TF: Record<Tf, [string, number]> = { "1m": ["1m", 7], "5m": ["5m", 59], "15m": ["15m", 59], "1h": ["60m", 729], "4h": ["60m", 729], "1d": ["1d", 3650] };
+function yahoo(symbol: string): Provider["load"] {
   return async (tf, r) => {
-    await slot("twelvedata");
-    const q = new URLSearchParams({ symbol, interval: TD_TF[tf], outputsize: String(Math.min(5000, r.limit)), timezone: "UTC", order: "ASC", apikey: env("TWELVEDATA_API_KEY") });
-    if (r.endTime) q.set("end_date", new Date(r.endTime).toISOString().slice(0, 19).replace("T", " "));
-    type Res = { status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string }[] };
-    // The per-minute quota is shared with other server instances: on a 429, wait for the next minute and retry.
-    let j: Res | null = null;
-    for (let attempt = 0; !j; attempt++) {
-      try {
-        j = await getJson<Res>(`https://api.twelvedata.com/time_series?${q}`);
-      } catch (e) {
-        if (attempt >= 2 || !/429/.test(errMsg(e))) throw e;
-        await new Promise((res) => setTimeout(res, 61_000));
-      }
-    }
-    if (j.status !== "ok" || !j.values) throw new Error(`twelvedata: ${j.message ?? j.status}`);
-    return j.values.map((x) => ({ t: Date.parse(`${x.datetime.replace(" ", "T")}Z`), o: num(x.open), h: num(x.high), l: num(x.low), c: num(x.close) }));
+    const [interval, maxDays] = YAHOO_TF[tf];
+    const end = Math.floor((r.endTime ?? Date.now()) / 1000);
+    // Room for weekends and holidays, never past the interval's depth.
+    const span = Math.min(maxDays * 86_400, Math.ceil((r.limit * TF_MS[tf] * 1.7) / 1000) + 4 * 86_400);
+    const floor = Math.floor(Date.now() / 1000) - maxDays * 86_400;
+    const start = Math.max(floor, end - span);
+    if (start >= end) return [];
+    const q = new URLSearchParams({ interval, period1: String(start), period2: String(end), includePrePost: "false" });
+    type Res = { chart: { result: { timestamp?: number[]; indicators: { quote: { open: (number | null)[]; high: (number | null)[]; low: (number | null)[]; close: (number | null)[]; volume?: (number | null)[] }[] } }[] | null; error: { description: string } | null } };
+    const j = await getJson<Res>(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${q}`);
+    const res = j.chart.result?.[0];
+    if (!res) throw new Error(`yahoo: ${j.chart.error?.description ?? "no data"}`);
+    const ts = res.timestamp ?? [], k = res.indicators.quote[0]!;
+    const rows: Candle[] = [];
+    ts.forEach((t, i) => {
+      const o = k.open[i], h = k.high[i], l = k.low[i], c = k.close[i];
+      if (o === null || h === null || l === null || c === null || o === undefined) return;
+      rows.push({ t: t * 1000, o, h, l, c, v: Number(k.volume?.[i] ?? 0) });
+    });
+    const out = tf === "4h" ? aggregate(rows, TF_MS["4h"]) : rows;
+    return out.slice(-r.limit);
   };
+}
+
+/** Free providers not wired into a chain yet, probed by the feed health report. */
+export const CANDIDATES: Partial<Record<InstrumentId, Provider[]>> = {
+  // Yahoo has no spot XAU/USD (404); its futures are delayed 10 minutes.
+  XAUUSD: [{ name: "Yahoo gold futures (GC=F)", approx: true, load: yahoo("GC=F") }],
+  NAS100: [{ name: "Yahoo Nasdaq-100 (^NDX)", approx: false, load: yahoo("^NDX") }, { name: "Yahoo Nasdaq-100 futures (NQ=F)", approx: true, load: yahoo("NQ=F") }],
+  SPX500: [{ name: "Yahoo S&P 500 (^GSPC)", approx: false, load: yahoo("^GSPC") }, { name: "Yahoo S&P 500 futures (ES=F)", approx: true, load: yahoo("ES=F") }],
+};
+
+/**
+ * Feed health: every provider in every chain (plus the candidates) asked for its last 5M bars, with
+ * timing, bar count and the age of the newest bar. Metered vendors are skipped unless `metered`.
+ */
+export async function feedHealth(opts: { metered?: boolean } = {}) {
+  const probe = async (id: InstrumentId, p: Provider, chain: boolean) => {
+    const t0 = Date.now();
+    if (p.enabled && !p.enabled()) return { id, provider: p.name, chain, status: "disabled" };
+    if (p.metered && !opts.metered) return { id, provider: p.name, chain, status: "skipped (metered)" };
+    try {
+      const rows = openHours(id, dedupe(await p.load("5m", { limit: 60 })));
+      const last = rows.at(-1);
+      return { id, provider: p.name, chain, status: rows.length >= 10 ? "ok" : "thin", bars: rows.length, lastBarAgeMin: last ? Math.round((Date.now() - last.t) / 60_000) : null, lastClose: last?.c ?? null, ms: Date.now() - t0 };
+    } catch (e) {
+      return { id, provider: p.name, chain, status: "error", error: errMsg(e), ms: Date.now() - t0 };
+    }
+  };
+  const ids = Object.keys(CHAINS) as InstrumentId[];
+  const [rows, live] = await Promise.all([
+    Promise.all(ids.flatMap((id) => [...CHAINS[id].map((p) => probe(id, p, true)), ...(CANDIDATES[id] ?? []).map((p) => probe(id, p, false))])),
+    Promise.all(ids.map(async (id) => {
+      const t0 = Date.now();
+      try { const c = await loadCandles(id, "5m", 100); return { id, source: c.source, approx: c.approx, bars: c.candles.length, lastBarAgeMin: Math.round((Date.now() - (c.candles.at(-1)?.t ?? 0)) / 60_000), ms: Date.now() - t0 }; }
+      catch (e) { return { id, error: errMsg(e), ms: Date.now() - t0 }; }
+    })),
+  ]);
+  const quotes = await Promise.all(ids.map(async (id) => {
+    try { const q = await loadQuote(id); return { id, source: q.source, last: q.last, ageSec: Math.round((Date.now() - q.ts) / 1000) }; }
+    catch (e) { return { id, error: errMsg(e) }; }
+  }));
+  return { at: new Date().toISOString(), live, quotes, providers: rows };
 }
 
 /* ---------------- NSE (Upstox, keyless) ---------------- */
@@ -170,46 +223,50 @@ function upstox(key: string): Provider["load"] {
     if (!r.endTime && tf !== "1d") {
       const today = await getJson<{ data: { candles: (string | number)[][] } }>(`${base}/intraday/${path}`).catch(() => null);
       if (today) out.push(...rows(today.data.candles));
+      // Upstox publishes the finished session to its history endpoint late, so after the close (and
+      // overnight) the newest bars can be a whole session old: fail so the next provider answers.
+      const last = Math.max(...out.map((c) => c.t));
+      if (last < lastNseBarDue(Date.now()) - TF_MS[tf]) throw new Error(`stale: last bar ${new Date(last).toISOString().slice(0, 16)}Z`);
     }
     return out.sort((a, b) => a.t - b.t);
   };
 }
 
-/** Requests per minute a metered vendor allows; paging waits for a free slot instead of failing. */
-const RATE: Record<string, number> = { twelvedata: 8 };
-const calls = new Map<string, number[]>();
-async function slot(vendor: string): Promise<void> {
-  const perMin = RATE[vendor];
-  if (!perMin) return;
-  for (;;) {
-    const now = Date.now();
-    const recent = (calls.get(vendor) ?? []).filter((t) => t > now - 61_000);
-    if (recent.length < perMin) { calls.set(vendor, [...recent, now]); return; }
-    await new Promise((res) => setTimeout(res, recent[0]! + 61_000 - now));
+/** Open time of the newest NSE bar that should exist by `now` (09:15–15:30 IST, Monday to Friday; holidays not modelled). */
+function lastNseBarDue(now: number): number {
+  const IST = 330 * 60_000;
+  for (let back = 0; back < 7; back++) {
+    const day = Math.floor((now + IST) / 86_400_000) - back;
+    const dow = new Date(day * 86_400_000).getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    const open = day * 86_400_000 + (9 * 60 + 15) * 60_000 - IST;
+    const close = day * 86_400_000 + (15 * 60 + 30) * 60_000 - IST;
+    if (now < open + 15 * 60_000) continue;
+    return Math.min(now, close) - 15 * 60_000;
   }
+  return 0;
 }
 
 /* ---------------- chains ---------------- */
 
 const hasOanda = () => !!env("OANDA_API_KEY");
-const hasTd = () => !!env("TWELVEDATA_API_KEY");
 
 export const CHAINS: Record<InstrumentId, Provider[]> = {
   XAUUSD: [
     { name: "OANDA XAU/USD", approx: false, enabled: hasOanda, load: oanda("XAU_USD") },
-    // Free tier: 8 requests/min, 800/day — one 5,000-bar 5M pull per bar close covers 5M, 15M and 1H.
-    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTd, load: twelveData("XAU/USD"), base: "5m", pageSize: 5000, metered: true },
-    { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA or Twelve Data key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
+    { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
     { name: "PAXG/USDT proxy", approx: true, note: "1 PAXG ≈ 1 oz; trades at a small premium to spot", load: binanceSpot("PAXGUSDT") },
   ],
   "XAUUSDT.P": [
     { name: "Binance XAUUSDT.P mark", approx: false, load: binanceFutures("markPriceKlines", "XAUUSDT") },
     { name: "Binance XAUUSDT.P last", approx: false, load: binanceFutures("klines", "XAUUSDT") },
+    { name: "Delta XAUTUSD perp", approx: true, note: "Binance unreachable — Delta Exchange Tether Gold perpetual", load: (tf, r) => deltaCandles("XAUTUSD", tf, r) },
   ],
   "BTCUSDT.P": [
     { name: "Binance BTCUSDT.P mark", approx: false, load: binanceFutures("markPriceKlines", "BTCUSDT") },
     { name: "Bybit BTCUSDT mark", approx: true, note: "Binance unreachable — Bybit mark price", load: bybit("BTCUSDT", true) },
     { name: "OKX BTC-USDT-SWAP", approx: true, note: "Binance unreachable — OKX last price", load: okx("BTC-USDT-SWAP") },
+    { name: "Delta BTCUSD perp", approx: true, note: "Binance unreachable — Delta Exchange India perpetual", load: (tf, r) => deltaCandles("BTCUSD", tf, r) },
   ],
   "BTCUSD.SPOT": [
     { name: "Coinbase BTC-USD", approx: false, load: coinbase("BTC-USD") },
@@ -223,12 +280,18 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   ],
   EURUSD: [
     { name: "OANDA EUR/USD", approx: false, enabled: hasOanda, load: oanda("EUR_USD") },
-    { name: "Twelve Data EUR/USD", approx: false, enabled: hasTd, load: twelveData("EUR/USD"), base: "5m", pageSize: 5000, metered: true },
+    // Yahoo keeps 60 days of 5M; longer backtests fall through to Binance EUR/USDT.
+    { name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") },
     { name: "Binance EUR/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("EURUSDT") },
+  ],
+  GBPUSD: [
+    { name: "OANDA GBP/USD", approx: false, enabled: hasOanda, load: oanda("GBP_USD") },
+    { name: "Yahoo GBP/USD", approx: false, load: yahoo("GBPUSD=X") },
+    { name: "Binance GBP/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("GBPUSDT") },
   ],
   USDJPY: [
     { name: "OANDA USD/JPY", approx: false, enabled: hasOanda, load: oanda("USD_JPY") },
-    { name: "Twelve Data USD/JPY", approx: false, enabled: hasTd, load: twelveData("USD/JPY"), base: "5m", pageSize: 5000, metered: true },
+    { name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") },
   ],
   NAS100: [
     { name: "OANDA NAS100", approx: false, enabled: hasOanda, load: oanda("NAS100_USD") },
@@ -240,6 +303,7 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   ],
   NIFTY: [
     { name: "Upstox NSE Nifty 50", approx: false, load: upstox("NSE_INDEX|Nifty 50") },
+    { name: "Yahoo Nifty 50 (^NSEI)", approx: false, load: yahoo("^NSEI") },
   ],
 };
 
@@ -409,6 +473,43 @@ export function aggregate(base: readonly Candle[], ms: number): Candle[] {
   return [...m.values()].sort((a, b) => a.t - b.t);
 }
 
+/* ---------------- market status ---------------- */
+
+/** NSE cash session, 09:15–15:30 IST on weekdays (holidays not modelled). */
+function nseOpen(t: number) {
+  const ist = new Date(t + 330 * 60_000);
+  const day = ist.getUTCDay(), m = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  return day >= 1 && day <= 5 && m >= 9 * 60 + 15 && m < 15 * 60 + 30;
+}
+
+export interface MarketStatus {
+  id: InstrumentId; label: string; desk: string; digits: number; open: boolean;
+  /** live: fresh bars · closed: market shut · stale: open but no new 5M bar for 15+ min · down: no feed answered. */
+  status: "live" | "closed" | "stale" | "down";
+  feed: string | null; approx: boolean | null; barAgeMin: number | null; error: string | null;
+  price: number | null; priceSource: string | null; quoteAgeSec: number | null;
+}
+
+/** Price, candle feed and freshness for every market (cached feeds, no extra vendor load). */
+export async function marketStatuses(now = Date.now()): Promise<MarketStatus[]> {
+  return Promise.all((Object.keys(CHAINS) as InstrumentId[]).map(async (id) => {
+    const def = INSTRUMENTS[id];
+    const open = id === "NIFTY" ? nseOpen(now) : def.fxHours ? !isFxClosed(now) : true;
+    const [c, q] = await Promise.all([
+      loadCandles(id, "5m", 20).then((x) => ({ ok: true as const, x }), (e) => ({ ok: false as const, e: errMsg(e) })),
+      loadQuote(id).then((x) => ({ ok: true as const, x }), (e) => ({ ok: false as const, e: errMsg(e) })),
+    ]);
+    const last = c.ok ? c.x.candles.at(-1) : undefined;
+    const barAgeMin = last ? Math.round((now - last.t - 300_000) / 60_000) : null;
+    const status: MarketStatus["status"] = !c.ok ? "down" : !open ? "closed" : barAgeMin !== null && barAgeMin > 15 ? "stale" : "live";
+    return {
+      id, label: def.label, desk: def.desk, digits: def.digits, open, status,
+      feed: c.ok ? c.x.source : null, approx: c.ok ? c.x.approx : null, barAgeMin, error: c.ok ? (q.ok ? null : q.e) : c.e,
+      price: q.ok ? q.x.last : last?.c ?? null, priceSource: q.ok ? q.x.source : null, quoteAgeSec: q.ok ? Math.round((now - q.x.ts) / 1000) : null,
+    };
+  }));
+}
+
 /* ---------------- quotes ---------------- */
 
 export interface Quote { bid: number | null; ask: number | null; last: number; mark?: number; index?: number; ts: number; source: string; approx: boolean }
@@ -461,6 +562,17 @@ const upstoxQuote = (key: string, name: string): QuoteProvider => ({
   },
 });
 
+/** Last trade from Yahoo's chart metadata (keyless). */
+const yahooQuote = (symbol: string, name: string): QuoteProvider => ({
+  name,
+  load: async () => {
+    const j = await getJson<{ chart: { result: { meta: { regularMarketPrice: number; regularMarketTime: number } }[] | null } }>(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d`);
+    const m = j.chart.result?.[0]?.meta;
+    if (!m?.regularMarketPrice) throw new Error("no price");
+    return { bid: null, ask: null, last: m.regularMarketPrice, ts: m.regularMarketTime * 1000, source: name, approx: false };
+  },
+});
+
 const coinbaseQuote: QuoteProvider = {
   name: "Coinbase BTC-USD",
   load: async () => {
@@ -498,10 +610,11 @@ const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   "BTCUSD.SPOT": [coinbaseQuote],
   BTCUSD: [coinbaseQuote],
   EURUSD: [swissquote("EUR", "USD")],
+  GBPUSD: [swissquote("GBP", "USD")],
   USDJPY: [swissquote("USD", "JPY")],
   NAS100: [binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P")],
   SPX500: [binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P")],
-  NIFTY: [upstoxQuote("NSE_INDEX|Nifty 50", "Upstox Nifty 50")],
+  NIFTY: [upstoxQuote("NSE_INDEX|Nifty 50", "Upstox Nifty 50"), yahooQuote("^NSEI", "Yahoo Nifty 50")],
 };
 
 export const instrumentOk = (id: string | null): id is InstrumentId => !!id && id in INSTRUMENTS;

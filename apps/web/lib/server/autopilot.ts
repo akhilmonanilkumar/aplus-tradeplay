@@ -7,8 +7,12 @@ import {
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
 import { loadCalendar, type CalEvent } from "@/lib/server/news";
 import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
+import { dispatchTelegram, headsUps, pruneNotifications } from "@/lib/server/notify";
+import { evaluateCandidates, routeLiveSignals } from "@/lib/server/promotion";
+import { liveExecTick } from "@/lib/server/liveExec";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 import { modelLedger, storeReleases } from "@/lib/server/ledger";
+import { basisTick } from "@/lib/server/basis";
 
 /**
  * Autopilot: runs the same detector + A+ gate as the desks on the server, on a schedule.
@@ -133,13 +137,19 @@ export async function previewSelector(db: SupabaseClient): Promise<SelectorOutco
   return runSelector(db, { config: { ...cfg, enabled: true }, evalFor: (id) => evalFor(id), chats, killSwitch: true, dryRun: true });
 }
 
+/** Per-market and tail-job budgets inside the 300 s function limit. */
+const MARKET_MS = 110_000;
+const TAIL_MS = 70_000;
+const within = <T,>(p: Promise<T>, ms: number, label: string) =>
+  Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms / 1000}s`)), ms))]);
+
 /** One autopilot pass over every enabled instrument. Idempotent: only state changes act. */
 export async function tick(db: SupabaseClient): Promise<{ results: { instrument: string; state: string; action: string }[]; selector: SelectorOutcome | null }> {
   const { configs, settings, chats, evalFor, calendar } = await passContext(db);
   const out: { instrument: string; state: string; action: string }[] = [];
   await storeReleases(db, calendar).catch(() => undefined);
 
-  for (const cfg of configs) {
+  const pass = async (cfg: (typeof configs)[number]) => {
     if (cfg.mode === "off") {
       // Still fill and close manual paper orders from the desks.
       try {
@@ -153,7 +163,7 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       } catch (err) {
         out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message });
       }
-      continue;
+      return;
     }
     try {
       const e = await evalFor(cfg.instrument, cfg.filters);
@@ -195,24 +205,78 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
       await db.from("autopilot_runs").insert({ instrument: cfg.instrument, state: "ERROR", action: "error", detail: { error: (err as Error).message } });
       out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message });
     }
-  }
+   };
+  // Markets run side by side, each with its own deadline, so one slow or metered feed cannot stall the pass.
+  await Promise.all(configs.map((cfg) => within(pass(cfg), MARKET_MS, cfg.instrument).catch((err) => { out.push({ instrument: cfg.instrument, state: "ERROR", action: (err as Error).message }); })));
 
   const sel = selectorConfig(settings?.integrations?.selector);
   let selector: SelectorOutcome | null = null;
-  if (sel.enabled && sel.universe.length) {
-    try {
-      selector = await runSelector(db, { config: sel, evalFor: (id) => evalFor(id), chats, killSwitch: !!settings?.kill_switch });
-    } catch (err) {
-      await db.from("autopilot_runs").insert({ instrument: "SELECTOR", state: "ERROR", action: "error", detail: { error: (err as Error).message } });
-      out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
-    }
-  }
+  await Promise.all([
+    (async () => {
+      if (!sel.enabled || !sel.universe.length) return;
+      try {
+        selector = await within(runSelector(db, { config: sel, evalFor: (id) => evalFor(id), chats, killSwitch: !!settings?.kill_switch }), TAIL_MS, "selector");
+      } catch (err) {
+        await db.from("autopilot_runs").insert({ instrument: "SELECTOR", state: "ERROR", action: "error", detail: { error: (err as Error).message } });
+        out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
+      }
+    })(),
+    // Funding basis trade (paper): accrue settlements, exit on negative funding, enter on positive carry.
+    within(basisTick(db), TAIL_MS, "basis").then(
+      (b) => { if (b) out.push({ instrument: "BASIS", state: "PAPER", action: b }); },
+      (err) => { out.push({ instrument: "BASIS", state: "ERROR", action: (err as Error).message }); },
+    ),
+    within(trackSignals(db), TAIL_MS, "ledger").then(
+      (n) => { if (n) out.push({ instrument: "LEDGER", state: "TRACKED", action: `${n} signal outcome${n === 1 ? "" : "s"} updated` }); },
+      (err) => { out.push({ instrument: "LEDGER", state: "ERROR", action: (err as Error).message }); },
+    ),
+  ]);
 
+  // Proactive heads-ups, then Telegram for every notification category routed there in Settings.
+  const integ = settings?.integrations as { notify?: unknown; ai_model?: string } | undefined;
   try {
-    const n = await trackSignals(db);
-    if (n) out.push({ instrument: "LEDGER", state: "TRACKED", action: `${n} signal outcome${n === 1 ? "" : "s"} updated` });
+    const briefContext = async (desk: "gold" | "btc") => {
+      const e = await evalFor(desk === "gold" ? "XAUUSD" : "BTCUSDT.P");
+      return {
+        instrument: e.instrument, side: e.side, state: e.state, price: e.price, window: e.window, newsClear: e.newsClear,
+        gate: e.gate && { verdict: e.gate.verdict, grade: e.gate.grade, waitingFor: e.gate.waitingFor, blockers: e.gate.blockers, boxes: e.gate.boxes.map((b) => ({ label: b.label, status: b.status, reason: b.reason })) },
+        suggest: e.analysis.suggest ?? null,
+        nextEvents: calendar.filter((x) => x.impact === "high" && x.at > Date.now()).slice(0, 4).map((x) => ({ title: `${x.currency} ${x.title}`, at: new Date(x.at).toISOString() })),
+      };
+    };
+    const n = await within(headsUps(db, { calendar, briefContext, model: integ?.ai_model ?? null }), 35_000, "heads-ups");
+    if (n) out.push({ instrument: "NOTIFY", state: "HEADSUP", action: `${n} heads-up${n === 1 ? "" : "s"}` });
   } catch (err) {
-    out.push({ instrument: "LEDGER", state: "ERROR", action: (err as Error).message });
+    out.push({ instrument: "NOTIFY", state: "ERROR", action: (err as Error).message });
+  }
+  // Paper never stops: re-score every candidate, promote / bench per the rules, route live signals.
+  const promo = settings?.integrations as { promotion?: unknown; live_chats?: Chat[] } | undefined;
+  try {
+    const summary = await within(evaluateCandidates(db, promo?.promotion), 30_000, "promotion");
+    out.push({ instrument: "STRATEGIES", state: "SCORED", action: summary });
+    // Live alerts go to the live chats when set (Live page), else to the firm's alert chats.
+    const liveChats = (promo?.live_chats ?? []).filter((c) => c?.id);
+    const routed = await within(routeLiveSignals(db, liveChats.length ? liveChats : chats), 20_000, "live routing");
+    if (routed) out.push({ instrument: "STRATEGIES", state: "LIVE", action: `${routed} live signal${routed === 1 ? "" : "s"} routed` });
+  } catch (err) {
+    out.push({ instrument: "STRATEGIES", state: "ERROR", action: (err as Error).message });
+  }
+  // Real-money orders for promoted strategies (Delta Exchange), behind the live risk gate.
+  try {
+    const live = await within(liveExecTick(db, {
+      killSwitch: !!settings?.kill_switch, calendar,
+      newsBlocked: (events, id, now, minutes) => newsBlocked(events, INSTRUMENTS[id].desk, now, minutes),
+    }), 40_000, "live execution");
+    if (live) out.push({ instrument: "DELTA", state: "LIVE", action: live });
+  } catch (err) {
+    out.push({ instrument: "DELTA", state: "ERROR", action: (err as Error).message });
+  }
+  try {
+    const sent = await within(dispatchTelegram(db, chats, integ?.notify), 20_000, "telegram");
+    if (sent) out.push({ instrument: "NOTIFY", state: "TELEGRAM", action: `${sent} sent` });
+    if (new Date().getUTCMinutes() < 5) await pruneNotifications(db);
+  } catch (err) {
+    out.push({ instrument: "NOTIFY", state: "ERROR", action: (err as Error).message });
   }
   return { results: out, selector };
 }
