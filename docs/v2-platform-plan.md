@@ -395,3 +395,11 @@ labelled as a proxy and kept out of A+ gate scores. Paid upgrade path stays Data
 * Position tracking: cTrader Open API with the trader's cTrader ID in **read-only** use (positions, deals,
   balance) if each firm's server allows Open API; otherwise "Taken" from Telegram plus price tracking.
   The app never places prop-account orders.
+
+## 10. Build progress
+
+| Phase | State |
+|---|---|
+| 1 · Shell, design system, Dashboard, Arena layout, redirects | Done (`claude/v2-platform-build`) |
+| 2 · Engine host, venue adapters, clock sync, tick store, flow views | Code done: `services/engine` (Delta socket + REST fallback, CoinSwitch HFT, Fyers, TimescaleDB, signed API, deploy kit). Arena Order flow / Depth / OI & funding tabs live on Delta data without the host. **Waiting on:** the droplet, its IP whitelisted at each venue, `ENGINE_URL` + `ENGINE_SECRET` in Vercel. |
+| 3 · CFD Arena rules, alerts with cTrader links, position sync | Next |

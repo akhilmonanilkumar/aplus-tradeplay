@@ -15,54 +15,59 @@ import Journal from "@/components/views/Journal";
 import Bias from "@/components/views/Bias";
 import Discipline from "@/components/views/Discipline";
 import LiveExecution from "@/components/LiveExecution";
+import { DepthTab, OiTab, OrderFlowTab, type FlowSource } from "@/components/arena/FlowTabs";
 
 type VenueId = "cfd" | "delta" | "coinswitch" | "fyers";
 /** A market in an arena. `engine` is the instrument the analysis engine reads; null until its adapter ships. */
-type Market = { id: string; label: string; desk: DeskId; engine: InstrumentId | null };
+type Market = { id: string; label: string; desk: DeskId; engine: InstrumentId | null; flow?: FlowSource; derivs?: "BTCUSDT" | "XAUUSDT" };
+
+const DELTA_BTC: FlowSource = { venue: "delta", symbol: "BTCUSD", tick: 10, digits: 1 };
+const DELTA_XAU: FlowSource = { venue: "delta", symbol: "XAUTUSD", tick: 0.5, digits: 2 };
+const FLOW_TABS: Tab[] = [{ id: "flow", l: "Order flow" }, { id: "depth", l: "Depth" }, { id: "oi", l: "OI & funding" }];
 type Tab = { id: string; l: string };
 
 const ARENAS: Record<VenueId, { name: string; sub: string; ac: string; mode: string; markets: Market[]; tabs: Tab[] }> = {
   cfd: {
     name: "CFD Arena", sub: "Prop accounts on cTrader · alerts only, you place the orders", ac: "--cfd", mode: "Alerts only",
     markets: [
-      { id: "XAUUSD", label: "XAUUSD", desk: "gold", engine: "XAUUSD" },
-      { id: "BTCUSD", label: "BTCUSD", desk: "btc", engine: "BTCUSD" },
+      { id: "XAUUSD", label: "XAUUSD", desk: "gold", engine: "XAUUSD", flow: { ...DELTA_XAU, note: "Reference: Delta XAUT perp" }, derivs: "XAUUSDT" },
+      { id: "BTCUSD", label: "BTCUSD", desk: "btc", engine: "BTCUSD", flow: { ...DELTA_BTC, note: "Reference: Delta BTC perp" }, derivs: "BTCUSDT" },
       { id: "EURUSD", label: "EURUSD", desk: "fx", engine: "EURUSD" },
       { id: "GBPUSD", label: "GBPUSD", desk: "fx", engine: "GBPUSD" },
       { id: "USDJPY", label: "USDJPY", desk: "fx", engine: "USDJPY" },
       { id: "US500", label: "US500", desk: "indices", engine: "SPX500" },
       { id: "NAS100", label: "NAS100", desk: "indices", engine: "NAS100" },
     ],
-    tabs: [{ id: "trade", l: "Trade" }, { id: "challenge", l: "Challenge" }, { id: "journal", l: "Journal" }, { id: "bias", l: "Daily bias" }, { id: "discipline", l: "Discipline" }],
+    tabs: [{ id: "trade", l: "Trade" }, ...FLOW_TABS, { id: "challenge", l: "Challenge" }, { id: "journal", l: "Journal" }, { id: "bias", l: "Daily bias" }, { id: "discipline", l: "Discipline" }],
   },
   delta: {
     name: "Delta Arena", sub: "Delta Exchange India · runs promoted strategies on its own", ac: "--delta", mode: "Autonomous",
     markets: [
-      { id: "BTCUSD", label: "BTCUSD perp", desk: "btc", engine: "BTCUSDT.P" },
-      { id: "XAUTUSD", label: "XAUTUSD perp", desk: "gold", engine: "XAUUSDT.P" },
-      { id: "ETHUSD", label: "ETHUSD perp", desk: "btc", engine: null },
+      { id: "BTCUSD", label: "BTCUSD perp", desk: "btc", engine: "BTCUSDT.P", flow: DELTA_BTC, derivs: "BTCUSDT" },
+      { id: "XAUTUSD", label: "XAUTUSD perp", desk: "gold", engine: "XAUUSDT.P", flow: DELTA_XAU, derivs: "XAUUSDT" },
+      { id: "ETHUSD", label: "ETHUSD perp", desk: "btc", engine: null, flow: { venue: "delta", symbol: "ETHUSD", tick: 1, digits: 2 } },
       { id: "BTC-OPT", label: "BTC options", desk: "btc", engine: null },
     ],
-    tabs: [{ id: "trade", l: "Trade" }, { id: "execution", l: "Execution" }],
+    tabs: [{ id: "trade", l: "Trade" }, ...FLOW_TABS, { id: "execution", l: "Execution" }],
   },
   coinswitch: {
     name: "CoinSwitch Arena", sub: "CoinSwitch PRO · runs promoted strategies on its own", ac: "--cs", mode: "Paper",
     markets: [
-      { id: "BTCUSDT", label: "BTCUSDT perp", desk: "btc", engine: "BTCUSDT.P" },
+      { id: "BTCUSDT", label: "BTCUSDT perp", desk: "btc", engine: "BTCUSDT.P", flow: { venue: "coinswitch", symbol: "BTCUSDT", tick: 10, digits: 1 }, derivs: "BTCUSDT" },
       { id: "XAU", label: "Gold perp", desk: "gold", engine: "XAUUSDT.P" },
-      { id: "ETHUSDT", label: "ETHUSDT perp", desk: "btc", engine: null },
+      { id: "ETHUSDT", label: "ETHUSDT perp", desk: "btc", engine: null, flow: { venue: "coinswitch", symbol: "ETHUSDT", tick: 1, digits: 2 } },
       { id: "XAG", label: "Silver perp", desk: "gold", engine: null },
     ],
-    tabs: [{ id: "trade", l: "Trade" }, { id: "connect", l: "Connection" }],
+    tabs: [{ id: "trade", l: "Trade" }, ...FLOW_TABS, { id: "connect", l: "Connection" }],
   },
   fyers: {
     name: "Fyers Arena", sub: "NSE and BSE derivatives · runs promoted strategies on its own", ac: "--fyers", mode: "Paper",
     markets: [
-      { id: "NIFTY", label: "NIFTY", desk: "indices", engine: "NIFTY" },
+      { id: "NIFTY", label: "NIFTY", desk: "indices", engine: "NIFTY", flow: { venue: "fyers", symbol: "NSE:NIFTY50-INDEX", tick: 1, digits: 2 } },
       { id: "BANKNIFTY", label: "BANKNIFTY", desk: "indices", engine: null },
       { id: "SENSEX", label: "SENSEX", desk: "indices", engine: null },
     ],
-    tabs: [{ id: "trade", l: "Trade" }, { id: "connect", l: "Connection" }],
+    tabs: [{ id: "trade", l: "Trade" }, { id: "depth", l: "Depth" }, { id: "connect", l: "Connection" }],
   },
 };
 
@@ -70,8 +75,8 @@ type Quote = { last: number; bid: number | null; ask: number | null; source: str
 
 function Pill({ m, on, href }: { m: Market; on: boolean; href: string }) {
   const q = useApi<Quote>(m.engine ? `/api/market/quote?i=${encodeURIComponent(m.engine)}` : null, 20_000);
-  const digits = m.engine ? INSTRUMENTS[m.engine].digits : 2;
-  if (!m.engine) {
+  const digits = m.engine ? INSTRUMENTS[m.engine].digits : m.flow?.digits ?? 2;
+  if (!m.engine && !m.flow) {
     return (
       <span className="pill" style={{ opacity: 0.55, cursor: "default" }} title="Market data for this market arrives with its venue adapter">
         <b>{m.label}</b><span className="px">—</span><span className="st">Adapter pending</span>
@@ -80,8 +85,8 @@ function Pill({ m, on, href }: { m: Market; on: boolean; href: string }) {
   }
   return (
     <Link href={href} className={`pill${on ? " on" : ""}`} aria-current={on ? "true" : undefined}>
-      <b>{m.label}</b><span className="px">{q.data ? num(q.data.last, Math.min(digits, 5)) : "…"}</span>
-      <span className="st"><span className={`led ${q.error ? "down" : q.data ? "live" : ""}`} />{q.error ? "No quote" : q.data?.source ?? "Loading"}</span>
+      <b>{m.label}</b><span className="px">{q.data ? num(q.data.last, Math.min(digits, 5)) : m.engine ? "…" : "—"}</span>
+      <span className="st"><span className={`led ${q.error ? "down" : q.data ? "live" : ""}`} />{!m.engine ? "Flow and depth" : q.error ? "No quote" : q.data?.source ?? "Loading"}</span>
     </Link>
   );
 }
@@ -145,7 +150,7 @@ export default function ArenaPage() {
   const venue = (Object.keys(ARENAS) as VenueId[]).find((v) => v === params.venue) ?? "cfd";
   const a = ARENAS[venue];
   const tab = a.tabs.find((t) => t.id === search.get("tab"))?.id ?? "trade";
-  const market = a.markets.find((m) => m.id === search.get("m") && m.engine) ?? a.markets[0];
+  const market = a.markets.find((m) => m.id === search.get("m") && (m.engine || m.flow)) ?? a.markets[0];
   const href = (p: { tab?: string; m?: string }) => {
     const q = new URLSearchParams();
     const m = p.m ?? market.id, t = p.tab ?? tab;
@@ -174,7 +179,11 @@ export default function ArenaPage() {
         {a.tabs.map((t) => <Link key={t.id} href={href({ tab: t.id })} className={t.id === tab ? "on" : ""} aria-current={t.id === tab ? "page" : undefined}>{t.l}</Link>)}
       </nav>
 
-      {tab === "trade" && (market.engine ? <DeskWorkspace key={market.engine} deskId={market.desk} inst={market.engine} /> : <Empty>Market data for {market.label} arrives with the venue adapter.</Empty>)}
+      {tab === "trade" && (market.engine ? <DeskWorkspace key={market.engine} deskId={market.desk} inst={market.engine} /> : <Empty>The setup engine does not cover {market.label} yet. Its order flow, depth and open interest are in the other tabs.</Empty>)}
+      {(tab === "flow" || tab === "depth" || tab === "oi") && !market.flow && <Empty>{market.label} is a CFD with no central order book. Order flow and depth need a futures feed (CME); gold and BTC use their perpetual markets instead.</Empty>}
+      {tab === "flow" && market.flow && <OrderFlowTab key={market.id} src={market.flow} />}
+      {tab === "depth" && market.flow && <DepthTab key={market.id} src={market.flow} />}
+      {tab === "oi" && market.flow && <OiTab key={market.id} src={market.flow} derivs={market.derivs ?? null} />}
       {tab === "challenge" && <Challenges />}
       {tab === "journal" && <Journal />}
       {tab === "bias" && <Bias />}

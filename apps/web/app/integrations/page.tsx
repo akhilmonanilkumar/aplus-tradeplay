@@ -7,6 +7,20 @@ import { Card, Chip } from "@/components/ui";
 import IntegrationsCard from "@/components/IntegrationsCard";
 
 type DeltaStatus = { mode: string; env: string; deltaEnv: string; relay: boolean; keys: { testnet: boolean; production: boolean }; productsError?: string; wallet?: unknown };
+type HostVenue = { id: string; env: string; keys: boolean; execution: boolean; note?: string; symbols: string[];
+  clock: { offsetMs: number | null; rttP95Ms: number | null; healthy: boolean; budgetMs: number };
+  stream: { state: string; lastMessageAt: number | null; reconnects: number; error: string | null } };
+type Host = { connected: boolean; reason?: string; publicIp?: string | null; uptimeSec?: number; venues?: HostVenue[]; store?: { enabled: boolean; written: number; buffered: number; error: string | null } };
+const ms = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v >= 0 && v !== 0 ? "+" : ""}${Math.round(v)} ms`);
+const ago = (t: number | null) => (t ? `${Math.max(0, Math.round((Date.now() - t) / 1000))} s ago` : "—");
+/** Card metrics and rows from the engine host's view of one venue. */
+const fromHost = (h: HostVenue): Pick<Venue, "metrics" | "rows" | "status" | "label"> => ({
+  status: h.clock.healthy && h.keys ? "ok" : h.keys || h.stream.state !== "off" ? "warn" : "off",
+  label: !h.keys ? (h.note ? "Needs setup" : "Keys missing") : h.clock.healthy ? (h.execution ? "Trading on" : "Connected") : "Clock check",
+  metrics: [["Clock offset", ms(h.clock.offsetMs)], ["Round trip p95", h.clock.rttP95Ms === null ? "—" : `${Math.round(h.clock.rttP95Ms)} ms`], ["Stream", h.stream.state]],
+  rows: [["Last message", ago(h.stream.lastMessageAt)], ["Clock budget", `±${h.clock.budgetMs} ms`], ["Execution switch", h.execution ? "on" : "off"], ["Markets", h.symbols.join(", ")], ...(h.stream.error ? [["Last error", h.stream.error] as [string, string]] : []), ...(h.note ? [["To do", h.note] as [string, string]] : [])],
+});
+
 type Venue = { id: string; name: string; logo: string; ac: string; sub: string; status: "ok" | "warn" | "off"; label: string; metrics: [string, string][]; rows: [string, string][] };
 
 /** Round trip from this browser to a venue's public endpoint, measured on load. */
@@ -36,7 +50,15 @@ function VenueCard({ v }: { v: Venue }) {
 export default function IntegrationsPage() {
   const [delta, setDelta] = useState<DeltaStatus | null>(null);
   const [deltaErr, setDeltaErr] = useState<string | null>(null);
+  const [host, setHost] = useState<Host | null>(null);
   useEffect(() => { staffGet<DeltaStatus>("/api/delta").then(setDelta, (e: Error) => setDeltaErr(e.message)); }, []);
+  useEffect(() => {
+    const load = () => staffGet<Host>("/api/engine/status").then(setHost, (e: Error) => setHost({ connected: false, reason: e.message }));
+    load();
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, []);
+  const hv = (id: string) => (host?.connected ? host.venues?.find((v) => v.id === id) : undefined);
   const deltaMkt = useApi<{ at: number }>("/api/market/delta?symbol=BTCUSD", 30_000);
   const rtt = useRtt("/api/market/delta?symbol=BTCUSD");
   const skew = deltaMkt.data ? Math.round(Date.now() - deltaMkt.data.at) : null;
@@ -66,10 +88,22 @@ export default function IntegrationsPage() {
     },
   ];
 
+  const shown = venues.map((v) => { const h = hv(v.id); return h ? { ...v, ...fromHost(h) } : v; });
+
   return (
     <>
       <div className="page-h"><div><h1>Integrations</h1><p>Connections, keys and clock sync for each venue. Trading keys live on the engine host, never in the browser or Vercel.</p></div></div>
-      <section className="g12">{venues.map((v) => <VenueCard key={v.id} v={v} />)}</section>
+      <section className="g12">
+        <VenueCard v={{
+          id: "host", name: "Engine host", logo: "⌁", ac: "--accent", sub: "DigitalOcean · Bangalore",
+          status: host?.connected ? "ok" : "off", label: host ? (host.connected ? "Online" : "Not connected") : "Checking",
+          metrics: [["Static IP", host?.publicIp ?? "—"], ["Uptime", host?.uptimeSec ? `${Math.floor(host.uptimeSec / 3600)}h ${Math.floor((host.uptimeSec % 3600) / 60)}m` : "—"], ["Ticks stored", host?.store?.enabled ? String(host.store.written) : "off"]],
+          rows: host?.connected
+            ? [["Tick store", host.store?.enabled ? (host.store.error ? `error: ${host.store.error}` : `${host.store.buffered} buffered`) : "memory only"], ["Venues", (host.venues ?? []).map((v) => v.id).join(", ")]]
+            : [["Status", host?.reason ?? "…"], ["Set up", "services/engine/README.md"], ["Vercel", "ENGINE_URL and ENGINE_SECRET"]],
+        }} />
+        {shown.map((v) => <VenueCard key={v.id} v={v} />)}
+      </section>
       <IntegrationsCard />
     </>
   );

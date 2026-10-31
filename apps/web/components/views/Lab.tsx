@@ -86,7 +86,7 @@ export default function Lab({ deskId }: { deskId: DeskId }) {
       const notes = [ltf, htf, poi].map((x) => x.note).filter((x): x is string => !!x && x.startsWith("Partial"));
       setStatus(`Replaying ${ltf.candles.length.toLocaleString()} ${def.ltf} bars…`);
       worker.current?.terminate();
-      const w = new Worker(new URL("../../../workers/backtest.worker.ts", import.meta.url), { type: "module" });
+      const w = new Worker(new URL("../../workers/backtest.worker.ts", import.meta.url), { type: "module" });
       worker.current = w;
       w.onmessage = (e: MessageEvent<{ ok: boolean; result?: BacktestResult; error?: string; ms?: number }>) => {
         setStatus(null);
