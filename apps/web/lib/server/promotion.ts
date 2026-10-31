@@ -118,7 +118,7 @@ export async function routeLiveSignals(db: SupabaseClient, chats: Chat[]): Promi
     const name = s.model === "S" ? strategyName(s.meta?.strategy) : modelName(s.model);
     const line = `${s.side === "long" ? "Long" : "Short"} ${Number(s.entry).toFixed(d)} · SL ${Number(s.stop).toFixed(d)}${s.target !== null ? ` · TP ${Number(s.target).toFixed(d)}` : ""}${s.rr ? ` · ${Number(s.rr).toFixed(1)}R` : ""}`;
     if (chats.length) await sendTelegram(db, { text: `🔴 <b>LIVE · ${escapeHtml(s.instrument)} ${escapeHtml(name)}</b>\n${escapeHtml(line)}\nStrategy ${escapeHtml(key)} · promoted on its paper record`, chats, kind: "LIVE", instrument: s.instrument, signalId: s.id, source: "autopilot" });
-    await notify(db, [{ category: "strategy", severity: "success", title: `LIVE signal: ${s.instrument} ${name}`, body: line, instrument: s.instrument, link: "/live", key: `live-sig:${s.id}`, meta: { signal_id: s.id, key } }]);
+    await notify(db, [{ category: "strategy", severity: "success", title: `LIVE signal: ${s.instrument} ${name}`, body: line, instrument: s.instrument, link: "/league", key: `live-sig:${s.id}`, meta: { signal_id: s.id, key } }]);
     await db.from("signals").update({ meta: { ...(s.meta ?? {}), live_routed: new Date().toISOString() } }).eq("id", s.id);
     sent++;
   }

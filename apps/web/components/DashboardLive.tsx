@@ -18,11 +18,11 @@ interface Market {
   id: string; label: string; desk: string; digits: number; open: boolean; status: "live" | "closed" | "stale" | "down";
   feed: string | null; approx: boolean | null; barAgeMin: number | null; error: string | null; price: number | null; priceSource: string | null; quoteAgeSec: number | null;
 }
-interface LiveRow {
+export interface LiveRow {
   id: string; kind: "paper" | "ledger"; instrument: string; side: "long" | "short"; model: string | null; account: string | null;
   entry: number; stop: number; target: number | null; plannedR: number | null; openedAt: string; price: number | null; uR: number | null; uPnl: number | null; digits: number;
 }
-interface Live { at: number; trades: LiveRow[]; tracked: LiveRow[]; pending: unknown[]; totals: { open: number; uPnl: number; uR: number; tracked: number; trackedR: number } }
+export interface Live { at: number; trades: LiveRow[]; tracked: LiveRow[]; pending: unknown[]; totals: { open: number; uPnl: number; uR: number; tracked: number; trackedR: number } }
 
 const STATUS: Record<Market["status"], { tone: "up" | "warn" | "down" | ""; l: string }> = {
   live: { tone: "up", l: "live" }, closed: { tone: "", l: "closed" }, stale: { tone: "warn", l: "stale" }, down: { tone: "down", l: "down" },
@@ -34,7 +34,8 @@ const ago = (iso: string) => {
 };
 const tone = (v: number) => (v > 0 ? "up" : v < 0 ? "down" : "");
 
-function useLive(everyMs = 5_000) {
+/** Open paper and tracked trades with live prices; polls while the tab is visible. */
+export function useOpenTrades(everyMs = 5_000) {
   const [d, setD] = useState<Live | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -72,7 +73,7 @@ export function FeedCards({ runs }: { runs: AutopilotRun[] }) {
           const run = runs.find((r) => r.instrument === m.id);
           const st = STATUS[m.status];
           return (
-            <Link key={m.id} href={`/desk/${m.desk}?i=${encodeURIComponent(m.id)}`} className="card" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 4, textDecoration: "none", color: "inherit" }}>
+            <Link key={m.id} href="/arena/cfd" className="card" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 4, textDecoration: "none", color: "inherit" }}>
               <div className="between">
                 <b style={{ fontWeight: 500, fontSize: 12.5 }}>{m.label}</b>
                 <Chip tone={st.tone} dot>{st.l}</Chip>
@@ -148,7 +149,7 @@ export function TradeCards({ trades, live, error }: { trades: Trade[]; live: Liv
         <h3 style={{ margin: 0, fontSize: 14 }}>Trades</h3>
         <span className="row" style={{ gap: 6 }}>
           {live && live.tracked.length > 0 && <button type="button" className="btn ghost sm" onClick={() => setShowTracked((v) => !v)}>{showTracked ? "Hide" : "Show"} {live.tracked.length} tracked</button>}
-          <Link className="btn ghost sm" href="/bot">Bot log</Link>
+          <Link className="btn ghost sm" href="/edge">Edge Analytics</Link>
         </span>
       </div>
       <ErrorNote error={error} />
@@ -195,7 +196,7 @@ export function TradeCards({ trades, live, error }: { trades: Trade[]; live: Liv
 
 /** The three sections together, sharing one live-trade poll. */
 export default function DashboardLive({ trades, accounts, runs }: { trades: Trade[]; accounts: TradingAccount[]; runs: AutopilotRun[] }) {
-  const { d, error } = useLive();
+  const { d, error } = useOpenTrades();
   return (
     <>
       <FeedCards runs={runs} />

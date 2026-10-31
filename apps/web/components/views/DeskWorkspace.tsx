@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+
 import {
   DESKS, EDGE_RULES, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, WINDOWS_BY_ID, evaluateGate, guardrails, isFxWeekend, isInWindow,
   shiftText, stateFromSetup, tradeWindows, type DeskId, type LiveDeskId, type SessionWindow, type GateInput, type InstrumentId, type ModelId,
@@ -42,17 +42,12 @@ function TriChip({ label, value, auto, onChange }: { label: string; value: Tri; 
   );
 }
 
-export default function DeskPage() {
-  const params = useParams<{ desk: string }>();
-  const deskId: DeskId = (["gold", "btc", "fx", "indices"] as const).find((d) => d === params.desk) ?? "gold";
+/** The analysis and ticket workspace for one desk; the Arena's Trade tab hosts it. */
+export default function DeskWorkspace({ deskId, inst }: { deskId: DeskId; inst: InstrumentId }) {
   // Gold and BTC have derivatives, macro, headlines and the analyst; the forex and index desks run on price and the calendar.
   const ctxDesk: LiveDeskId | null = deskId === "gold" || deskId === "btc" ? deskId : null;
   const desk = DESKS[deskId];
-  const search = useSearchParams();
-  const router = useRouter();
   const me = useMe();
-  const qi = search.get("i") as InstrumentId | null;
-  const inst: InstrumentId = qi && desk.instruments.includes(qi) ? qi : desk.primary;
   const def = INSTRUMENTS[inst];
 
   const [side, setSide] = useState<"long" | "short" | null>(null);
@@ -188,7 +183,6 @@ export default function DeskPage() {
 
       <section className="card" style={{ padding: 12 }}>
         <div className="row" style={{ gap: 12 }}>
-          <Seg label="Instrument" value={inst} onChange={(v) => router.replace(`/desk/${deskId}?i=${encodeURIComponent(v)}`)} options={desk.instruments.map((id) => ({ v: id, l: INSTRUMENTS[id].label }))} />
           <div className="col" style={{ gap: 0 }}>
             <div className="row" style={{ gap: 8 }}>
               <span className="kv" style={{ fontSize: 24 }}>{price !== null ? num(price, def.digits) : "—"}</span>

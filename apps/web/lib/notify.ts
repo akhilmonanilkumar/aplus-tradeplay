@@ -85,4 +85,4 @@ export function shouldAlert(n: Pick<Notification, "category" | "severity" | "ins
 }
 
 export const deskOf = (i: string | null | undefined): string | null =>
-  !i ? null : i.startsWith("XAU") ? "gold" : i.startsWith("BTC") ? "btc" : i === "EURUSD" || i === "USDJPY" ? "fx" : ["NAS100", "SPX500", "NIFTY"].includes(i) ? "indices" : null;
+  !i ? null : i.startsWith("XAU") ? "gold" : i.startsWith("BTC") ? "btc" : i === "EURUSD" || i === "GBPUSD" || i === "USDJPY" ? "fx" : ["NAS100", "SPX500", "NIFTY"].includes(i) ? "indices" : null;

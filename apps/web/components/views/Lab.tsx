@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
 import {
   DEFAULT_STRATEGY, DESKS, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, modelName, tradeWindows, breakdown, breakevenWinRate, skippedImpact, usHighImpactTimes,
   type BacktestResult, type BacktestTrade, type DeskId, type InstrumentId, type StrategyParams,
@@ -46,9 +45,7 @@ function Breakdown({ title, rows }: { title: string; rows: { key: string; stats:
   );
 }
 
-export default function Lab() {
-  const params = useParams<{ desk: string }>();
-  const deskId: DeskId = DESK_IDS.find((d) => d === params.desk) ?? "gold";
+export default function Lab({ deskId }: { deskId: DeskId }) {
   const desk = DESKS[deskId];
   const [inst, setInst] = useState<InstrumentId>(desk.primary);
   const [days, setDays] = useState<(typeof DAYS)[number]["v"]>("30");

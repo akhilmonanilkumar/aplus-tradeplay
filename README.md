@@ -3,7 +3,7 @@
 Private desk for the firm's team: trade gold and bitcoin on one edge, manage own and investor accounts, and show investors how their money grows.
 
 - `packages/engine` — instruments (XAUUSD CFD, XAUUSDT.P, BTCUSD CFD, BTCUSDT.P, BTCUSD spot), setup detector, A+ gate, sessions (NY-anchored, DST-safe), sizing, context analytics (OI regime, funding, basis, DXY, correlations, confluence), walk-forward backtester. `pnpm test`
-- `apps/web` — Next.js app: Dashboard, Gold / BTC desks, Gold / BTC labs, Autopilot, Accounts, Investors, P&L analytics, Telegram alerts, investor portal (`/me`). Market data, news, AI and Telegram run through server routes in `app/api`.
+- `apps/web` — Next.js app (v2 layout, see `docs/v2-platform-plan.md`): Dashboard; four Arenas at `/arena/{cfd,delta,coinswitch,fyers}` (CFD holds the prop challenges, journal, daily bias and discipline); Strategy League (`/league`), Backtest Suite (`/backtest`), Playbook; Edge Analytics (`/edge`), P&L Analytics, Risk; Accounts, Investors, Payouts; Integrations; investor portal (`/me`). Old desk, lab, autopilot and funding-basis URLs redirect to their new homes. Market data, news, AI and Telegram run through server routes in `app/api`.
 - `supabase/migrations` — schema, RLS, audit log.
 
 ## Data sources

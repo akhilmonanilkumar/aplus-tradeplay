@@ -284,6 +284,11 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
     { name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") },
     { name: "Binance EUR/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("EURUSDT") },
   ],
+  GBPUSD: [
+    { name: "OANDA GBP/USD", approx: false, enabled: hasOanda, load: oanda("GBP_USD") },
+    { name: "Yahoo GBP/USD", approx: false, load: yahoo("GBPUSD=X") },
+    { name: "Binance GBP/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("GBPUSDT") },
+  ],
   USDJPY: [
     { name: "OANDA USD/JPY", approx: false, enabled: hasOanda, load: oanda("USD_JPY") },
     { name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") },
@@ -605,6 +610,7 @@ const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   "BTCUSD.SPOT": [coinbaseQuote],
   BTCUSD: [coinbaseQuote],
   EURUSD: [swissquote("EUR", "USD")],
+  GBPUSD: [swissquote("GBP", "USD")],
   USDJPY: [swissquote("USD", "JPY")],
   NAS100: [binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P")],
   SPX500: [binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P")],
