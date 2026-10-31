@@ -283,8 +283,8 @@ button. Telegram, AI provider and data vendors are listed the same way.
 
 ## 6. Visual design direction
 
-* Dark-first "instrument panel": near-black surfaces in layers, one accent per Arena (CFD amber, Delta
-  violet, CoinSwitch cyan, Fyers green), tabular numerals everywhere, 12/13 px data type, 8 px grid,
+* Light and dark themes (system default, toggle in the top bar). Dark-first "instrument panel": near-black surfaces in layers, one accent per Arena (CFD amber, Delta
+  violet, CoinSwitch cyan, Fyers blue; green stays the brand accent), tabular numerals everywhere, 12/13 px data type, 8 px grid,
   hairline dividers instead of boxed cards where density matters.
 * Motion with a purpose only: value-change flashes, live dots, smooth panel resize, 150 ms transitions.
 * Status language used everywhere: dots (live/down/closed), engine states (scanning, armed, in trade,
