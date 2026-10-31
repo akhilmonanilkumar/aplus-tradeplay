@@ -402,4 +402,5 @@ labelled as a proxy and kept out of A+ gate scores. Paid upgrade path stays Data
 |---|---|
 | 1 · Shell, design system, Dashboard, Arena layout, redirects | Done (`claude/v2-platform-build`) |
 | 2 · Engine host, venue adapters, clock sync, tick store, flow views | Code done: `services/engine` (Delta socket + REST fallback, CoinSwitch HFT, Fyers, TimescaleDB, signed API, deploy kit). Arena Order flow / Depth / OI & funding tabs live on Delta data without the host. **Waiting on:** the droplet, its IP whitelisted at each venue, `ENGINE_URL` + `ENGINE_SECRET` in Vercel. |
-| 3 · CFD Arena rules, alerts with cTrader links, position sync | Next |
+| 3 · CFD Arena rules, alerts with cTrader links, position sync | Code done: FundedHive and The5ers rules in the engine (room left, sizing, consistency), alerts per account with cTrader signal links, Taken / Skip from Telegram and the app, read-only cTrader position sync on the engine host. **Waiting on:** migration `20261101100000_cfd_alerts.sql`, `TELEGRAM_WEBHOOK_SECRET`, a cTrader Open API app, account rules set in the Challenge tab. |
+| 4 · Strategy League, Backtest Suite, strategy agent, paper on every venue | Next |

@@ -5,6 +5,7 @@ import { TickStore } from "./store.js";
 import { CoinSwitchVenue } from "./venues/coinswitch.js";
 import { DeltaVenue } from "./venues/delta.js";
 import { FyersVenue } from "./venues/fyers.js";
+import { CTraderSync } from "./venues/ctrader.js";
 
 if (!config.secret) {
   console.error("ENGINE_SECRET is not set; refusing to start without request signing.");
@@ -21,16 +22,18 @@ hub.onTrades((venue, symbol, trades) => store.add(venue, symbol, trades));
 const delta = new DeltaVenue(hub);
 const coinswitch = new CoinSwitchVenue(hub);
 const fyers = new FyersVenue(hub);
+const ctrader = new CTraderSync(config.ctrader);
 
 store.start();
 delta.start();
 coinswitch.start();
 void fyers.start();
-const server = startServer({ hub, store, delta, coinswitch, fyers, startedAt: Date.now() });
+void ctrader.start();
+const server = startServer({ hub, store, delta, coinswitch, fyers, ctrader, startedAt: Date.now() });
 
 const shutdown = async () => {
   console.log("shutting down");
-  delta.stop(); coinswitch.stop(); fyers.stop();
+  delta.stop(); coinswitch.stop(); fyers.stop(); ctrader.stop();
   server.close();
   await store.stop();
   process.exit(0);

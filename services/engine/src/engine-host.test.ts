@@ -126,3 +126,21 @@ describe("MarketHub", () => {
     expect(hub.snapshot("delta", "ETHUSD", { bucketMs: 60_000, tick: 1, bars: 5, depthPct: 0.01 })).toBeNull();
   });
 });
+
+describe("cTrader read-only sync", async () => {
+  const { PT, parsePositions } = await import("./venues/ctrader.js");
+  it("defines no order-placing messages (new order 2106, amend 2109, close 2111)", () => {
+    const types = Object.values(PT) as number[];
+    for (const t of [2106, 2107, 2108, 2109, 2110, 2111]) expect(types).not.toContain(t);
+  });
+  it("parses reconcile positions: volume in hundredths of a unit, money by moneyDigits", () => {
+    const ps = parsePositions({
+      position: [
+        { positionId: 7, tradeData: { symbolId: 41, volume: 6600, tradeSide: 1, openTimestamp: 1_700_000_000_000, comment: "APLUS 12345678 FundedHive" }, price: 4031.9, stopLoss: 4024.4, takeProfit: 4054.4, swap: -120, commission: -330, moneyDigits: 2 },
+        { positionId: 8, tradeData: { symbolId: 99, volume: 100, tradeSide: "SELL" }, price: 1.08 },
+      ],
+    }, new Map([[41, "XAUUSD"]]));
+    expect(ps[0]).toEqual({ id: 7, symbol: "XAUUSD", side: "long", units: 66, entry: 4031.9, sl: 4024.4, tp: 4054.4, swap: -1.2, commission: -3.3, openedAt: 1_700_000_000_000, comment: "APLUS 12345678 FundedHive" });
+    expect(ps[1]).toMatchObject({ symbol: "99", side: "short", units: 1, sl: null, tp: null });
+  });
+});

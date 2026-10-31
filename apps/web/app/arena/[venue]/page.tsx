@@ -10,7 +10,7 @@ import { num } from "@/lib/fmt";
 import { ICONS } from "@/components/Shell";
 import { Card, Empty, Icon } from "@/components/ui";
 import DeskWorkspace from "@/components/views/DeskWorkspace";
-import Challenges from "@/components/views/Challenges";
+import { AlertsTab, ChallengeTab } from "@/components/arena/PropDesk";
 import Journal from "@/components/views/Journal";
 import Bias from "@/components/views/Bias";
 import Discipline from "@/components/views/Discipline";
@@ -38,7 +38,7 @@ const ARENAS: Record<VenueId, { name: string; sub: string; ac: string; mode: str
       { id: "US500", label: "US500", desk: "indices", engine: "SPX500" },
       { id: "NAS100", label: "NAS100", desk: "indices", engine: "NAS100" },
     ],
-    tabs: [{ id: "trade", l: "Trade" }, ...FLOW_TABS, { id: "challenge", l: "Challenge" }, { id: "journal", l: "Journal" }, { id: "bias", l: "Daily bias" }, { id: "discipline", l: "Discipline" }],
+    tabs: [{ id: "trade", l: "Trade" }, { id: "alerts", l: "Alerts" }, ...FLOW_TABS, { id: "challenge", l: "Challenge" }, { id: "journal", l: "Journal" }, { id: "bias", l: "Daily bias" }, { id: "discipline", l: "Discipline" }],
   },
   delta: {
     name: "Delta Arena", sub: "Delta Exchange India · runs promoted strategies on its own", ac: "--delta", mode: "Autonomous",
@@ -184,7 +184,8 @@ export default function ArenaPage() {
       {tab === "flow" && market.flow && <OrderFlowTab key={market.id} src={market.flow} />}
       {tab === "depth" && market.flow && <DepthTab key={market.id} src={market.flow} />}
       {tab === "oi" && market.flow && <OiTab key={market.id} src={market.flow} derivs={market.derivs ?? null} />}
-      {tab === "challenge" && <Challenges />}
+      {tab === "alerts" && <AlertsTab />}
+      {tab === "challenge" && <ChallengeTab />}
       {tab === "journal" && <Journal />}
       {tab === "bias" && <Bias />}
       {tab === "discipline" && <Discipline />}

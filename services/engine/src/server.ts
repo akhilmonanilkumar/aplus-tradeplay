@@ -7,6 +7,7 @@ import type { TickStore } from "./store.js";
 import type { CoinSwitchVenue } from "./venues/coinswitch.js";
 import type { DeltaVenue } from "./venues/delta.js";
 import type { FyersVenue } from "./venues/fyers.js";
+import type { CTraderSync } from "./venues/ctrader.js";
 
 /** Trading endpoints each venue may reach. Anything else is refused. Writes also need the venue's execution switch. */
 export const ALLOW = {
@@ -17,7 +18,7 @@ export const ALLOW = {
 export const allowed = (venue: keyof typeof ALLOW, method: string, path: string, execution: boolean) =>
   ALLOW[venue].some((r) => r.test(path)) && (method === "GET" || execution);
 
-interface Deps { hub: MarketHub; store: TickStore; delta: DeltaVenue; coinswitch: CoinSwitchVenue; fyers: FyersVenue; startedAt: number }
+interface Deps { hub: MarketHub; store: TickStore; delta: DeltaVenue; coinswitch: CoinSwitchVenue; fyers: FyersVenue; ctrader: CTraderSync; startedAt: number }
 
 const send = (res: ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -68,6 +69,14 @@ export function startServer(d: Deps) {
         if (r.method !== "GET" && !d.coinswitch.clock.healthy(d.coinswitch.budgetMs)) return send(res, 503, { error: "CoinSwitch clock out of budget" });
         const out = await d.coinswitch.request(r.method, r.path, r.params ?? {}, r.body ?? null);
         return send(res, 200, out.env);
+      }
+      if (method === "GET" && url.pathname === "/ctrader") return send(res, 200, d.ctrader.snapshot());
+      if (method === "GET" && url.pathname === "/ctrader/auth-url") return send(res, 200, { url: d.ctrader.authUrl() });
+      if (method === "POST" && url.pathname === "/ctrader/code") {
+        const { code } = JSON.parse(raw) as { code?: string };
+        if (!code) return send(res, 400, { error: "code missing" });
+        await d.ctrader.exchangeCode(code);
+        return send(res, 200, { ok: true });
       }
       if (method === "GET" && url.pathname === "/fyers/login-url") return send(res, 200, { url: d.fyers.loginUrl() });
       if (method === "POST" && url.pathname === "/fyers/token") {

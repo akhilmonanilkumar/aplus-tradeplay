@@ -46,6 +46,13 @@ export const config = {
     symbols: list("FYERS_SYMBOLS", "NSE:NIFTY50-INDEX,NSE:NIFTYBANK-INDEX,BSE:SENSEX-INDEX"),
     execution: on("FYERS_EXECUTION"),
   },
+
+  ctrader: {
+    clientId: env("CTRADER_CLIENT_ID"),
+    clientSecret: env("CTRADER_CLIENT_SECRET"),
+    redirectUri: env("CTRADER_REDIRECT_URI"),
+    tokenFile: env("CTRADER_TOKEN_FILE", "/data/ctrader-token.json"),
+  },
 } as const;
 
 /** Clock budgets per venue, ms: |offset| and p95 round trip must stay inside to sign orders. */

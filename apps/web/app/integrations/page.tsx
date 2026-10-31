@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
-import { staffGet } from "@/lib/market";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { staffGet, staffPost } from "@/lib/market";
+import { supabase } from "@/lib/supabase";
 import { useApi } from "@/lib/useApi";
 import { Card, Chip } from "@/components/ui";
 import IntegrationsCard from "@/components/IntegrationsCard";
@@ -21,7 +22,7 @@ const fromHost = (h: HostVenue): Pick<Venue, "metrics" | "rows" | "status" | "la
   rows: [["Last message", ago(h.stream.lastMessageAt)], ["Clock budget", `±${h.clock.budgetMs} ms`], ["Execution switch", h.execution ? "on" : "off"], ["Markets", h.symbols.join(", ")], ...(h.stream.error ? [["Last error", h.stream.error] as [string, string]] : []), ...(h.note ? [["To do", h.note] as [string, string]] : [])],
 });
 
-type Venue = { id: string; name: string; logo: string; ac: string; sub: string; status: "ok" | "warn" | "off"; label: string; metrics: [string, string][]; rows: [string, string][] };
+type Venue = { id: string; name: string; logo: string; ac: string; sub: string; status: "ok" | "warn" | "off"; label: string; metrics: [string, string][]; rows: [string, string][]; action?: ReactNode };
 
 /** Round trip from this browser to a venue's public endpoint, measured on load. */
 function useRtt(path: string) {
@@ -43,6 +44,7 @@ function VenueCard({ v }: { v: Venue }) {
       </div>
       <div className="vm">{v.metrics.map(([k, x]) => <div key={k}><small>{k}</small><b>{x}</b></div>)}</div>
       {v.rows.map(([k, x]) => <div key={k} className="between" style={{ padding: "8px 0", borderTop: "1px solid var(--line)", fontSize: 13 }}><span className="muted">{k}</span><span>{x}</span></div>)}
+      {v.action && <div className="row" style={{ marginTop: 12 }}>{v.action}</div>}
     </Card>
   );
 }
@@ -58,6 +60,25 @@ export default function IntegrationsPage() {
     const t = setInterval(load, 15_000);
     return () => clearInterval(t);
   }, []);
+  const [ct, setCt] = useState<{ connected: boolean; configured?: boolean; signedIn?: boolean; error?: string | null; accounts?: { name: string | null; positions: unknown[]; syncedAt: number | null }[]; reason?: string } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => { staffGet<typeof ct>("/api/cfd/positions").then(setCt, () => setCt(null)); }, []);
+  // cTrader sends the trader back here with ?code= after the read-only sign-in.
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("code");
+    if (!code) return;
+    window.history.replaceState(null, "", "/integrations");
+    staffPost("/api/cfd/ctrader", { code }).then(() => setNote("cTrader connected. Positions appear within a minute."), (e: Error) => setNote(`cTrader sign-in failed: ${e.message}`));
+  }, []);
+  const connectCTrader = async () => {
+    try { const r = await staffGet<{ url: string }>("/api/cfd/ctrader"); window.location.href = r.url; } catch (e) { setNote((e as Error).message); }
+  };
+  const registerWebhook = async () => {
+    const { data } = await supabase.auth.getSession();
+    const r = await fetch("/api/telegram/webhook", { method: "PUT", headers: { authorization: `Bearer ${data.session?.access_token ?? ""}` } });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; url?: string; error?: string; description?: string };
+    setNote(j.ok ? `Telegram buttons connected to ${j.url}` : `Telegram webhook: ${j.error ?? j.description ?? r.status}`);
+  };
   const hv = (id: string) => (host?.connected ? host.venues?.find((v) => v.id === id) : undefined);
   const deltaMkt = useApi<{ at: number }>("/api/market/delta?symbol=BTCUSD", 30_000);
   const rtt = useRtt("/api/market/delta?symbol=BTCUSD");
@@ -82,9 +103,17 @@ export default function IntegrationsPage() {
       rows: [["Static IP (SEBI)", "register the engine host's IP"], ["Session token", "daily login"], ["Refresh token", "15 days with PIN"], ["Mode", "paper"]],
     },
     {
-      id: "ctrader", name: "cTrader · prop accounts", logo: "cT", ac: "--cfd", sub: "FundedHive · The5ers", status: "warn", label: "Alerts only",
-      metrics: [["Accounts", "2"], ["Orders from app", "never"], ["Sync", "—"]],
-      rows: [["Telegram alerts", "carry cTrader signal links"], ["Position sync", "read-only, once Open API is linked"], ["Prices", "cTrader demo feed (to connect)"]],
+      id: "ctrader", name: "cTrader · prop accounts", logo: "cT", ac: "--cfd", sub: "FundedHive · The5ers",
+      status: ct?.signedIn ? "ok" : "warn", label: ct?.signedIn ? "Syncing" : "Alerts only",
+      metrics: [["Accounts", String(ct?.accounts?.length ?? "—")], ["Open positions", String((ct?.accounts ?? []).reduce((n, a) => n + a.positions.length, 0))], ["Orders from app", "never"]],
+      rows: [["Telegram alerts", "cTrader signal links per account"], ["Position sync", !ct?.connected ? "needs the engine host" : !ct.configured ? "set CTRADER_CLIENT_ID / SECRET on the host" : ct.signedIn ? "read-only, every 30 s" : "sign in below"], ...(ct?.error ? [["Last error", ct.error] as [string, string]] : [])],
+      action: ct?.connected && ct.configured ? <button className="btn sm" onClick={connectCTrader}>{ct.signedIn ? "Reconnect cTrader" : "Connect cTrader (read-only)"}</button> : undefined,
+    },
+    {
+      id: "telegram", name: "Telegram", logo: "T", ac: "--info", sub: "Alerts with cTrader links and Taken / Skip", status: "warn", label: "Check buttons",
+      metrics: [["Alerts", "CFD Arena"], ["Buttons", "Taken · Skip"], ["Chats", "Settings"]],
+      rows: [["Webhook secret", "TELEGRAM_WEBHOOK_SECRET in Vercel"], ["Who can tap", "only the configured chats"]],
+      action: <button className="btn sm" onClick={registerWebhook}>Connect Telegram buttons</button>,
     },
   ];
 
@@ -93,6 +122,7 @@ export default function IntegrationsPage() {
   return (
     <>
       <div className="page-h"><div><h1>Integrations</h1><p>Connections, keys and clock sync for each venue. Trading keys live on the engine host, never in the browser or Vercel.</p></div></div>
+      {note && <div className={`banner ${/fail|error|webhook: /i.test(note) ? "down" : "up"}`}>{note}</div>}
       <section className="g12">
         <VenueCard v={{
           id: "host", name: "Engine host", logo: "⌁", ac: "--accent", sub: "DigitalOcean · Bangalore",
