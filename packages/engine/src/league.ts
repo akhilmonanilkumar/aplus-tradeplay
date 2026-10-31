@@ -8,6 +8,8 @@ export type Venue = 'cfd' | 'delta' | 'coinswitch' | 'fyers';
 export type Stage = 'paper' | 'candidate' | 'live_small' | 'live' | 'benched' | 'retired';
 export const STAGES: Stage[] = ['paper', 'candidate', 'live_small', 'live', 'benched', 'retired'];
 export const isLiveStage = (s: Stage) => s === 'live_small' || s === 'live';
+/** Share of the policy's risk per trade a stage trades at: a quarter until a strategy proves itself live. */
+export const stageRiskScale = (s: Stage) => (s === 'live' ? 1 : s === 'live_small' ? 0.25 : 0);
 
 /** Where a market's strategies can run, and the round-trip cost each venue adds beyond the engine's own. */
 export function venuesFor(instrument: string): Venue[] {

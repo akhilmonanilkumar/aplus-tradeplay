@@ -51,7 +51,7 @@ export default function LiveExecution() {
   const load = useCallback(async () => {
     const [s, o] = await Promise.all([
       supabase.from("live_exec_state").select("*").eq("id", 1).maybeSingle(),
-      supabase.from("live_orders").select("*").order("created_at", { ascending: false }).limit(30),
+      supabase.from("live_orders").select("*").eq("venue", "delta").order("created_at", { ascending: false }).limit(30),
     ]);
     if (s.error) { setMissing(true); return; }
     const state = s.data as State;

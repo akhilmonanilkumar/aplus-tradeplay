@@ -10,6 +10,7 @@ import { chatsFrom, escapeHtml, sendTelegram, type Chat } from "@/lib/server/tel
 import { dispatchTelegram, headsUps, pruneNotifications } from "@/lib/server/notify";
 import { evaluateCandidates, routeLiveSignals } from "@/lib/server/promotion";
 import { liveExecTick } from "@/lib/server/liveExec";
+import { venueExecTick } from "@/lib/server/venueExec";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 import { modelLedger, storeReleases } from "@/lib/server/ledger";
 import { basisTick } from "@/lib/server/basis";
@@ -270,6 +271,16 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
     if (live) out.push({ instrument: "DELTA", state: "LIVE", action: live });
   } catch (err) {
     out.push({ instrument: "DELTA", state: "ERROR", action: (err as Error).message });
+  }
+  // CoinSwitch and Fyers: the same gate, shadow orders until live sending is verified.
+  try {
+    const shadow = await within(venueExecTick(db, {
+      killSwitch: !!settings?.kill_switch, calendar,
+      newsBlocked: (events, id, now, minutes) => newsBlocked(events, INSTRUMENTS[id].desk, now, minutes),
+    }), 25_000, "venue execution");
+    if (shadow) out.push({ instrument: "VENUES", state: "SHADOW", action: shadow });
+  } catch (err) {
+    out.push({ instrument: "VENUES", state: "ERROR", action: (err as Error).message });
   }
   try {
     const sent = await within(dispatchTelegram(db, chats, integ?.notify), 20_000, "telegram");

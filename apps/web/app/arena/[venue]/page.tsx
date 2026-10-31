@@ -15,6 +15,7 @@ import Journal from "@/components/views/Journal";
 import Bias from "@/components/views/Bias";
 import Discipline from "@/components/views/Discipline";
 import LiveExecution from "@/components/LiveExecution";
+import VenueExecution from "@/components/arena/VenueExecution";
 import { DepthTab, OiTab, OrderFlowTab, type FlowSource } from "@/components/arena/FlowTabs";
 
 type VenueId = "cfd" | "delta" | "coinswitch" | "fyers";
@@ -58,7 +59,7 @@ const ARENAS: Record<VenueId, { name: string; sub: string; ac: string; mode: str
       { id: "ETHUSDT", label: "ETHUSDT perp", desk: "btc", engine: null, flow: { venue: "coinswitch", symbol: "ETHUSDT", tick: 1, digits: 2 } },
       { id: "XAG", label: "Silver perp", desk: "gold", engine: null },
     ],
-    tabs: [{ id: "trade", l: "Trade" }, ...FLOW_TABS, { id: "connect", l: "Connection" }],
+    tabs: [{ id: "trade", l: "Trade" }, ...FLOW_TABS, { id: "execution", l: "Execution" }, { id: "connect", l: "Connection" }],
   },
   fyers: {
     name: "Fyers Arena", sub: "NSE and BSE derivatives · runs promoted strategies on its own", ac: "--fyers", mode: "Paper",
@@ -67,7 +68,7 @@ const ARENAS: Record<VenueId, { name: string; sub: string; ac: string; mode: str
       { id: "BANKNIFTY", label: "BANKNIFTY", desk: "indices", engine: null },
       { id: "SENSEX", label: "SENSEX", desk: "indices", engine: null },
     ],
-    tabs: [{ id: "trade", l: "Trade" }, { id: "depth", l: "Depth" }, { id: "connect", l: "Connection" }],
+    tabs: [{ id: "trade", l: "Trade" }, { id: "depth", l: "Depth" }, { id: "execution", l: "Execution" }, { id: "connect", l: "Connection" }],
   },
 };
 
@@ -189,7 +190,8 @@ export default function ArenaPage() {
       {tab === "journal" && <Journal />}
       {tab === "bias" && <Bias />}
       {tab === "discipline" && <Discipline />}
-      {tab === "execution" && <LiveExecution />}
+      {tab === "execution" && venue === "delta" && <LiveExecution />}
+      {tab === "execution" && (venue === "coinswitch" || venue === "fyers") && <VenueExecution venue={venue} />}
       {tab === "connect" && (venue === "coinswitch" || venue === "fyers") && <Connect venue={venue} />}
     </div>
   );

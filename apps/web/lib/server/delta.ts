@@ -40,25 +40,30 @@ export function deltaSignature(secret: string, method: string, timestamp: string
   return createHmac("sha256", secret).update(method + timestamp + path + query + body).digest("hex");
 }
 
+/** The fixed-IP signer: the old relay, or the engine host that replaced it. */
+const relayUrl = () => process.env.DELTA_RELAY_URL?.trim() || process.env.ENGINE_URL?.trim() || "";
+const relaySecret = () => (process.env.DELTA_RELAY_URL?.trim() ? process.env.DELTA_RELAY_SECRET : process.env.ENGINE_SECRET)?.trim() ?? "";
+
 /**
- * Signed request to the trading API of the configured environment. With DELTA_RELAY_URL set, the request
+ * Signed request to the trading API of the configured environment. With DELTA_RELAY_URL set (or, failing
+ * that, ENGINE_URL: the engine host accepts the same relay requests and signs with the Delta clock), the request
  * goes through the fixed-IP relay (services/delta-relay), which holds the keys and signs it; the app
  * authenticates to the relay with DELTA_RELAY_SECRET. Without it, the app signs and calls Delta directly.
  */
 export async function deltaPrivate<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, opts: { query?: Record<string, string | number>; body?: unknown; env?: DeltaEnv } = {}): Promise<T> {
-  const relay = process.env.DELTA_RELAY_URL?.trim();
+  const relay = relayUrl();
   if (!relay) return deltaDirect<T>(method, path, opts);
   const env = opts.env ?? deltaEnv();
   const payload = JSON.stringify({ env, method, path, query: opts.query ?? {}, body: opts.body ?? null });
   const ts = String(Date.now());
-  const sig = createHmac("sha256", process.env.DELTA_RELAY_SECRET ?? "").update(ts + payload).digest("hex");
+  const sig = createHmac("sha256", relaySecret()).update(ts + payload).digest("hex");
   const res = await fetch(`${relay.replace(/\/$/, "")}/delta`, { method: "POST", cache: "no-store", body: payload, headers: { "content-type": "application/json", "x-relay-ts": ts, "x-relay-sig": sig } });
   const j = (await res.json().catch(() => ({ success: false, error: `relay HTTP ${res.status}` }))) as Envelope<T>;
   if (!res.ok || !j.success) throw new Error(`delta ${method} ${path} (relay): ${typeof j.error === "string" ? j.error : JSON.stringify(j.error ?? `HTTP ${res.status}`)}`);
   return j.result;
 }
 
-export const deltaKeysAvailable = (env: DeltaEnv = deltaEnv()) => deltaConfigured(env) || !!process.env.DELTA_RELAY_URL?.trim();
+export const deltaKeysAvailable = (env: DeltaEnv = deltaEnv()) => deltaConfigured(env) || !!relayUrl();
 
 async function deltaDirect<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, opts: { query?: Record<string, string | number>; body?: unknown; env?: DeltaEnv }): Promise<T> {
   const env = opts.env ?? deltaEnv();
