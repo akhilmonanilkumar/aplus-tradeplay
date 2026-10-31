@@ -8,7 +8,7 @@ import { matchesOwner, ownerOptions } from "@/lib/accounts";
 import { equitySeries, istDay, todayIst } from "@/lib/derive";
 import type { CalEvent } from "@/lib/server/news";
 import type { Investor, TelegramAlert, Trade, TradingAccount } from "@/lib/types";
-import type { CandidateStats } from "@/lib/promotion";
+import { modelName, strategyName, type LeagueStats } from "@aplus/engine";
 import { money, num, pct, timeShort } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Icon } from "@/components/ui";
 import { ICONS, sessionName, useMe } from "@/components/Shell";
@@ -24,7 +24,7 @@ const ARENAS: { id: ArenaId; name: string; ac: string }[] = [
 const tone = (v: number) => (v > 0 ? "up" : v < 0 ? "down" : "");
 const signedMoney = (v: number, ccy = "USD") => `${v > 0 ? "+" : ""}${money(v, ccy, 0)}`;
 
-type Candidate = { key: string; instrument: string; model: string; strategy: string | null; status: "paper" | "live" | "benched"; stats: Partial<CandidateStats> };
+type Candidate = { key: string; instrument: string; model: string; strategy: string | null; venue: string | null; stage: string; status: "paper" | "live" | "benched"; stats: { paper?: Partial<LeagueStats> } | null };
 type Signal = { id: string; instrument: string; side: string | null; created_at: string };
 
 /** Smooth area chart drawn to scale, one series, three faint gridlines. */
@@ -69,7 +69,7 @@ export default function Dashboard() {
   const investors = useRows<Investor>({ table: "investors", select: "id,name,stage,fee_rate", order: "name", ascending: true });
   const trades = useRows<Trade>({ table: "trades", order: "opened_at", limit: 5000 });
   const alerts = useRows<TelegramAlert>({ table: "telegram_alerts", order: "at", limit: 20 });
-  const cands = useRows<Candidate>({ table: "strategy_candidates", order: "updated_at" });
+  const cands = useRows<Candidate>({ table: "strategy_candidates", select: "key,instrument,model,strategy,venue,stage,status,stats", notNull: "venue", order: "updated_at" });
   const armed = useRows<Signal>({ table: "signals", select: "id,instrument,side,created_at", eq: ["state", "ARMED"], order: "created_at", limit: 10 });
   const cal = useApi<{ items: CalEvent[] }>("/api/calendar", 1_800_000);
   const open = useOpenTrades();
@@ -105,7 +105,7 @@ export default function Dashboard() {
   const recentArmed = (armed.rows ?? []).filter((x) => Date.parse(x.created_at) > now - 6 * 3_600_000);
   const nextHigh = (cal.data?.items ?? []).find((e) => e.impact === "high" && e.at > now - 15 * 60_000 && e.at < now + 24 * 3_600_000);
   const failed = (alerts.rows ?? []).filter((a) => a.status === "failed" && Date.parse(a.at) > now - 24 * 3_600_000);
-  const benched = (cands.rows ?? []).filter((c) => c.status === "benched").slice(0, 1);
+  const benched = (cands.rows ?? []).filter((c) => c.stage === "benched").slice(0, 1);
   const attention: { c: string; i: string; t: string; s: string; b: string; h: string }[] = [
     ...(me.settings?.kill_switch ? [{ c: "--down", i: ICONS.power, t: "Kill switch is on", s: "No orders go to any account", b: "Review", h: "/risk" }] : []),
     ...recentArmed.map((x) => ({ c: "--accent", i: ICONS.cfd, t: `${x.instrument} ${x.side ?? ""} is armed`.trim(), s: `Armed ${timeShort(Date.parse(x.created_at), "Asia/Kolkata")} IST`, b: "Open", h: "/arena/cfd" })),
@@ -121,12 +121,12 @@ export default function Dashboard() {
     const td = sum(closed(tr, (d) => d === today));
     const series = Array.from({ length: 30 }, (_, i) => istDay(now - (29 - i) * 86_400_000)).map((d) => sum(closed(tr, (x) => x === d))).reduce<number[]>((acc, v) => [...acc, (acc.at(-1) ?? 0) + v], []);
     const ccy = accs[0]?.currency ?? "USD";
-    const liveC = (cands.rows ?? []).filter((c) => c.status === "live").length;
+    const liveC = (cands.rows ?? []).filter((c) => c.venue === ar.id && (c.stage === "live" || c.stage === "live_small")).length;
     return { ...ar, accs, td, series, ccy, open: tr.filter((t) => t.exit === null).length, liveC };
   });
 
   const props = all.filter((a) => a.type === "eval" || a.firm_rules?.profit_target_pct);
-  const league = [...(cands.rows ?? [])].filter((c) => c.status !== "benched").sort((a, b) => (b.stats.expectancy ?? -9) - (a.stats.expectancy ?? -9)).slice(0, 5);
+  const league = [...(cands.rows ?? [])].filter((c) => c.stage !== "benched" && c.stage !== "retired" && (c.stats?.paper?.n ?? 0) > 0).sort((a, b) => (b.stats?.paper?.score ?? -9) - (a.stats?.paper?.score ?? -9)).slice(0, 5);
   const events = (cal.data?.items ?? []).filter((e) => e.impact !== "low" && e.at > now - 30 * 60_000).slice(0, 6);
   const liveRows = open.d ? open.d.trades : [];
 
@@ -227,9 +227,9 @@ export default function Dashboard() {
             <div className="tbl-w"><table className="tbl"><tbody>
               {league.map((c) => (
                 <tr key={c.key}>
-                  <td><b style={{ fontWeight: 500 }}>{c.strategy ?? `Model ${c.model}`}</b><div className="faint" style={{ fontSize: 12 }}>{c.instrument} · {c.stats.n ?? 0} trades</div></td>
-                  <td className={`r mono ${tone(c.stats.expectancy ?? 0)}`}>{c.stats.expectancy === undefined ? "—" : `${c.stats.expectancy >= 0 ? "+" : ""}${num(c.stats.expectancy, 2)}R`}</td>
-                  <td className="r"><Chip tone={c.status === "live" ? "up" : "info"}>{c.status === "live" ? "Live" : "Paper"}</Chip></td>
+                  <td><b style={{ fontWeight: 500 }}>{c.model === "S" ? strategyName(c.strategy) : modelName(c.model)}</b><div className="faint" style={{ fontSize: 12 }}>{c.instrument} · {c.venue} · {c.stats?.paper?.n ?? 0} trades</div></td>
+                  <td className={`r mono ${tone(c.stats?.paper?.expectancy ?? 0)}`}>{c.stats?.paper?.expectancy === undefined ? "—" : `${c.stats.paper.expectancy >= 0 ? "+" : ""}${num(c.stats.paper.expectancy, 2)}R`}</td>
+                  <td className="r"><Chip tone={c.stage.startsWith("live") ? "up" : c.stage === "candidate" ? "acc" : "info"}>{c.stage === "live_small" ? "Live · small" : c.stage === "live" ? "Live" : c.stage === "candidate" ? "Candidate" : "Paper"}</Chip></td>
                 </tr>
               ))}
             </tbody></table></div>

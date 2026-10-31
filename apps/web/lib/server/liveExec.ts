@@ -1,7 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { modelName, strategyName, type InstrumentId } from "@aplus/engine";
-import { candidateKey } from "@/lib/promotion";
+import { modelName, strategyName, venueKey, type InstrumentId } from "@aplus/engine";
 import { DELTA_SYMBOL, planLiveOrder, policyFrom, type LivePolicy, type ProductSpec } from "@/lib/liveRisk";
 import { cached } from "@/lib/server/http";
 import { deltaKeysAvailable, deltaPrivate, deltaPublic, type DeltaEnv, type DeltaProduct, type DeltaTicker } from "@/lib/server/delta";
@@ -181,12 +180,13 @@ export async function liveExecTick(db: SupabaseClient, ctx: { killSwitch: boolea
   await db.from("live_exec_state").update({ peak_equity: peak, day_date: today, day_start_equity: dayStart, updated_at: new Date().toISOString() }).eq("id", 1);
 
   // 2) New signals of promoted strategies with execution on.
-  const live = await db.from("strategy_candidates").select("key, live_since, execute").eq("status", "live").eq("execute", true);
+  // Delta strategies the League has promoted (venue-scoped keys: delta/<instrument>:<model>).
+  const live = await db.from("strategy_candidates").select("key, live_since, execute").eq("venue", "delta").in("stage", ["live_small", "live"]).eq("execute", true);
   const since = new Map(((live.data ?? []) as { key: string; live_since: string | null }[]).map((c) => [c.key, Date.parse(c.live_since ?? "1970-01-01")]));
   if (!since.size) return [st.mode, `equity $${equity.toFixed(2)}`, "no live strategies with execution on", ...notes].join(" · ");
   const sigs = await db.from("signals").select("id, instrument, side, model, entry, stop, target, meta, created_at").gte("created_at", new Date(now - policy.signalTtlMin * 60_000 * 3).toISOString()).order("created_at");
   const candidates = ((sigs.data ?? []) as { id: string; instrument: string; side: "long" | "short"; model: string | null; entry: number; stop: number; target: number | null; meta: { strategy?: string } | null; created_at: string }[])
-    .filter((s) => { const k = candidateKey(s.instrument, s.model, s.meta?.strategy); const t = since.get(k); return t !== undefined && Date.parse(s.created_at) >= t && DELTA_SYMBOL[s.instrument] && s.target !== null; });
+    .filter((s) => { const k = venueKey("delta", s.instrument, s.model, s.meta?.strategy); const t = since.get(k); return t !== undefined && Date.parse(s.created_at) >= t && DELTA_SYMBOL[s.instrument] && s.target !== null; });
   if (!candidates.length) return [st.mode, `equity $${equity.toFixed(2)}`, ...notes].join(" · ");
 
   const existing = await db.from("live_orders").select("client_order_id, symbol, status, risk_usd, pnl, closed_at, created_at").gte("created_at", new Date(now - 3 * 86_400_000).toISOString());
@@ -197,7 +197,7 @@ export async function liveExecTick(db: SupabaseClient, ctx: { killSwitch: boolea
     if (done.has(clientId)) continue;
     const symbol = DELTA_SYMBOL[s.instrument]!;
     const spec = specs.get(symbol);
-    const key = candidateKey(s.instrument, s.model, s.meta?.strategy);
+    const key = venueKey("delta", s.instrument, s.model, s.meta?.strategy);
     const name = s.model === "S" ? strategyName(s.meta?.strategy) : modelName(s.model);
     const counted = ex.filter((x) => x.status !== "rejected" && x.status !== "cancelled" && x.status !== "error" && istDay(Date.parse(x.created_at)) === today);
     const closedToday = ex.filter((x) => x.status === "closed" && x.closed_at && istDay(Date.parse(x.closed_at)) === today);

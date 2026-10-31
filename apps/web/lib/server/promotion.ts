@@ -1,124 +1,110 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { INSTRUMENTS, modelName, strategyName, type InstrumentId } from "@aplus/engine";
-import { candidateKey, demotionReason, promotable, rulesFrom, statsOf, type CandidateStats, type ResolvedTrade } from "@/lib/promotion";
+import {
+  GATES_V2, INSTRUMENTS, isLiveStage, leaguePass, leagueStats, modelName, paperChecks, parseVenueKey, strategyName, venueKey, venueNetR, venuesFor,
+  type Entry, type InstrumentId, type LeagueTrade, type Stage, type Venue,
+} from "@aplus/engine";
+import { rulesFrom } from "@/lib/promotion";
 import { notify } from "@/lib/server/notify";
 import { escapeHtml, sendTelegram, type Chat } from "@/lib/server/telegram";
 
 /**
- * Paper never stops: every setup the ledger logs is resolved on candles, so each candidate (market ×
- * entry model, or session strategy) keeps a running record. Each pass this module re-scores the
- * candidates on their recent window, promotes the ones that clear the rules into the live set, benches
- * live ones whose record decays, swaps a clearly better waiting candidate in for the weakest live one,
- * and routes new signals of live strategies to the live alert chats.
+ * Strategy League v2. Paper never stops: every setup the ledger logs is resolved on candles, and each
+ * one counts for every venue that could trade its market, with that venue's costs. Each pass re-scores
+ * every venue × strategy since the League's restart, applies the gates (engine league.ts), and routes new
+ * signals of live strategies to the live chats.
  */
 
-interface Row { key: string; status: "paper" | "live" | "benched"; pinned: boolean; route_alerts: boolean; live_since: string | null; benched_at: string | null; stats: { window?: CandidateStats } }
-type Sig = { id: string; instrument: string; model: string | null; meta: { strategy?: string; live_routed?: string } | null; created_at: string; closed_at: string | null; outcome: string | null; result_r: number | null; net_r: number | null };
+interface Row { key: string; venue: Venue | null; stage: Stage; stage_since: string; pinned: boolean; route_alerts: boolean; live_since: string | null; backtest: { trades: number; profitFactor: number | null; maxDrawdownR?: number | null } | null }
+type Sig = { id: string; instrument: string; model: string | null; entry: number; stop: number; meta: { strategy?: string; live_routed?: string } | null; created_at: string; closed_at: string | null; outcome: string | null; net_r: number | null };
 
-const DAY = 86_400_000;
-const resolved = (s: Sig): ResolvedTrade | null =>
-  (s.outcome === "win" || s.outcome === "loss") && s.net_r !== null ? { at: Date.parse(s.closed_at ?? s.created_at), netR: Number(s.net_r), grossR: Number(s.result_r ?? s.net_r) } : null;
-const split = (key: string) => { const [instrument, model, strategy] = key.split(":"); return { instrument: instrument!, model: model!, strategy: strategy ?? null }; };
+/** The legacy status column, kept for the pages and the Delta executor that read it. */
+const statusOf = (s: Stage) => (isLiveStage(s) ? "live" : s === "benched" || s === "retired" ? "benched" : "paper");
 
-async function transition(db: SupabaseClient, key: string, from: string, to: "paper" | "live" | "benched", reason: string, stats: unknown) {
-  const now = new Date().toISOString();
-  await db.from("strategy_candidates").update({
-    status: to, status_reason: reason, updated_at: now,
-    ...(to === "live" ? { live_since: now, benched_at: null } : to === "benched" ? { benched_at: now } : {}),
-  }).eq("key", key);
-  await db.from("candidate_events").insert({ key, from_status: from, to_status: to, reason, stats });
+export async function leagueResetAt(db: SupabaseClient): Promise<number> {
+  const s = await db.from("app_settings").select("integrations").eq("id", 1).maybeSingle();
+  const at = (s.data?.integrations as { league?: { reset_at?: string } } | null)?.league?.reset_at;
+  return at ? Date.parse(at) : 0;
 }
 
-/** Re-score every candidate and apply the promotion rules. Returns a one-line summary. */
+/** Every venue × strategy record since the restart. */
+export async function leagueRecords(db: SupabaseClient) {
+  const resetAt = await leagueResetAt(db);
+  const [sigRes, rowRes] = await Promise.all([
+    db.from("signals").select("id, instrument, model, entry, stop, meta, created_at, closed_at, outcome, net_r").in("outcome", ["win", "loss"]).gte("created_at", new Date(resetAt).toISOString()).order("closed_at", { ascending: true }).limit(20000),
+    db.from("strategy_candidates").select("key, venue, stage, stage_since, pinned, route_alerts, live_since, backtest").neq("stage", "retired"),
+  ]);
+  if (rowRes.error) throw new Error(rowRes.error.message);
+  const rows = new Map(((rowRes.data ?? []) as Row[]).filter((r) => parseVenueKey(r.key)).map((r) => [r.key, r]));
+  const trades = new Map<string, LeagueTrade[]>();
+  for (const s of (sigRes.data ?? []) as Sig[]) {
+    if (s.net_r === null) continue;
+    for (const v of venuesFor(s.instrument)) {
+      const k = venueKey(v, s.instrument, s.model, s.meta?.strategy);
+      trades.set(k, [...(trades.get(k) ?? []), { at: Date.parse(s.closed_at ?? s.created_at), netR: venueNetR(Number(s.net_r), Number(s.entry), Number(s.stop), v) }]);
+    }
+  }
+  return { resetAt, rows, trades };
+}
+
+/** Re-score every candidate and apply the League. Returns a one-line summary. */
 export async function evaluateCandidates(db: SupabaseClient, rulesRaw: unknown): Promise<string> {
   const r = rulesFrom(rulesRaw);
   const now = Date.now();
-  const [sigRes, rowRes] = await Promise.all([
-    db.from("signals").select("id, instrument, model, meta, created_at, closed_at, outcome, result_r, net_r").in("outcome", ["win", "loss"]).order("closed_at", { ascending: true }).limit(20000),
-    db.from("strategy_candidates").select("key, status, pinned, route_alerts, live_since, benched_at, stats"),
-  ]);
-  if (rowRes.error) throw new Error(rowRes.error.message);
-  const rows = new Map(((rowRes.data ?? []) as Row[]).map((x) => [x.key, x]));
-  const byKey = new Map<string, ResolvedTrade[]>();
-  for (const s of (sigRes.data ?? []) as Sig[]) {
-    const t = resolved(s);
-    if (!t) continue;
-    const k = candidateKey(s.instrument, s.model, s.meta?.strategy);
-    byKey.set(k, [...(byKey.get(k) ?? []), t]);
-  }
-
-  // Fresh stats for every candidate seen so far.
-  const scored = [...new Set([...byKey.keys(), ...rows.keys()])].map((key) => {
-    const all = byKey.get(key) ?? [];
+  const { rows, trades } = await leagueRecords(db);
+  const g = GATES_V2;
+  const entries: Entry[] = [...new Set([...trades.keys(), ...rows.keys()])].map((key) => {
+    const p = parseVenueKey(key)!;
     const row = rows.get(key);
-    const window = statsOf(all.filter((t) => t.at >= now - r.windowDays * DAY));
-    const recent = statsOf(all.slice(-r.demoteLastN));
+    const all = trades.get(key) ?? [];
     const liveSince = row?.live_since ? Date.parse(row.live_since) : null;
-    const live = statsOf(liveSince ? all.filter((t) => t.at >= liveSince) : []);
-    return { key, row, stats: { window, recent, live, allTime: statsOf(all), ready: promotable(window, r) } };
+    return {
+      key, venue: p.venue, instrument: p.instrument, stage: row?.stage ?? "paper", pinned: row?.pinned ?? false, stageSince: row ? Date.parse(row.stage_since) : now,
+      paper: leagueStats(all), recent: leagueStats(all.slice(-g.demote.lastN)), sinceLive: leagueStats(liveSince && row && isLiveStage(row.stage) ? all.filter((t) => t.at >= liveSince) : []),
+      backtest: row?.backtest ?? null,
+    };
   });
-  const up = await db.from("strategy_candidates").upsert(scored.map((c) => ({ key: c.key, ...split(c.key), stats: c.stats, updated_at: new Date(now).toISOString() })), { onConflict: "key" });
+  const up = await db.from("strategy_candidates").upsert(entries.map((e) => {
+    const p = parseVenueKey(e.key)!;
+    return {
+      key: e.key, venue: e.venue, instrument: e.instrument, model: p.model, strategy: p.strategy, gate_version: g.version, updated_at: new Date(now).toISOString(),
+      stats: { paper: e.paper, recent: e.recent, sinceLive: e.sinceLive, checks: paperChecks(e.paper, g, e.backtest) },
+      ...(rows.has(e.key) ? {} : { stage: "paper", status: "paper", stage_since: new Date(now).toISOString() }),
+    };
+  }), { onConflict: "key" });
   if (up.error) throw new Error(up.error.message);
-  if (!r.enabled) return `${scored.length} candidates scored · promotion off`;
+  if (!r.enabled) return `${entries.length} venue strategies scored · League moves off`;
 
-  const notes: string[] = [];
-  const status = (c: (typeof scored)[number]) => c.row?.status ?? "paper";
-
-  // 1) Bench live strategies that broke a demotion rule (pinned ones stay).
-  if (r.autoDemote) {
-    for (const c of scored.filter((x) => status(x) === "live" && !x.row?.pinned)) {
-      const why = demotionReason(c.stats.recent, c.stats.live, r);
-      if (why) { await transition(db, c.key, "live", "benched", why, c.stats); notes.push(`benched ${c.key}`); if (c.row) c.row.status = "benched"; }
-    }
+  const moves = leaguePass(entries, g, now).filter((m) => (r.autoPromote || !(m.to === "live_small" || m.to === "live")) && (r.autoDemote || !(isLiveStage(m.from) && m.to === "benched")));
+  for (const m of moves) {
+    const at = new Date(now).toISOString();
+    await db.from("strategy_candidates").update({
+      stage: m.to, stage_since: at, status: statusOf(m.to), status_reason: m.reason, updated_at: at,
+      ...(m.to === "live_small" ? { live_since: at, benched_at: null } : m.to === "benched" ? { benched_at: at } : {}),
+    }).eq("key", m.key);
+    await db.from("candidate_events").insert({ key: m.key, from_status: m.from, to_status: m.to, reason: m.reason, stats: entries.find((e) => e.key === m.key)?.paper ?? {} });
   }
-
-  // 2) Fill free slots with the best ready candidates; benched ones only after the cool-down.
-  const eligible = scored.filter((c) => {
-    if (!c.stats.ready || c.row?.pinned) return false;
-    if (status(c) === "paper") return true;
-    return status(c) === "benched" && (!c.row?.benched_at || now - Date.parse(c.row.benched_at) >= r.cooldownDays * DAY);
-  }).sort((a, b) => b.stats.window.score - a.stats.window.score);
-  let liveCount = scored.filter((c) => status(c) === "live").length;
-  if (r.autoPromote) {
-    while (liveCount < r.maxLive && eligible.length) {
-      const c = eligible.shift()!;
-      await transition(db, c.key, status(c), "live", `window ${c.stats.window.n} trades · ${c.stats.window.expectancy}R/trade · PF ${c.stats.window.profitFactor ?? "∞"} · DD ${c.stats.window.maxDrawdownR}R`, c.stats);
-      notes.push(`promoted ${c.key}`);
-      liveCount++;
-    }
-    // 3) Full: swap the weakest unpinned live strategy for a clearly better ready one (one swap per pass).
-    const best = eligible[0];
-    const weakest = scored.filter((c) => status(c) === "live" && !c.row?.pinned).sort((a, b) => a.stats.window.score - b.stats.window.score)[0];
-    if (best && weakest && liveCount >= r.maxLive && best.stats.window.score > Math.max(0, weakest.stats.window.score) * r.swapMargin && best.stats.window.expectancy > weakest.stats.window.expectancy) {
-      await transition(db, weakest.key, "live", "benched", `replaced by ${best.key} (score ${best.stats.window.score} vs ${weakest.stats.window.score})`, weakest.stats);
-      await transition(db, best.key, status(best), "live", `replaced ${weakest.key} · ${best.stats.window.expectancy}R/trade over ${best.stats.window.n} trades`, best.stats);
-      notes.push(`swapped ${weakest.key} → ${best.key}`);
-    }
-  }
-  const ready = scored.filter((c) => c.stats.ready && status(c) !== "live").length;
-  return [`${scored.length} candidates`, `${liveCount} live`, ready ? `${ready} ready` : "", ...notes].filter(Boolean).join(" · ");
+  const live = entries.filter((e) => isLiveStage(moves.filter((m) => m.key === e.key).at(-1)?.to ?? e.stage)).length;
+  return [`${entries.length} venue strategies`, `${live} live`, ...moves.map((m) => `${m.key} ${m.from}→${m.to}`)].join(" · ");
 }
 
-/**
- * New signals of live strategies (logged since they went live, not yet routed) go to the live alert
- * chats and the notifications feed, once each.
- */
+/** New signals of live strategies go to the live chats and the notifications feed, once per signal. */
 export async function routeLiveSignals(db: SupabaseClient, chats: Chat[]): Promise<number> {
-  const live = await db.from("strategy_candidates").select("key, route_alerts, live_since").eq("status", "live");
+  const live = await db.from("strategy_candidates").select("key, route_alerts, live_since").in("stage", ["live_small", "live"]);
   const routes = new Map(((live.data ?? []) as { key: string; route_alerts: boolean; live_since: string | null }[]).filter((x) => x.route_alerts).map((x) => [x.key, Date.parse(x.live_since ?? "1970-01-01")]));
   if (!routes.size) return 0;
   const recent = await db.from("signals").select("id, instrument, side, model, entry, stop, target, rr, meta, created_at").gte("created_at", new Date(Date.now() - 30 * 60_000).toISOString());
   let sent = 0;
-  for (const s of (recent.data ?? []) as (Sig & { side: string; entry: number; stop: number; target: number | null; rr: number | null })[]) {
-    const key = candidateKey(s.instrument, s.model, s.meta?.strategy);
-    const since = routes.get(key);
-    if (since === undefined || Date.parse(s.created_at) < since || s.meta?.live_routed) continue;
+  for (const s of (recent.data ?? []) as (Sig & { side: string; target: number | null; rr: number | null })[]) {
+    if (s.meta?.live_routed) continue;
+    const venues = venuesFor(s.instrument).filter((v) => { const t = routes.get(venueKey(v, s.instrument, s.model, s.meta?.strategy)); return t !== undefined && Date.parse(s.created_at) >= t; });
+    if (!venues.length) continue;
     const d = INSTRUMENTS[s.instrument as InstrumentId]?.digits ?? 2;
     const name = s.model === "S" ? strategyName(s.meta?.strategy) : modelName(s.model);
+    const where = venues.map((v) => ({ cfd: "CFD", delta: "Delta", coinswitch: "CoinSwitch", fyers: "Fyers" })[v]).join(" · ");
     const line = `${s.side === "long" ? "Long" : "Short"} ${Number(s.entry).toFixed(d)} · SL ${Number(s.stop).toFixed(d)}${s.target !== null ? ` · TP ${Number(s.target).toFixed(d)}` : ""}${s.rr ? ` · ${Number(s.rr).toFixed(1)}R` : ""}`;
-    if (chats.length) await sendTelegram(db, { text: `🔴 <b>LIVE · ${escapeHtml(s.instrument)} ${escapeHtml(name)}</b>\n${escapeHtml(line)}\nStrategy ${escapeHtml(key)} · promoted on its paper record`, chats, kind: "LIVE", instrument: s.instrument, signalId: s.id, source: "autopilot" });
-    await notify(db, [{ category: "strategy", severity: "success", title: `LIVE signal: ${s.instrument} ${name}`, body: line, instrument: s.instrument, link: "/league", key: `live-sig:${s.id}`, meta: { signal_id: s.id, key } }]);
+    if (chats.length) await sendTelegram(db, { text: `🔴 <b>LIVE · ${escapeHtml(s.instrument)} ${escapeHtml(name)}</b>\n${escapeHtml(line)}\nLive on ${escapeHtml(where)} · promoted by the Strategy League`, chats, kind: "LIVE", instrument: s.instrument, signalId: s.id, source: "autopilot" });
+    await notify(db, [{ category: "strategy", severity: "success", title: `LIVE signal: ${s.instrument} ${name}`, body: `${line} · ${where}`, instrument: s.instrument, link: "/league", key: `live-sig:${s.id}`, meta: { signal_id: s.id, venues } }]);
     await db.from("signals").update({ meta: { ...(s.meta ?? {}), live_routed: new Date().toISOString() } }).eq("id", s.id);
     sent++;
   }
