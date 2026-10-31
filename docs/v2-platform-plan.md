@@ -378,3 +378,20 @@ labelled as a proxy and kept out of A+ gate scores. Paid upgrade path stays Data
   League stats begin at v2 launch on the new data.
 * **Strategy agent:** OpenRouter, as today.
 * **Mobile:** monitoring only (Dashboard, positions, alerts, kill switches). Arenas are designed for desktop.
+
+### 9.5 CFD alerts → cTrader (both prop accounts are on cTrader)
+
+* Accounts: **FundedHive 100K 1-Step, low-risk group** (per-trade loss cap 1%) and **The5ers 100K Summer
+  Plan 2-Step 10/5** (phase 1 target 10%, phase 2 5%, daily 3% of the higher of EOD equity or balance,
+  max loss 10%, no consistency rule in evaluation).
+* Every armed alert carries one **cTrader signal link per account**
+  (`https://app.ctrader.com/signal?s=…&o=limit&d=buy&p=…&sl=…&v=…&tp=…&tpv=…&tp2=…&tpv2=…&e-utc=DD-MM-YYYY_hh-mm&c=…`).
+  Tapping it in Telegram opens cTrader's order screen pre-filled; the trader checks it and taps Place order.
+  Volume is only carried when the order has split take-profits, so alerts always use TP1/TP2 halves, which
+  also lets each account get its own size. The comment carries the signal id (`APLUS <id> <acct>`) so fills
+  can be matched back to the alert.
+* Volume is sent in the symbol's units from the account's cTrader symbol spec (gold: ounces, so 0.66 lots
+  = 66), read once per account.
+* Position tracking: cTrader Open API with the trader's cTrader ID in **read-only** use (positions, deals,
+  balance) if each firm's server allows Open API; otherwise "Taken" from Telegram plus price tracking.
+  The app never places prop-account orders.
