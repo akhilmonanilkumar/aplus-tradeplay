@@ -312,3 +312,69 @@ button. Telegram, AI provider and data vendors are listed the same way.
 * **Overfitting from auto-generated strategies:** fixed gates, deflated Sharpe, multiple-testing count per run, clean out-of-sample data.
 * **Venue risk:** API changes and outages. Health checks halt the Arena, never retry blindly, and reconcile on reconnect.
 * **Compliance:** SEBI static IP and Algo ID for Fyers. Delta and CoinSwitch are FIU-registered Indian venues. Prop firm terms on copy and alert use and on news trading are encoded per account.
+
+---
+
+## 9. Decisions (31 Oct 2026)
+
+### 9.1 CFD Arena accounts — rules encoded per account
+
+Rules come from the firms' own pages (FundedHive Pay From Profits, The5ers Summer Plan), checked 31 Oct 2026.
+Every limit is a field on the account, not a constant, so a plan change is an edit, not a code change.
+
+| | FundedHive 100K · 1-Step · Pay From Profits | The5ers 100K · Summer Plan (1-Step assumed) |
+|---|---|---|
+| Profit target | 10% | 10% |
+| Daily loss | 5%, **balance-based, static** | 3% of the **higher of end-of-day equity or balance** (recomputed at each day's close) |
+| Max loss | 10%, **balance-based, static** (floor $90,000) | 6% of initial balance (floor $94,000) |
+| Per-trade loss cap | 3% (1 / 1.5 / 2 / 3% by chosen risk group) | none stated |
+| Consistency | none | **no day > 50% of total profit** |
+| Min days | 3 profitable days | not stated |
+| News trading | allowed | not stated (engine still stands down ±15 min by our own rule) |
+| Weekend | allowed in evaluation, **not on funded** | overnight allowed |
+| Leverage | FX 1:50 (dynamic, by risk group) | 1:100 |
+| Payout | 80%; fee taken from the first profits | 75% (scaling plan) |
+
+Gauges per account: target progress, **daily room** = limit − (today's start reference − current equity),
+**max-loss room** = equity − floor, **per-trade cap**, **consistency headroom** (The5ers: largest day ÷ total
+profit vs 50%), **profitable days** (FundedHive: n / 3). Alert sizing uses the smallest of: 0.5% risk, the
+per-trade cap, 50% of today's daily room, and (The5ers) the size at which a full win would break the 50% day.
+
+Open: confirm The5ers variant (1-Step vs 2-Step 10/5 or 8/5), the FundedHive risk group, both platforms
+(MT5 / cTrader / Match-Trader) and each firm's day-reset time and server timezone.
+
+### 9.2 Market data — free sources first
+
+| Need | Free source | Use |
+|---|---|---|
+| Live FX, XAU, index CFD prices | **cTrader Open API** with a free broker demo account (spot ticks; the API also lists depth-quote subscriptions, to be confirmed per broker on the demo) | CFD Arena prices, position tracking |
+| Tick history for backtests | **Dukascopy** historical bid/ask ticks (FX, metals, index CFDs) | Backtest Suite, tick-level research |
+| XAU / BTC order flow, OI, funding, liquidations | Binance / Bybit / Delta / OKX perps (gold and silver perps included) | real flow, used in gate scores |
+| Daily futures OI and volume (6E, 6B, 6J, ES, NQ, GC) | CME daily bulletin (end of day) | daily OI regime for FX and indices |
+| Positioning | CFTC COT (weekly) | bias |
+| India | Fyers data socket + TBT (free with the account) | Fyers Arena |
+
+Intraday FX and index "order flow" is tick-volume and CFD-depth based until a paid CME feed is added. It is
+labelled as a proxy and kept out of A+ gate scores. Paid upgrade path stays Databento (CME).
+
+### 9.3 Infrastructure — DigitalOcean, minimal management
+
+* DigitalOcean has no Mumbai region; use **Bangalore (BLR1)** (about 15–20 ms to the Mumbai exchanges and
+  Delta's India endpoints).
+* One droplet (start: Basic 2 GB / 1 vCPU, about $12/mo; upgrade to 4 GB if the tick store needs it) + a 50 GB
+  block volume for ticks (about $5/mo) + weekly droplet backups.
+* The droplet's own public IPv4 is fixed for its lifetime: that address is whitelisted on Delta,
+  CoinSwitch and the new Fyers app (SEBI static IP). Never destroy the droplet without re-whitelisting.
+* Ubuntu LTS, Docker Compose with three services (gateway, TimescaleDB, Caddy for TLS), `unattended-upgrades`,
+  `chrony`, a firewall that only opens 443, and a heartbeat to the app so the Dashboard shows it red when down.
+  One `deploy.sh` pulls and restarts; no Kubernetes, no manual babysitting.
+
+### 9.4 Other answers
+
+* **Fyers:** register a new API app after the droplet exists and map it to the droplet's static IP.
+* **CoinSwitch:** request options beta access (asking is normal; it is how CoinSwitch grants it) and list the
+  gold, silver and US-stock futures visible on the API futures surface.
+* **Paper trades:** start fresh. Old paper rows are exported once to a dated backup file, then cleared;
+  League stats begin at v2 launch on the new data.
+* **Strategy agent:** OpenRouter, as today.
+* **Mobile:** monitoring only (Dashboard, positions, alerts, kill switches). Arenas are designed for desktop.

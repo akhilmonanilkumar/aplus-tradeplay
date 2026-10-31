@@ -350,7 +350,7 @@ tr:last-child td{border-bottom:0}
   <div class="msgs" id="msgs">
     <div class="msg me">What's the best setup right now and how much room do my evaluations have?</div>
     <div class="msg"><b>XAUUSD long is armed in the CFD Arena</b> (Model A, A+ gate 9/9). London swept the Asia low at 4,031.8 and 15M shifted up. COMEX flow shows absorption under 4,030.
-      <ul><li>Eval #1: +$4,180 of $8,000 target. $3,420 daily room. Size 1.6 lots at 0.5%.</li><li>Eval #2: +$1,260. $4,620 daily room. Size 1.6 lots.</li><li>CPI is in 2h 10m. The engine will stand down 15 min either side.</li></ul></div>
+      <ul><li>FundedHive: +$4,180 of $10,000. $3,420 daily room (5% static). Size 1.6 lots at 0.5%, under the 3% per-trade cap.</li><li>The5ers: +$1,260 of $10,000. $2,140 daily room (3% of the higher EOD equity or balance). Size 1.2 lots. No single day may exceed 50% of total profit.</li><li>CPI is in 2h 10m. The engine will stand down 15 min either side.</li></ul></div>
     <div class="msg me">Why was the Delta BTC fade benched?</div>
     <div class="msg">The <b>Funding fade · BTCUSD</b> 30-trade expectancy fell to −0.08R (90% band below 0), and CUSUM flagged drift on Oct 27. It keeps paper trading. <b>OI squeeze breakout</b> took its live slot.</div>
   </div>
@@ -440,7 +440,7 @@ const ARENAS = [
   ["CoinSwitch", "--cs", 412, "3 live strats"], ["Fyers", "--fyers", -718, "7 live strats"],
 ];
 const OPEN = [
-  { s: "XAUUSD", a: "CFD · Eval #1", side: "Long", size: "1.6 lots", e: 4031.9, sl: 4024.4, tp: 4054.4, now: 4036.4, pnl: 720, r: 0.6, ac: "--cfd" },
+  { s: "XAUUSD", a: "CFD · FundedHive", side: "Long", size: "1.6 lots", e: 4031.9, sl: 4024.4, tp: 4054.4, now: 4036.4, pnl: 720, r: 0.6, ac: "--cfd" },
   { s: "BTCUSD perp", a: "Delta · live", side: "Short", size: "0.42 BTC", e: 109880, sl: 110420, tp: 108260, now: 109420, pnl: 193, r: 0.85, ac: "--delta" },
   { s: "NIFTY 25900 CE", a: "Fyers · live", side: "Long", size: "4 lots", e: 112.4, sl: 96, tp: 145, now: 104.2, pnl: -2460, r: -0.5, ac: "--fyers" },
 ];
@@ -490,12 +490,12 @@ function viewDashboard() {
     </tbody></table></div>
   </section>
   <section class="card s3"><div class="card-h"><h3>Funded challenges</h3><div class="r"><a href="#cfd" class="muted" style="font-size:12px">CFD →</a></div></div>
-    <div class="chal">${[["Eval #1 · 100K", 4180, 3420, 8620, 2], ["Eval #2 · 100K", 1260, 4620, 9410, 1]].map(([n, p, dl, ml, ph]) => `
-      <div class="chal-row"><div class="h"><b>${n}</b><span class="chip w">Phase ${ph}</span></div>
+    <div class="chal">${[["FundedHive 100K · 1-Step", 4180, 3420, 5000, 8620, 10000, "Static · 5% / 10%"], ["The5ers 100K · Summer", 1260, 2140, 3000, 4980, 6000, "Daily 3% EOD · max 6%"]].map(([n, p, dl, dc, ml, mc, ph]) => `
+      <div class="chal-row"><div class="h"><b>${n}</b><span class="chip w">${ph}</span></div>
       <div class="gauges">
-        <div><span class="muted">Target</span><div class="bar"><i style="width:${(p / 8000) * 100}%"></i></div><span class="num">$${fmt(p, 0)} / 8k</span></div>
-        <div><span class="muted">Daily room</span><div class="bar"><i style="width:${(dl / 5000) * 100}%;background:var(--warn)"></i></div><span class="num">$${fmt(dl, 0)}</span></div>
-        <div><span class="muted">Max-loss room</span><div class="bar"><i style="width:${(ml / 10000) * 100}%;background:var(--info)"></i></div><span class="num">$${fmt(ml, 0)}</span></div>
+        <div><span class="muted">Target</span><div class="bar"><i style="width:${(p / 10000) * 100}%"></i></div><span class="num">$${fmt(p, 0)} / 10k</span></div>
+        <div><span class="muted">Daily room</span><div class="bar"><i style="width:${(dl / dc) * 100}%;background:var(--warn)"></i></div><span class="num">$${fmt(dl, 0)}</span></div>
+        <div><span class="muted">Max-loss room</span><div class="bar"><i style="width:${(ml / mc) * 100}%;background:var(--info)"></i></div><span class="num">$${fmt(ml, 0)}</span></div>
       </div></div>`).join("")}
     </div>
   </section>
@@ -551,7 +551,7 @@ function viewArena(key) {
   if (arenaState.arena !== key) arenaState = { sym: c.list[0], mode: c.modes[0], tab: c.tabs[0], side: "Long", arena: key };
   const s = arenaState.sym, m = M[s];
   const accts = key === "cfd"
-    ? `<div class="acct"><span class="muted">Account</span><b>Eval #1 · 100K</b><div class="mini"><div class="bar"><i style="width:52%;background:var(--cfd)"></i></div></div><span class="num muted">52% of target</span></div>`
+    ? `<div class="acct"><span class="muted">Account</span><b>FundedHive 100K</b><div class="mini"><div class="bar"><i style="width:42%;background:var(--cfd)"></i></div></div><span class="num muted">42% of target</span></div>`
     : `<div class="acct"><span class="muted">Account</span><b>${key === "fyers" ? "Live · ₹" : "Live · USD"}</b><span class="chip g">live</span><span class="muted">|</span><b>Paper</b><span class="chip v">forward test</span></div>`;
   return `<div class="arena" style="--ac:var(${c.ac})">
     <div class="a-hd">
@@ -635,8 +635,8 @@ function cfdTicket(s, m) {
       </div>
     </div>
     <div><div class="lbl" style="margin-bottom:6px">Size per account at 0.5% risk</div>
-      <div class="kv"><span>Eval #1 · room $3,420</span><span class="num">1.6 lots</span></div>
-      <div class="kv"><span>Eval #2 · room $4,620</span><span class="num">1.6 lots</span></div></div>
+      <div class="kv"><span>FundedHive · day room $3,420</span><span class="num">1.6 lots</span></div>
+      <div class="kv"><span>The5ers · day room $2,140</span><span class="num">1.2 lots</span></div></div>
     <div class="two"><button class="cta ghost">Mark taken</button><button class="cta ghost">Skip</button></div>
     <button class="cta">Resend to Telegram</button>
     <div><div class="card-h"><span class="lbl">Reference flow · ${s === "XAUUSD" ? "XAUT perp" : s}</span></div><div class="dom">${domRows(m)}</div></div>
@@ -673,7 +673,7 @@ function optionChain(key, m) {
 }
 function dockBody(key, tab) {
   if (tab === "Positions" || tab === "Alerts") {
-    const list = key === "cfd" ? [OPEN[0], { ...OPEN[0], a: "CFD · Eval #2", pnl: 720 }] : key === "delta" ? [OPEN[1]] : key === "fyers" ? [OPEN[2]] : [{ ...OPEN[1], s: "BTCUSDT perp", a: "CoinSwitch · paper", pnl: 88, ac: "--cs" }];
+    const list = key === "cfd" ? [OPEN[0], { ...OPEN[0], a: "CFD · The5ers", pnl: 540 }] : key === "delta" ? [OPEN[1]] : key === "fyers" ? [OPEN[2]] : [{ ...OPEN[1], s: "BTCUSDT perp", a: "CoinSwitch · paper", pnl: 88, ac: "--cs" }];
     return `<div class="trades" style="padding:6px 4px;grid-template-columns:repeat(auto-fit,minmax(360px,1fr))">${list.map(tradeCard).join("")}</div>`;
   }
   if (tab === "Strategy log" || tab === "Signals") {
