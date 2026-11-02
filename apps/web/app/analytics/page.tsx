@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { INSTRUMENT_IDS } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import { matchesOwner, ownerOf, ownerOptions } from "@/lib/accounts";
@@ -61,7 +61,21 @@ export default function Analytics() {
   const [inst, setInst] = useState("all");
   const [range, setRange] = useState<(typeof RANGES)[number]["v"]>("30");
   const [tab, setTab] = useState<"pnl" | "edge">("pnl");
-  const [source, setSource] = useState<"real" | "paper" | "all">("real");
+  const [source, setSourceRaw] = useState<"real" | "paper" | "all">("real");
+  const picked = useRef(false);
+  const setSource = (v: "real" | "paper" | "all") => { picked.current = true; setSourceRaw(v); };
+  // Until real trades exist, open on the paper account instead of an empty page.
+  useEffect(() => {
+    const rows = trades.rows;
+    if (!rows || picked.current) return;
+    const hasReal = rows.some((t) => t.closed_at && t.source !== "paper");
+    setSourceRaw(hasReal ? "real" : rows.some((t) => t.closed_at && t.source === "paper") ? "paper" : "real");
+  }, [trades.rows]);
+  // New closes land on every autopilot pass: refresh while the tab is visible.
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === "visible") { trades.reload(); accounts.reload(); } }, 60_000);
+    return () => clearInterval(t);
+  }, [trades.reload, accounts.reload]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const accs = (accounts.rows ?? []).filter((a) => a.currency !== "INR" && matchesOwner(a, owner) && (account === "all" || a.id === account));
   const ids = new Set(accs.map((a) => a.id));

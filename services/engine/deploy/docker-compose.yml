@@ -1,0 +1,32 @@
+# Engine host stack: engine (API + venue streams), TimescaleDB (tick store), Caddy (HTTPS).
+services:
+  engine:
+    build: { context: ../../.., dockerfile: services/engine/deploy/Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://engine:${POSTGRES_PASSWORD}@db:5432/ticks
+      FYERS_TOKEN_FILE: /data/fyers-token.json
+    volumes: [engine-data:/data]
+    depends_on: [db]
+    expose: ["8787"]
+  db:
+    image: timescale/timescaledb:2.17.2-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: engine
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ticks
+    volumes:
+      - /mnt/ticks/pg:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+  caddy:
+    image: caddy:2.8.4
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment: { ENGINE_DOMAIN: "${ENGINE_DOMAIN}" }
+    volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddy-data:/data]
+    depends_on: [engine]
+volumes:
+  engine-data:
+  caddy-data:

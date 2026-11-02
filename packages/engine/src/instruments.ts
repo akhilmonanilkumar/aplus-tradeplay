@@ -3,7 +3,7 @@ import { BTCUSDT_PERP_DEFAULT, XAUUSD_DEFAULT } from './specs.js';
 
 /**
  * Instruments by desk. Gold and BTC have full desks (live context, macro, derivatives, selector);
- * the forex and index desks (EURUSD, USDJPY, NAS100, SPX500, NIFTY) are research desks:
+ * the forex and index desks (EURUSD, GBPUSD, USDJPY, NAS100, SPX500, NIFTY) are research desks:
  * lab, backtests and the paper autopilot, without desk pages or the selector.
  */
 export type DeskId = 'gold' | 'btc' | 'fx' | 'indices';
@@ -15,7 +15,7 @@ export const liveDesk = (id: InstrumentId): LiveDeskId => {
   if (d !== 'gold' && d !== 'btc') throw new Error(`${id} is a research instrument`);
   return d;
 };
-export type InstrumentId = 'XAUUSD' | 'XAUUSDT.P' | 'BTCUSD' | 'BTCUSDT.P' | 'BTCUSD.SPOT' | 'EURUSD' | 'USDJPY' | 'NAS100' | 'SPX500' | 'NIFTY';
+export type InstrumentId = 'XAUUSD' | 'XAUUSDT.P' | 'BTCUSD' | 'BTCUSDT.P' | 'BTCUSD.SPOT' | 'EURUSD' | 'GBPUSD' | 'USDJPY' | 'NAS100' | 'SPX500' | 'NIFTY';
 export type Tf = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
 export const TF_MS: Record<Tf, number> = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000 };
@@ -108,6 +108,13 @@ export const INSTRUMENTS: Record<InstrumentId, InstrumentDef> = {
     sizing: { kind: 'cfd', spec: EURUSD_CFD, unit: 'lot' },
     fxHours: true, priceBasis: 'EUR/USD mid', research: true,
   },
+  GBPUSD: {
+    id: 'GBPUSD', desk: 'fx', label: 'GBPUSD · CFD', short: 'GBPUSD', kind: 'cfd',
+    htf: '1h', poi: '15m', ltf: '5m', digits: 5,
+    stopBuffer: (p) => p * 0.00005, costRate: 0.00008,
+    sizing: { kind: 'cfd', spec: EURUSD_CFD, unit: 'lot' },
+    fxHours: true, priceBasis: 'GBP/USD mid', research: true,
+  },
   USDJPY: {
     id: 'USDJPY', desk: 'fx', label: 'USDJPY · CFD', short: 'USDJPY', kind: 'cfd',
     htf: '1h', poi: '15m', ltf: '5m', digits: 3,
@@ -147,7 +154,7 @@ export const INSTRUMENT_IDS = Object.keys(INSTRUMENTS) as InstrumentId[];
 export const DESKS: Record<DeskId, { id: DeskId; name: string; instruments: InstrumentId[]; primary: InstrumentId }> = {
   gold: { id: 'gold', name: 'Gold desk', instruments: ['XAUUSD', 'XAUUSDT.P'], primary: 'XAUUSD' },
   btc: { id: 'btc', name: 'BTC desk', instruments: ['BTCUSDT.P', 'BTCUSD', 'BTCUSD.SPOT'], primary: 'BTCUSDT.P' },
-  fx: { id: 'fx', name: 'Forex lab', instruments: ['EURUSD', 'USDJPY'], primary: 'EURUSD' },
+  fx: { id: 'fx', name: 'Forex lab', instruments: ['EURUSD', 'GBPUSD', 'USDJPY'], primary: 'EURUSD' },
   indices: { id: 'indices', name: 'Index lab', instruments: ['NAS100', 'SPX500', 'NIFTY'], primary: 'NAS100' },
 };
 

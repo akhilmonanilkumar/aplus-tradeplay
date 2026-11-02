@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { useRows } from "@/lib/useRows";
 import { useMe } from "@/components/Shell";
 import IntegrationsCard from "@/components/IntegrationsCard";
+import NotificationSettings from "@/components/NotificationSettings";
 import type { TradingAccount } from "@/lib/types";
 import { dateShort } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Note, Table, Toggle } from "@/components/ui";
@@ -137,6 +138,9 @@ export default function Settings() {
           <Srow t="Execution mode"><span className={`live-pill ${me.settings?.mode === "LIVE" ? "live" : "paper"}`}><span className="dot" />{me.settings?.mode ?? "PAPER"}</span></Srow>
           <Srow t="Export all my data" d="JSON file of every table you can read"><button className="btn sm" onClick={exportAll}>Download</button></Srow>
         </Card>
+      </section>
+      <section className="g12">
+        <NotificationSettings />
       </section>
     </>
   );

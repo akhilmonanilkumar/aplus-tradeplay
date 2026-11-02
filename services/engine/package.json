@@ -1,0 +1,26 @@
+{
+  "name": "@aplus/engine-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Engine host: venue adapters, clock sync, market streams, tick store and the signed API the web app calls. Runs on the fixed-IP server.",
+  "scripts": {
+    "build": "pnpm --dir ../../packages/engine build && tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aplus/engine": "workspace:*",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.10",
+    "typescript": "5.6.3",
+    "vitest": "2.1.8"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

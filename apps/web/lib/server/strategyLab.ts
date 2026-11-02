@@ -83,6 +83,8 @@ const LOOSE: Partial<StrategyParams> = { requireCorrectHalf: false, requirePoi: 
  * judged against the same base so its effect is its own.
  */
 const LEARNED: Partial<StrategyParams> = { poiQuality: "ob_liquidity", targetSet: "liquidity", skipHoursNy: [2, 8], maxCostR: 0.25 };
+/** The three changes that helped on gold; liquidity-only targets did not. */
+const THREE: Partial<StrategyParams> = { poiQuality: "ob_liquidity", skipHoursNy: [2, 8], maxCostR: 0.25 };
 function improveVariants(): { id: string; label: string; model: string; params: Partial<StrategyParams>; diagnose: boolean }[] {
   const models = MODEL_IDS.filter((m) => m !== "G" && m !== "H");
   const base: Partial<StrategyParams> = { models, allowAllModels: true, ...LOOSE };
@@ -93,6 +95,8 @@ function improveVariants(): { id: string; label: string; model: string; params: 
     { id: "hours", label: "+ skip 02:00 and 08:00 New York", model: "all", params: { ...base, skipHoursNy: [2, 8] }, diagnose: false },
     { id: "cost", label: "+ skip setups costing more than 0.25R", model: "all", params: { ...base, maxCostR: 0.25 }, diagnose: false },
     { id: "learned", label: "All four changes · location boxes off", model: "all", params: { ...base, ...LEARNED }, diagnose: true },
+    { id: "three", label: "POI quality + hours + cost (targets unchanged) · location boxes off", model: "all", params: { ...base, ...THREE }, diagnose: true },
+    { id: "three-gate", label: "POI quality + hours + cost · full gate, grade A allowed", model: "all", params: { models, allowAllModels: true, allowGradeA: true, ...THREE }, diagnose: true },
     { id: "learned-gate", label: "All four changes · full gate, grade A allowed", model: "all", params: { models, allowAllModels: true, allowGradeA: true, ...LEARNED }, diagnose: true },
     { id: "learned-aplus", label: "All four changes · full gate, A+ only", model: "all", params: { models, allowAllModels: true, ...LEARNED }, diagnose: false },
     { id: "learned-A", label: "All four changes · model A only, location boxes off", model: "A", params: { models: ["A"], allowAllModels: true, ...LOOSE, ...LEARNED }, diagnose: false },

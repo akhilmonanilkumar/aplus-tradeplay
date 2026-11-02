@@ -10,6 +10,7 @@ import { historyEnd, loadFrames } from "@/lib/server/feeds";
 import { loadMacro, type Macro } from "@/lib/server/macro";
 import { telegramExecutor, type TradeTicket } from "@/lib/server/execution";
 import type { Chat } from "@/lib/server/telegram";
+import { sendCfdAlert } from "@/lib/server/cfdAlerts";
 import type { Evaluation } from "@/lib/server/autopilot";
 import type { SelectorConfig } from "@/lib/selectorConfig";
 
@@ -211,7 +212,12 @@ export async function runSelector(db: SupabaseClient, deps: {
       accounts: sized, paper, source: e.source,
     };
     const sent = await telegramExecutor(db, deps.chats).submit(ticket);
-    const action = [sent.ok ? "telegram sent" : `telegram failed: ${sent.error}`, paper ? `${sized.filter((a) => !a.blocked).length} paper orders` : deps.killSwitch ? "kill switch: no orders" : null].filter(Boolean).join(" · ");
+    // CFD Arena: one alert sized per prop account, with cTrader links and Taken / Skip buttons.
+    const cfd = deps.killSwitch ? null : await sendCfdAlert(db, deps.chats, {
+      instrument: s.instrument, side: s.side, entry: p.entry, stop: p.stop, target: p.target, model: "A", grade: s.grade,
+      why: ticket.why, expiresAt: ticket.expiresAt, signalId,
+    }).catch((e: Error) => ({ error: e.message }));
+    const action = [sent.ok ? "telegram sent" : `telegram failed: ${sent.error}`, cfd && "alertId" in cfd ? `CFD alert ${cfd.sent ? "sent" : `failed: ${cfd.error}`}` : cfd && "error" in cfd ? `CFD alert error: ${cfd.error}` : null, paper ? `${sized.filter((a) => !a.blocked).length} paper orders` : deps.killSwitch ? "kill switch: no orders" : null].filter(Boolean).join(" · ");
     outcome.picks.push({ instrument: s.instrument, side: s.side, score: s.score, action });
     pickDetail.push({ signalId, instrument: s.instrument, side: s.side, score: s.score, parts: s.parts, why: ticket.why, plan: { entry: p.entry, stop: p.stop, target: p.target, rr: s.rr }, action });
   }
