@@ -15,6 +15,8 @@ FROM node:22-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /out .
+# Saved logins (Fyers, cTrader) live in /data; the app runs as "node", so it must own the folder.
+RUN mkdir -p /data && chown node:node /data
 USER node
 EXPOSE 8787
 CMD ["node", "dist/index.js"]
