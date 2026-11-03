@@ -10,6 +10,7 @@ import { INSTRUMENT_TF } from "@/lib/market";
 import { istDay, todayIst } from "@/lib/derive";
 import type { NewsEvent, Signal, Trade, TradingAccount } from "@/lib/types";
 import { num, timeShort, toNum } from "@/lib/fmt";
+import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 import { Card, Chip, Empty, ErrorNote, Note } from "@/components/ui";
 
 type Saved = { id: string; instrument: string; report_date: string; narrative: "continuation" | "pullback"; target: number | null; invalidation: number | null; allowed: "long" | "short" | null; notes: string | null };
@@ -45,6 +46,7 @@ function compute(inst: string, m: MarketData | null, saved: Saved | null, edit: 
 function Report({ inst, m, saved, onSaved }: { inst: string; m: MarketData | null; saved: Saved | null; onSaved: () => void }) {
   const [edit, setEdit] = useState<{ target: string; invalidation: string; narrative: "" | "continuation" | "pullback" }>({ target: "", invalidation: "", narrative: "" });
   const [msg, setMsg] = useState<string | null>(null);
+  const [del, setDel] = useState(false);
   const r = useMemo(() => compute(inst, m, saved, edit), [inst, m, saved, edit]);
   const tf = INSTRUMENT_TF[inst]!;
   if (!r) return <Card span={6} title={inst}><Empty>Loading candles…</Empty></Card>;
@@ -67,6 +69,7 @@ function Report({ inst, m, saved, onSaved }: { inst: string; m: MarketData | nul
       <div className="ch"><h3 style={{ fontSize: 15 }}>{inst}</h3><span className="faint" style={{ fontSize: 12 }}>{tf.label}</span><span className="sp" />
         <Chip tone={b.allowed === "long" ? "up" : b.allowed === "short" ? "down" : ""}>{b.allowed ? b.allowed.toUpperCase() : "STAND ASIDE"}</Chip>
         {saved && <Chip tone="acc">saved</Chip>}
+        {saved && <EditDeleteButtons size="xs" label={`saved ${inst} bias`} onDelete={() => setDel(true)} />}
       </div>
       <Step n={1} title="HTF range">
         <span className="muted" style={{ fontSize: 12.5 }}>{a.htfTrend ? `${tf.htf.toUpperCase()} ${a.htfTrend}trend` : "No trend"} · latest break of structure</span>
@@ -107,6 +110,11 @@ function Report({ inst, m, saved, onSaved }: { inst: string; m: MarketData | nul
         <button className="btn pri sm" onClick={save}>{saved ? "Update today's bias" : "Save today's bias"}</button>
         {msg && <span className={msg === "Saved" ? "up" : "down"} style={{ fontSize: 12 }}>{msg}</span>}
       </div>
+      {del && (
+        <ConfirmDelete title={`Clear today's saved ${inst} bias?`} onConfirm={async () => { const { error } = await supabase.from("bias_reports").delete().eq("report_date", todayIst()).eq("instrument", inst); if (!error) { setEdit({ target: "", invalidation: "", narrative: "" }); onSaved(); } return error?.message; }} onClose={() => setDel(false)}>
+          <span>The desk and the autopilot go back to the live read for {inst} until you save again.</span>
+        </ConfirmDelete>
+      )}
     </div>
   );
 }

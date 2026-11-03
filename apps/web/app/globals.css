@@ -335,3 +335,12 @@ textarea.inp { height: auto; min-height: 76px; padding: 10px 12px; font-family: 
 .cl-rail span.done { background: var(--accent-bg); color: var(--accent-ink); }
 .cl-rail span.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 @media (max-width: 860px) { .cl-form { grid-template-columns: minmax(0, 1fr) auto; } .cl-form > span:nth-of-type(1) { grid-column: 1 / -1; } .cl-lv { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Edit / delete controls */
+.btn.icon { width: 30px; padding: 0; }
+.btn.icon.xs { width: 26px; height: 26px; }
+.btn.icon svg { width: 15px; height: 15px; }
+.btn.ghost.icon:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.btn.ghost.icon.del:hover:not(:disabled) { background: var(--down-bg); color: var(--down); }
+.btn.danger { background: var(--down); color: #fff; border-color: transparent; font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }

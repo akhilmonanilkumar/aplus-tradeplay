@@ -11,6 +11,7 @@ import { fetchHistory } from "@/lib/market";
 import type { BacktestRow, Strategy } from "@/lib/types";
 import { num, pct, r as fmtR } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Field, Kpi, Note, Seg, Spark, Table, Toggle } from "@/components/ui";
+import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 
 const WINDOWS = [
   { id: "london_q", l: "London Q 02–05 ET" },
@@ -52,6 +53,8 @@ export default function Lab({ deskId }: { deskId: DeskId }) {
   const [p, setP] = useState<StrategyParams>({ ...DEFAULT_STRATEGY });
   const [name, setName] = useState("Edge v1.1 · Model A");
   const [stratId, setStratId] = useState<string | null>(null);
+  const [delStrat, setDelStrat] = useState<Strategy | null>(null);
+  const [delRun, setDelRun] = useState<BacktestRow | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [res, setRes] = useState<(BacktestResult & { source: string; approx: boolean; ms: number; bars: number; partial: string | null }) | null>(null);
@@ -154,7 +157,7 @@ export default function Lab({ deskId }: { deskId: DeskId }) {
               <div className="fld"><span>Load saved</span>
                 <div className="inp"><select value={stratId ?? ""} onChange={(e) => { const st = (strategies.rows ?? []).find((x) => x.id === e.target.value); if (st) { setStratId(st.id); setName(st.name); setP({ ...DEFAULT_STRATEGY, ...(st.params as Partial<StrategyParams>) }); if (st.instrument in INSTRUMENTS) setInst(st.instrument as InstrumentId); } else setStratId(null); }}>
                   <option value="">—</option>{(strategies.rows ?? []).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.instrument}</option>)}
-                </select></div>
+                </select>{stratId && <EditDeleteButtons size="xs" label="saved strategy" onDelete={() => setDelStrat((strategies.rows ?? []).find((x) => x.id === stratId) ?? null)} />}</div>
               </div>
             )}
             <div className="between"><span className="lbl">Sides</span><Seg label="Sides" value={p.sides} onChange={(v) => set("sides", v)} options={[{ v: "both", l: "Both" }, { v: "long", l: "Long" }, { v: "short", l: "Short" }]} /></div>
@@ -283,7 +286,7 @@ export default function Lab({ deskId }: { deskId: DeskId }) {
 
       <Card title="Lab history" right={<Chip>{TF_MS[def.ltf] / 60000}m replay · latest 30</Chip>}>
         {(runs.rows ?? []).filter((x) => desk.instruments.includes(x.instrument as InstrumentId)).length === 0 ? <Empty>No saved runs yet</Empty> : (
-          <Table head={["Saved", "Strategy", "Instrument", "Days", "Trades", "Win", "Exp", "Net R", "Return", "Max DD"]} right={[3, 4, 5, 6, 7, 8, 9]}>
+          <Table head={["Saved", "Strategy", "Instrument", "Days", "Trades", "Win", "Exp", "Net R", "Return", "Max DD", ""]} right={[3, 4, 5, 6, 7, 8, 9]}>
             {(runs.rows ?? []).filter((x) => desk.instruments.includes(x.instrument as InstrumentId)).map((x) => {
               const st = x.stats as { n?: number; winRate?: number; avgR?: number; netR?: number };
               const sm = x.summary as { returnPct?: number; maxDrawdownPct?: number; days?: number };
@@ -299,12 +302,23 @@ export default function Lab({ deskId }: { deskId: DeskId }) {
                   <td className={`r mono ${(st.netR ?? 0) >= 0 ? "up" : "down"}`}>{fmtR(st.netR ?? 0, 1)}</td>
                   <td className="r mono">{sm.returnPct !== undefined ? `${sm.returnPct.toFixed(1)}%` : "—"}</td>
                   <td className="r mono">{sm.maxDrawdownPct !== undefined ? `${sm.maxDrawdownPct.toFixed(1)}%` : "—"}</td>
+                  <td><EditDeleteButtons size="xs" label="saved run" onDelete={() => setDelRun(x)} /></td>
                 </tr>
               );
             })}
           </Table>
         )}
       </Card>
+      {delStrat && (
+        <ConfirmDelete title={`Delete strategy ${delStrat.name}?`} onConfirm={async () => { const { error } = await supabase.from("strategies").delete().eq("id", delStrat.id); if (!error) { setStratId(null); strategies.reload(); runs.reload(); } return error?.message; }} onClose={() => setDelStrat(null)}>
+          <span>Its saved Lab runs are deleted with it. Your current settings stay on screen so you can save them again.</span>
+        </ConfirmDelete>
+      )}
+      {delRun && (
+        <ConfirmDelete title="Delete this saved run?" onConfirm={async () => { const { error } = await supabase.from("backtests").delete().eq("id", delRun.id); if (!error) runs.reload(); return error?.message; }} onClose={() => setDelRun(null)}>
+          <span>{delRun.instrument} · saved {new Date(delRun.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}</span>
+        </ConfirmDelete>
+      )}
     </>
   );
 }

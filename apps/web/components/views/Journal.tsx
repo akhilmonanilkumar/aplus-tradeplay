@@ -8,6 +8,7 @@ import { realizedR } from "@/lib/calc";
 import type { Trade, TradingAccount } from "@/lib/types";
 import { dateShort, money, num, toNum } from "@/lib/fmt";
 import { Chip, Empty, ErrorNote, Note, Table } from "@/components/ui";
+import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 
 type Gate = { n: number; label: string; status: string; reason: string }[];
 type T = Trade & { gate: Gate | null; sweep_type: string | null; htf_zone: string | null; target_type: string | null };
@@ -44,6 +45,20 @@ export default function Journal() {
   const [brk, setBrk] = useState<string[]>([]);
   const [edit, setEdit] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [del, setDel] = useState<T | null>(null);
+  const str = (v: number | string | null | undefined) => (v === null || v === undefined ? "" : String(v));
+  const openEdit = (x: T) => {
+    setEditId(x.id);
+    setF({
+      account_id: x.account_id, instrument: x.instrument, side: x.side, model: x.model ?? "A", session: x.session_window ?? "other", qty: str(x.qty), entry: str(x.entry), stop: str(x.stop),
+      target: str(x.target), exit: str(x.exit), pnl: str(x.pnl), fees: str(x.fees), mood: str(x.mood ?? 7), grade: x.grade ?? "A+", planFollowed: x.plan_followed ?? true,
+      emotion: x.emotion ?? "calm", sweep: x.sweep_type ?? "", zone: x.htf_zone ?? "discount", targetType: x.target_type ?? "PDH", review: x.review ?? "", lesson: x.lesson ?? "",
+    });
+    setBrk(x.rule_breaks ?? []);
+    setLog(true);
+  };
+  const openNew = () => { setEditId(null); setF({ ...blank, account_id: f.account_id }); setBrk([]); setLog(true); };
 
   const all = trades.rows ?? [];
   const rows = all.filter((t) => (fm.model === "all" || t.model === fm.model) && (fm.win === "all" || t.session_window === fm.win) && (fm.inst === "all" || t.instrument === fm.inst) && (!fm.breaks || t.rule_breaks.length > 0) && (fm.mood === "all" || (t.mood !== null && (fm.mood === "low" ? t.mood <= 4 : fm.mood === "mid" ? t.mood >= 5 && t.mood <= 7 : t.mood >= 8))));
@@ -62,13 +77,22 @@ export default function Journal() {
     const entry = toNum(f.entry), stop = toNum(f.stop), qty = toNum(f.qty);
     if (!f.account_id || !(entry > 0) || !(stop > 0) || !(qty > 0)) return setMsg({ ok: false, t: "Account, qty, entry and stop are required" });
     const exit = f.exit ? toNum(f.exit) : null;
-    const { error } = await supabase.from("trades").insert({
+    const row = {
       account_id: f.account_id, instrument: f.instrument, side: f.side, model: f.model, session_window: f.session, qty, entry, stop,
       target: f.target ? toNum(f.target) : null, exit, planned_r: preview.planned !== null ? Number(preview.planned.toFixed(3)) : null,
       realized_r: preview.realized !== null ? Number(preview.realized.toFixed(3)) : null, pnl: f.pnl ? toNum(f.pnl) : null, fees: f.fees ? toNum(f.fees) : null,
       rule_breaks: brk, mood: Number(f.mood) || null, grade: f.grade, plan_followed: f.planFollowed, emotion: f.emotion, sweep_type: f.sweep || null, htf_zone: f.zone,
-      target_type: f.targetType, review: f.review.trim() || null, lesson: f.lesson.trim() || null, closed_at: exit ? new Date().toISOString() : null, edge_version: "1.1",
-    });
+      target_type: f.targetType, review: f.review.trim() || null, lesson: f.lesson.trim() || null,
+    };
+    if (editId) {
+      const was = all.find((x) => x.id === editId);
+      const closed_at = exit === null ? null : was?.closed_at ?? new Date().toISOString();
+      const { error } = await supabase.from("trades").update({ ...row, closed_at }).eq("id", editId);
+      if (error) return setMsg({ ok: false, t: error.message });
+      setMsg({ ok: true, t: "Trade updated" }); setLog(false); setEditId(null); trades.reload();
+      return;
+    }
+    const { error } = await supabase.from("trades").insert({ ...row, closed_at: exit ? new Date().toISOString() : null, edge_version: "1.1" });
     if (error) return setMsg({ ok: false, t: error.message });
     setMsg({ ok: true, t: "Trade logged" }); setLog(false); setF({ ...blank, account_id: f.account_id }); setBrk([]); trades.reload();
   };
@@ -96,7 +120,7 @@ export default function Journal() {
         {chipSel("mood", "Mood", [["low", "1–4"], ["mid", "5–7"], ["high", "8–10"]])}
         <span style={{ flex: 1 }} />
         <span className="faint hide-m" style={{ fontSize: 12 }}>Gate dots: green pass · amber soft · red failed</span>
-        <button className="btn pri sm" onClick={() => setLog(true)}>Log trade</button>
+        <button className="btn pri sm" onClick={openNew}>Log trade</button>
       </div>
 
       <section className="g12">
@@ -126,7 +150,10 @@ export default function Journal() {
             <>
               <div className="between">
                 <div className="col" style={{ gap: 2 }}><b style={{ fontSize: 15 }}>{t.instrument} · {t.side}</b><span className="faint" style={{ fontSize: 12 }}>{dateShort(t.opened_at)} · {t.model ? `Model ${t.model}` : "—"} · {WIN[t.session_window ?? ""] ?? "—"} · {acc(t.account_id)?.name ?? ""}</span></div>
-                <Chip tone={t.realized_r === null ? "acc" : Number(t.realized_r) >= 0 ? "up" : "down"}>{t.realized_r === null ? "open" : `${Number(t.realized_r) > 0 ? "+" : ""}${num(Number(t.realized_r), 2)}R`}</Chip>
+                <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
+                  <Chip tone={t.realized_r === null ? "acc" : Number(t.realized_r) >= 0 ? "up" : "down"}>{t.realized_r === null ? "open" : `${Number(t.realized_r) > 0 ? "+" : ""}${num(Number(t.realized_r), 2)}R`}</Chip>
+                  <EditDeleteButtons label={`${t.instrument} trade`} onEdit={() => openEdit(t)} onDelete={() => setDel(t)} />
+                </span>
               </div>
               <Schematic t={t} />
               <div className="lbl-u">Gate result</div>
@@ -154,12 +181,12 @@ export default function Journal() {
       </section>
 
       {log && (
-        <div className="modal" role="dialog" aria-modal="true" aria-label="Log trade">
+        <div className="modal" role="dialog" aria-modal="true" aria-label={editId ? "Edit trade" : "Log trade"}>
           <form className="card" style={{ maxWidth: 720 }} onSubmit={save}>
-            <div className="ch"><h3>Log trade</h3><span className="sp" /><span className="mono" style={{ fontSize: 12 }}>{preview.planned !== null ? `${num(preview.planned, 2)}R planned` : ""}{preview.realized !== null ? ` · ${preview.realized > 0 ? "+" : ""}${num(preview.realized, 2)}R` : ""}</span><button type="button" className="btn ghost sm" onClick={() => setLog(false)}>Close</button></div>
+            <div className="ch"><h3>{editId ? "Edit trade" : "Log trade"}</h3><span className="sp" /><span className="mono" style={{ fontSize: 12 }}>{preview.planned !== null ? `${num(preview.planned, 2)}R planned` : ""}{preview.realized !== null ? ` · ${preview.realized > 0 ? "+" : ""}${num(preview.realized, 2)}R` : ""}</span><button type="button" className="btn ghost sm" onClick={() => { setLog(false); setEditId(null); }}>Close</button></div>
             <div className="auto-s" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(150px, 100%), 1fr))" }}>
               <label className="fld"><span>Account</span><div className="inp"><select value={f.account_id} onChange={set("account_id")}><option value="">—</option>{(accounts.rows ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div></label>
-              <label className="fld"><span>Instrument</span><div className="inp"><select value={f.instrument} onChange={set("instrument")}>{["XAUUSD", "BTCUSDT.P", "GOLDM", "GOLD"].map((i) => <option key={i}>{i}</option>)}</select></div></label>
+              <label className="fld"><span>Instrument</span><div className="inp"><select value={f.instrument} onChange={set("instrument")}>{[...new Set(["XAUUSD", "BTCUSDT.P", "GOLDM", "GOLD", f.instrument])].map((i) => <option key={i}>{i}</option>)}</select></div></label>
               <label className="fld"><span>Side</span><div className="inp"><select value={f.side} onChange={set("side")}><option value="long">Long</option><option value="short">Short</option></select></div></label>
               <label className="fld"><span>Model</span><div className="inp"><select value={f.model} onChange={set("model")}>{MODEL_IDS.map((m) => <option key={m} value={m}>{ENTRY_MODELS[m].short} · {ENTRY_MODELS[m].name}</option>)}</select></div></label>
               <label className="fld"><span>Window</span><div className="inp"><select value={f.session} onChange={set("session")}><option value="london_q">London Q</option><option value="ny_q">NY Q</option><option value="other">Outside</option></select></div></label>
@@ -179,9 +206,17 @@ export default function Journal() {
               <label className="fld"><span>Review line</span><textarea className="inp" value={f.review} onChange={set("review")} /></label>
               <label className="fld"><span>One lesson</span><textarea className="inp" value={f.lesson} onChange={set("lesson")} /></label>
             </div>
-            <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri">Save trade</button></div>
+            <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri">{editId ? "Save changes" : "Save trade"}</button></div>
           </form>
         </div>
+      )}
+      {del && (
+        <ConfirmDelete title={`Delete this ${del.instrument} trade?`}
+          onConfirm={async () => { const { error } = await supabase.from("trades").delete().eq("id", del.id); if (!error) { setSel(null); trades.reload(); setMsg({ ok: true, t: "Trade deleted" }); } return error?.message; }}
+          onClose={() => setDel(null)}>
+          <span>{dateShort(del.opened_at)} · {del.side} · entry {num(Number(del.entry), 2)}{del.pnl !== null ? ` · P&L ${money(Number(del.pnl), acc(del.account_id)?.currency ?? "USD")}` : ""}</span>
+          <span>It leaves the journal, the account's P&amp;L and Edge Analytics. The account balance is not changed.</span>
+        </ConfirmDelete>
       )}
     </>
   );

@@ -8,10 +8,44 @@ import type { Investor, Payout, TradingAccount } from "@/lib/types";
 import { dateShort, money, pct, toNum } from "@/lib/fmt";
 import { useMe } from "@/components/Shell";
 import { Card, Chip, Empty, ErrorNote, Note, Seg, Table } from "@/components/ui";
+import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 
 type Member = { user_id: string; role: string; display_name: string; created_at: string };
 type Audit = { id: number; at: string; actor: string | null; action: string; entity: string; entity_id: string | null };
 type Hook = { name: string; last_status: string | null; enabled: boolean };
+
+/** Edit a recorded payout's figures. Changing an approved or paid payout's amount sends it back to pending. */
+function PayoutForm({ p, accounts, onDone, onClose }: { p: Payout; accounts: TradingAccount[]; onDone: () => void; onClose: () => void }) {
+  const [v, setV] = useState({ period: p.period, account_id: p.account_id ?? "", gross: String(p.gross), commission: String(p.commission), to_investor: String(p.to_investor), status: p.status });
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const gross = toNum(v.gross), commission = toNum(v.commission), toInv = toNum(v.to_investor);
+    if (!v.period.trim() || !(gross >= 0) || !(commission >= 0) || !(toInv >= 0)) return setErr("Period and non-negative amounts are required");
+    const moved = Number(p.to_investor) !== toInv || Number(p.commission) !== commission;
+    const status = moved && (v.status === "approved" || v.status === "paid") && p.status === v.status ? "pending" : v.status;
+    const { error } = await supabase.from("payouts").update({ period: v.period.trim(), account_id: v.account_id || null, gross, commission, to_investor: toInv, status }).eq("id", p.id);
+    if (error) return setErr(error.message);
+    onDone();
+  };
+  const num2 = (k: "gross" | "commission" | "to_investor", l: string) => <label className="fld"><span>{l}</span><div className="inp"><input inputMode="decimal" value={v[k]} onChange={(e) => setV({ ...v, [k]: e.target.value })} /><span className="u">USD</span></div></label>;
+  return (
+    <div className="modal" role="dialog" aria-modal="true" aria-label="Edit payout">
+      <form className="card" style={{ maxWidth: 520 }} onSubmit={submit}>
+        <div className="ch"><h3>Edit payout</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={onClose}>Close</button></div>
+        <div className="auto-s" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
+          <label className="fld"><span>Period</span><div className="inp txt"><input value={v.period} onChange={(e) => setV({ ...v, period: e.target.value })} /></div></label>
+          <label className="fld"><span>Account</span><div className="inp"><select value={v.account_id} onChange={(e) => setV({ ...v, account_id: e.target.value })}><option value="">—</option>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div></label>
+          {num2("gross", p.kind === "prop" ? "Profit" : "Above HWM")}{num2("commission", "Our commission")}{num2("to_investor", "To investor")}
+          <label className="fld"><span>Status</span><div className="inp"><select value={v.status} onChange={(e) => setV({ ...v, status: e.target.value as Payout["status"] })}>{(["pending", "held", "approved", "paid"] as const).map((x) => <option key={x} value={x} disabled={(x === "approved" && p.status !== "approved") || (x === "paid" && p.status !== "approved" && p.status !== "paid")}>{x}</option>)}</select></div></label>
+        </div>
+        <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>Approval still needs 2FA from the list. Changing the amounts of an approved or paid payout sends it back to pending.</p>
+        {err && <p className="down" style={{ fontSize: 12.5, marginTop: 8 }}>{err}</p>}
+        <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri">Save</button></div>
+      </form>
+    </div>
+  );
+}
 
 function Health() {
   const [rows, setRows] = useState<{ n: string; ok: boolean | null; v: string }[]>([]);
@@ -55,6 +89,8 @@ export default function Admin() {
   const [kind, setKind] = useState<"prop" | "hwm">("prop");
   const [f, setF] = useState({ investor_id: "", account_id: "", period: new Date().toISOString().slice(0, 7), profit: "", split: "80", nav: "", hwm: "" });
   const [approving, setApproving] = useState<Payout | null>(null);
+  const [editPay, setEditPay] = useState<Payout | null>(null);
+  const [delPay, setDelPay] = useState<Payout | null>(null);
   const [code, setCode] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
   const [factors, setFactors] = useState<string>("—");
@@ -151,7 +187,7 @@ export default function Admin() {
           <div className="col" style={{ gap: 10 }}>
             {pending.map((p) => (
               <div key={p.id} className="col" style={{ gap: 8 }}>
-                <div className="between"><div className="col" style={{ gap: 2 }}><b style={{ fontSize: 13 }}>{invName(p.investor_id)}{p.account_id ? ` · ${accName(p.account_id)}` : ""}</b><span className="faint" style={{ fontSize: 11.5 }}>{p.kind === "prop" ? `Firm payout ${money(Number(p.gross) * Number(p.firm_split ?? 1))}` : `Above HWM ${money(Number(p.gross))}`} − commission {money(Number(p.commission))} · {p.period}</span></div><b className="mono up">{money(Number(p.to_investor))}</b></div>
+                <div className="between"><div className="col" style={{ gap: 2 }}><b style={{ fontSize: 13 }}>{invName(p.investor_id)}{p.account_id ? ` · ${accName(p.account_id)}` : ""}</b><span className="faint" style={{ fontSize: 11.5 }}>{p.kind === "prop" ? `Firm payout ${money(Number(p.gross) * Number(p.firm_split ?? 1))}` : `Above HWM ${money(Number(p.gross))}`} − commission {money(Number(p.commission))} · {p.period}</span></div><span className="row" style={{ gap: 4, flexWrap: "nowrap" }}><b className="mono up">{money(Number(p.to_investor))}</b><EditDeleteButtons size="xs" label={`payout ${p.period}`} onEdit={() => setEditPay(p)} onDelete={() => setDelPay(p)} /></span></div>
                 {flag(p) && <div className="banner warn" style={{ fontSize: 12 }}>Policy flag: {flag(p)}</div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><button className="btn pri" onClick={() => setApproving(p)}>Approve with 2FA</button><button className="btn" onClick={() => setStatus(p.id, "held")}>Hold</button></div>
               </div>
@@ -160,7 +196,10 @@ export default function Admin() {
             {pays.filter((p) => p.status !== "pending").slice(0, 8).map((p) => (
               <div key={p.id} className="between" style={{ fontSize: 12.5 }}>
                 <span className="muted">{invName(p.investor_id)} · {p.period}{p.account_id ? ` · ${accName(p.account_id)}` : ""}</span>
-                {p.status === "approved" ? <button className="btn sm" onClick={() => setStatus(p.id, "paid")}>Mark paid {money(Number(p.to_investor))}</button> : p.status === "held" ? <button className="chip warn" onClick={() => setStatus(p.id, "pending")}>Held · release</button> : <Chip tone="up">Paid {money(Number(p.to_investor))}</Chip>}
+                <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
+                  {p.status === "approved" ? <button className="btn sm" onClick={() => setStatus(p.id, "paid")}>Mark paid {money(Number(p.to_investor))}</button> : p.status === "held" ? <button className="chip warn" onClick={() => setStatus(p.id, "pending")}>Held · release</button> : <Chip tone="up">Paid {money(Number(p.to_investor))}</Chip>}
+                  <EditDeleteButtons size="xs" label={`payout ${p.period}`} onEdit={() => setEditPay(p)} onDelete={() => setDelPay(p)} />
+                </span>
               </div>
             ))}
           </div>
@@ -213,6 +252,13 @@ export default function Admin() {
         )}
       </section>
 
+      {editPay && <PayoutForm key={editPay.id} p={editPay} accounts={accs.filter((a) => a.investor_id === editPay.investor_id || a.id === editPay.account_id)} onClose={() => setEditPay(null)} onDone={() => { setEditPay(null); payouts.reload(); setMsg({ ok: true, t: "Payout updated" }); }} />}
+      {delPay && (
+        <ConfirmDelete title="Delete this payout?" onConfirm={async () => { const { error } = await supabase.from("payouts").delete().eq("id", delPay.id); if (!error) payouts.reload(); return error?.message; }} onClose={() => setDelPay(null)}>
+          <span>{invName(delPay.investor_id)} · {delPay.period} · {money(Number(delPay.to_investor))} to investor · {delPay.status}</span>
+          {delPay.status === "paid" && <span className="warn">This payout is marked paid. Deleting it removes it from the investor's statements and your fee totals.</span>}
+        </ConfirmDelete>
+      )}
       {approving && (
         <div className="modal" role="dialog" aria-modal="true" aria-label="Approve payout">
           <div className="card">
