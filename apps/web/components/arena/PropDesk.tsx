@@ -9,6 +9,45 @@ import { arenaOf } from "@/lib/arenas";
 import { money, num } from "@/lib/fmt";
 import { rulesOf, stateOf, type ClosedTrade, type PropAccount } from "@/lib/propAccounts";
 import { Card, Chip, Empty, ErrorNote } from "@/components/ui";
+import { useMe } from "@/components/Shell";
+
+/** What goes to Telegram, and whether a signal's Place button sends the order to cTrader. */
+function SignalSettings() {
+  const me = useMe();
+  const [snap, setSnap] = useState<{ connected: boolean; signedIn?: boolean; execution?: boolean } | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => { staffGet<{ connected: boolean; signedIn?: boolean; execution?: boolean }>("/api/cfd/positions").then(setSnap, () => setSnap({ connected: false })); }, []);
+  const integ = me.settings?.integrations ?? { telegram_chats: [], ai_model: null };
+  const tg = integ.telegram_mode ?? "signals";
+  const mode = integ.cfd_exec?.mode ?? "off";
+  const save = async (patch: Partial<typeof integ>) => { setMsg(null); const e = await me.updateSettings({ integrations: { ...integ, ...patch } }); setMsg(e ?? "Saved"); };
+  const hostReady = !!(snap?.connected && snap.signedIn && snap.execution);
+  return (
+    <Card title="Signals & orders">
+      <div className="col" style={{ gap: 12 }}>
+        <div className="between" style={{ gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13 }}>Telegram</span>
+          <div className="seg" role="group" aria-label="Telegram">
+            {([["signals", "Signals only"], ["all", "Everything"]] as const).map(([v, l]) => <button key={v} type="button" className={tg === v ? "on" : ""} onClick={() => save({ telegram_mode: v })}>{l}</button>)}
+          </div>
+        </div>
+        <div className="between" style={{ gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13 }}>cTrader orders</span>
+          <div className="seg" role="group" aria-label="cTrader orders">
+            {([["off", "Off"], ["confirm", "Confirm"]] as const).map(([v, l]) => <button key={v} type="button" className={mode === v ? "on" : ""} onClick={() => save({ cfd_exec: { mode: v } })}>{l}</button>)}
+          </div>
+        </div>
+        <p className="faint" style={{ fontSize: 12 }}>
+          Signals only: Telegram gets each confirmed CFD signal (entry, stop loss, TP1, TP2, R:R, expiry and lots per account) and its updates, nothing else.
+          Confirm: the signal carries a Place button; one tap sends the limit order with its stop and targets to cTrader, sized under each firm&apos;s rules at that moment. Pending orders are cancelled if the setup dies or its levels move.
+        </p>
+        {mode === "confirm" && !hostReady && <p className="warn" style={{ fontSize: 12 }}>{!snap?.connected ? "The engine host is not connected." : !snap.signedIn ? "Sign in to cTrader on Integrations." : "Set CTRADER_EXECUTION=on on the engine host, redeploy, and sign in to cTrader again."} Until then Place returns an error and nothing is sent.</p>}
+        <p className="faint" style={{ fontSize: 12 }}>Place works from the app, or from your private chat with the bot (never from a group).</p>
+        {msg && <span className="faint" style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+    </Card>
+  );
+}
 import Challenges from "@/components/views/Challenges";
 
 type Account = PropAccount & { venue: string; platform: string | null; type: string };
@@ -225,6 +264,7 @@ export function AlertsTab() {
           })}
         </div>
         <div className="s4 col" style={{ gap: 16 }}>
+          <SignalSettings />
           <CTraderPositions />
           <Card title="How alerts work">
             <p className="muted" style={{ fontSize: 13 }}>When an A+ setup arms on a CFD market, each prop account gets its own size under its firm's rules. The Telegram alert has one <b>Open in cTrader</b> button per account that opens cTrader's order screen already filled in: limit entry, stop, TP1 and TP2 with that account's volume. Check it, place it, then tap <b>Taken</b>.</p>

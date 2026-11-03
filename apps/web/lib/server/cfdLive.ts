@@ -3,7 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { CTRADER_SPECS, INSTRUMENTS, TF_MS, toCTraderSymbol, type Candle, type InstrumentId } from "@aplus/engine";
 import { ENDED_TTL_MS, judge, lifecycle, type LiveOutcome, type LivePhase } from "@/lib/cfdLive";
 import { targets } from "@/lib/propAccounts";
-import { endCfdAlertNotice, reviseCfdAlert } from "@/lib/server/cfdAlerts";
+import { cfdExecMode, endCfdAlertNotice, reviseCfdAlert } from "@/lib/server/cfdAlerts";
+import { cancelOrders } from "@/lib/server/cfdOrders";
 import { evaluate } from "@/lib/server/autopilot";
 import { instrumentOk, loadCandles, loadQuote } from "@/lib/server/feeds";
 import { loadCalendar } from "@/lib/server/news";
@@ -23,7 +24,7 @@ import { errMsg } from "@/lib/server/http";
 const DETECTOR_EVERY_MS = 60_000;
 const STRIKES_TO_END = 2;
 
-export interface LiveLeg { accountId: string; name: string; lots: number; legs: number[]; risk: number; blocked: string | null; link: string | null; action: string | null }
+export interface LiveLeg { legId: string; accountId: string; name: string; lots: number; legs: number[]; risk: number; blocked: string | null; link: string | null; action: string | null; pending: number; failed: string | null }
 export interface LiveRevision { at: string; from: { entry: number; stop: number; tp1: number; tp2: number }; to: { entry: number; stop: number; tp1: number; tp2: number } }
 export interface LiveAlert {
   id: string; instrument: string; symbol: string; side: "long" | "short"; model: string | null; grade: string | null; digits: number;
@@ -37,14 +38,14 @@ export interface Forming {
   instrument: string; symbol: string; side: "long" | "short"; state: string; grade: string | null; at: string; digits: number;
   waitingFor: string[]; blockers: string[]; plan: { entry: number; stop: number; target: number } | null; price: number | null;
 }
-export interface LiveBoard { at: number; alerts: LiveAlert[]; forming: Forming[]; notes: string[] }
+export interface LiveBoard { at: number; alerts: LiveAlert[]; forming: Forming[]; notes: string[]; execMode: "off" | "confirm" }
 
 type Row = {
   id: string; signal_id: string | null; instrument: string; symbol: string; side: "long" | "short"; model: string | null; grade: string | null;
   entry: number; stop: number; tp1: number; tp2: number; expires_at: string; created_at: string; status: string; why: string[];
   phase: LivePhase; outcome: LiveOutcome | null; ended_reason: string | null; filled_at: string | null; ended_at: string | null; result_r: number | null;
   levels_at: string | null; revisions: LiveRevision[] | null; checked_at: string | null; strikes: number;
-  cfd_alert_legs: { account_id: string; lots: number; legs: number[]; risk_amount: number; blocked: string | null; link: string | null; action: string | null; trading_accounts: { name: string } | null }[];
+  cfd_alert_legs: { id: string; account_id: string; lots: number; legs: number[]; risk_amount: number; blocked: string | null; link: string | null; action: string | null; trading_accounts: { name: string } | null }[];
 };
 
 const n = (x: unknown) => Number(x);
@@ -58,7 +59,7 @@ export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean
   const now = opts.now ?? Date.now();
   const notes: string[] = [];
   const res = await db.from("cfd_alerts")
-    .select("*, cfd_alert_legs(account_id, lots, legs, risk_amount, blocked, link, action, trading_accounts(name))")
+    .select("*, cfd_alert_legs(id, account_id, lots, legs, risk_amount, blocked, link, action, trading_accounts(name))")
     .or(`phase.neq.ended,ended_at.gte.${new Date(now - ENDED_TTL_MS).toISOString()}`)
     .order("created_at", { ascending: false }).limit(40);
   if (res.error) throw new Error(res.error.message);
@@ -76,6 +77,11 @@ export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean
     const candles = c ? [...c.candles, ...(c.forming ? [c.forming] : [])] : [];
     market.set(id, { candles, price: q?.last ?? candles.at(-1)?.c ?? null, source: q?.source ?? c?.source ?? null });
   }));
+
+  // cTrader orders already sent for these alerts, and whether Place is on.
+  const ordRes = rows.length ? await db.from("cfd_orders").select("alert_id, leg_id, status, error").in("alert_id", rows.map((r) => r.id)).order("created_at") : { data: [] };
+  const orders = (ordRes.data ?? []) as (OrderRow & { alert_id: string })[];
+  const execMode = await cfdExecMode(db);
 
   // Settings, chats and calendar only when there is something to re-check or announce.
   let ctx: Awaited<ReturnType<typeof context>> | null = null;
@@ -110,7 +116,9 @@ export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean
             .eq("id", r.id).eq("levels_at", r.levels_at ?? r.created_at).select("id");
           if (!upd.error && upd.data?.length) {
             const acting = r.status === "armed" || r.status === "taken";
-            await reviseCfdAlert(db, c.chats, r.id, { instrument: r.instrument, side: r.side, entry: to.entry, stop: to.stop, target: to.tp2, expiresAt: Date.parse(r.expires_at), signalId: r.signal_id }, from, acting && c.chats.length > 0).catch(() => undefined);
+            // Orders sent at the old levels are cancelled; the update carries Place for the new ones.
+            const cancelled = await cancelOrders(db, { alertId: r.id }, "levels moved").catch(() => 0);
+            await reviseCfdAlert(db, c.chats, r.id, { instrument: r.instrument, side: r.side, entry: to.entry, stop: to.stop, target: to.tp2, expiresAt: Date.parse(r.expires_at), signalId: r.signal_id }, from, acting && c.chats.length > 0, cancelled).catch(() => undefined);
             notes.push(`${r.symbol} levels moved`);
             row = { ...row, ...to, levels_at: stamp, checked_at: stamp, strikes: 0, revisions };
             life = lifecycle({ side: r.side, ...to }, { levelsAt: now, expiresAt: Date.parse(r.expires_at) }, m!.candles, TF_MS[INSTRUMENTS[r.instrument as InstrumentId].ltf], m!.price, now);
@@ -142,6 +150,11 @@ export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean
       const upd = await db.from("cfd_alerts").update(patch).eq("id", r.id).eq("phase", r.phase).select("id");
       if (!upd.error && upd.data?.length) {
         row = { ...row, ...(patch as Partial<Row>) };
+        if (ended && !life.filledAt) {
+          // Pending cTrader orders placed from this alert are cancelled once it ends without a fill.
+          const n = await cancelOrders(db, { alertId: r.id }, `setup ${life.outcome}`).catch(() => 0);
+          if (n) notes.push(`${r.symbol}: ${n} cTrader order${n === 1 ? "" : "s"} cancelled`);
+        }
         if (ended && !life.filledAt && (life.outcome === "dead" || life.outcome === "ran_away" || r.status === "taken")) {
           const c = await getCtx();
           if (c.chats.length) await endCfdAlertNotice(db, c.chats, { id: r.id, symbol: r.symbol, side: r.side, signalId: r.signal_id }, life.outcome!, reason!).catch(() => undefined);
@@ -149,10 +162,10 @@ export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean
         if (ended) notes.push(`${r.symbol} ${life.outcome}`);
       }
     }
-    out.push(view(row, life, m ?? null));
+    out.push(view(row, life, m ?? null, orders.filter((o) => o.alert_id === r.id)));
   }
 
-  return { at: now, alerts: out, forming: await forming(db, out, now).catch(() => []), notes };
+  return { at: now, alerts: out, forming: await forming(db, out, now).catch(() => []), notes, execMode };
 }
 
 async function context(db: SupabaseClient) {
@@ -164,7 +177,9 @@ async function context(db: SupabaseClient) {
   return { settings, chats: chatsFrom(settings?.integrations?.telegram_chats), calendar: cal.items };
 }
 
-function view(r: Row, life: ReturnType<typeof lifecycle> | null, m: { price: number | null; source: string | null } | null): LiveAlert {
+type OrderRow = { leg_id: string | null; status: string; error: string | null };
+
+function view(r: Row, life: ReturnType<typeof lifecycle> | null, m: { price: number | null; source: string | null } | null, orders: OrderRow[] = []): LiveAlert {
   const entry = n(r.entry), stop = n(r.stop), tp2 = n(r.tp2), risk = Math.abs(entry - stop);
   return {
     id: r.id, instrument: r.instrument, symbol: r.symbol, side: r.side, model: r.model, grade: r.grade, digits: CTRADER_SPECS[r.symbol]?.digits ?? 2,
@@ -175,7 +190,10 @@ function view(r: Row, life: ReturnType<typeof lifecycle> | null, m: { price: num
     tp1Hit: life?.tp1Hit ?? (r.outcome === "win" || r.outcome === "partial"), r: life ? life.r : r.result_r === null ? null : n(r.result_r), toEntryR: life?.toEntryR ?? null,
     price: r.phase === "ended" ? null : m?.price ?? null, priceSource: m?.source ?? null,
     status: r.status, why: r.why ?? [], revisions: r.revisions ?? [], strikes: r.strikes,
-    legs: (r.cfd_alert_legs ?? []).map((l) => ({ accountId: l.account_id, name: l.trading_accounts?.name ?? "Account", lots: n(l.lots), legs: (l.legs ?? []).map(n), risk: n(l.risk_amount), blocked: l.blocked, link: l.link, action: l.action })),
+    legs: (r.cfd_alert_legs ?? []).map((l) => ({
+      legId: l.id, pending: orders.filter((o) => o.leg_id === l.id && o.status === "pending").length,
+      failed: orders.filter((o) => o.leg_id === l.id && o.status === "failed").at(-1)?.error ?? null,
+      accountId: l.account_id, name: l.trading_accounts?.name ?? "Account", lots: n(l.lots), legs: (l.legs ?? []).map(n), risk: n(l.risk_amount), blocked: l.blocked, link: l.link, action: l.action })),
   };
 }
 

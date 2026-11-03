@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { hasSecret, serviceClient, staffFromRequest, unauthorized } from "@/lib/server/auth";
 import { markAlert } from "@/lib/server/cfdAlerts";
+import { placeAll, placeLeg } from "@/lib/server/cfdOrders";
 import { chatsFrom, telegramApi, type Chat } from "@/lib/server/telegram";
 
 export const dynamic = "force-dynamic";
@@ -20,8 +21,24 @@ export async function POST(req: Request) {
   if (!db) return new Response("no database", { status: 503 });
   const u = (await req.json().catch(() => ({}))) as Update;
   const q = u.callback_query;
-  const m = q?.data?.match(/^cfd:([ts]):([0-9a-f-]{36})$/);
   if (!q) return Response.json({ ok: true });
+  // Place buttons send real orders: only from a private chat with the bot (never a group) that is on the list.
+  const pm = q.data?.match(/^cfd:(pa?):([0-9a-f-]{36})$/);
+  if (pm && q.message) {
+    const s0 = await db.from("app_settings").select("integrations").eq("id", 1).maybeSingle();
+    const allowed = chatsFrom((s0.data?.integrations as { telegram_chats?: Chat[] } | null)?.telegram_chats);
+    const chatId = q.message.chat.id;
+    if (chatId < 0 || !allowed.some((c) => c.id === String(chatId))) {
+      await telegramApi("answerCallbackQuery", { callback_query_id: q.id, text: "Orders can only be placed from your private chat with the bot", show_alert: true });
+      return Response.json({ ok: true });
+    }
+    await telegramApi("answerCallbackQuery", { callback_query_id: q.id, text: "Placing on cTrader…" });
+    const who = q.from?.username ? `@${q.from.username}` : q.from?.first_name ?? "telegram";
+    const r = pm[1] === "pa" ? await placeAll(db, pm[2]!, who) : await placeLeg(db, pm[2]!, who);
+    await telegramApi("sendMessage", { chat_id: chatId, text: `${r.ok ? "✅" : r.orders ? "⚠️" : "⛔"} ${r.message}`, reply_to_message_id: q.message.message_id });
+    return Response.json({ ok: true });
+  }
+  const m = q.data?.match(/^cfd:([ts]):([0-9a-f-]{36})$/);
   if (!m || !q.message) {
     await telegramApi("answerCallbackQuery", { callback_query_id: q.id });
     return Response.json({ ok: true });

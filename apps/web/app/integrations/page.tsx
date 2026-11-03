@@ -63,7 +63,7 @@ export default function IntegrationsPage() {
   const [ct, setCt] = useState<{ connected: boolean; configured?: boolean; signedIn?: boolean; error?: string | null; accounts?: { name: string | null; positions: unknown[]; syncedAt: number | null }[]; reason?: string } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => { staffGet<typeof ct>("/api/cfd/positions").then(setCt, () => setCt(null)); }, []);
-  // cTrader sends the trader back here with ?code= after the read-only sign-in.
+  // cTrader sends the trader back here with ?code= after sign-in.
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("code");
     if (!code) return;
@@ -106,8 +106,8 @@ export default function IntegrationsPage() {
       id: "ctrader", name: "cTrader · prop accounts", logo: "cT", ac: "--cfd", sub: "FundedHive · The5ers",
       status: ct?.signedIn ? "ok" : "warn", label: ct?.signedIn ? "Syncing" : "Alerts only",
       metrics: [["Accounts", String(ct?.accounts?.length ?? "—")], ["Open positions", String((ct?.accounts ?? []).reduce((n, a) => n + a.positions.length, 0))], ["Orders from app", "never"]],
-      rows: [["Telegram alerts", "cTrader signal links per account"], ["Position sync", !ct?.connected ? "needs the engine host" : !ct.configured ? "set CTRADER_CLIENT_ID / SECRET on the host" : ct.signedIn ? "read-only, every 30 s" : "sign in below"], ...(ct?.error ? [["Last error", ct.error] as [string, string]] : [])],
-      action: ct?.connected && ct.configured ? <button className="btn sm" onClick={connectCTrader}>{ct.signedIn ? "Reconnect cTrader" : "Connect cTrader (read-only)"}</button> : undefined,
+      rows: [["Telegram alerts", "cTrader signal links per account"], ["Position sync", !ct?.connected ? "needs the engine host" : !ct.configured ? "set CTRADER_CLIENT_ID / SECRET on the host" : ct.signedIn ? "every 30 s" : "sign in below"], ...(ct?.error ? [["Last error", ct.error] as [string, string]] : [])],
+      action: ct?.connected && ct.configured ? <button className="btn sm" onClick={connectCTrader}>{ct.signedIn ? "Reconnect cTrader" : "Connect cTrader"}</button> : undefined,
     },
     {
       id: "telegram", name: "Telegram", logo: "T", ac: "--info", sub: "Alerts with cTrader links and Taken / Skip", status: "warn", label: "Check buttons",

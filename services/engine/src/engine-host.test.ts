@@ -121,11 +121,13 @@ describe("MarketHub", () => {
   });
 });
 
-describe("cTrader read-only sync", async () => {
+describe("cTrader sync", async () => {
   const { PT, parsePositions } = await import("./venues/ctrader.js");
-  it("defines no order-placing messages (new order 2106, amend 2109, close 2111)", () => {
+  it("can place and cancel pending orders but never amends or closes an open position", () => {
     const types = Object.values(PT) as number[];
-    for (const t of [2106, 2107, 2108, 2109, 2110, 2111]) expect(types).not.toContain(t);
+    expect(types).toContain(2106);
+    expect(types).toContain(2108);
+    for (const t of [2109, 2110, 2111]) expect(types).not.toContain(t);
   });
   it("parses reconcile positions: volume in hundredths of a unit, money by moneyDigits", () => {
     const ps = parsePositions({
@@ -165,5 +167,20 @@ describe("cTrader deal history", () => {
     ] };
     const t = parseDeals(deals, new Map([[5, "XAUUSD"]]), new Map([[77, { sl: 3990, openedAt: 1_000, comment: "APLUS 1a2b3c4d FundedHive" }]]));
     expect(t).toEqual([{ dealId: 2, positionId: 77, symbol: "XAUUSD", side: "long", units: 1, entry: 4000, exit: 4010, sl: 3990, pnl: 8.8, fees: 1.2, openedAt: 1_000, closedAt: 9_000, balanceAfter: 100_880, comment: "APLUS 1a2b3c4d FundedHive" }]);
+  });
+});
+
+describe("cTrader orders", () => {
+  const spec = { lotSize: 10_000, minVolume: 100, stepVolume: 100, maxVolume: 10_000_000, digits: 2 };
+  it("builds a limit order with stop and target, volume rounded down to the broker step", async () => {
+    const { buildOrder } = await import("./venues/ctrader.js");
+    const o = buildOrder({ login: 1, symbol: "XAUUSD", side: "long", lots: 0.537, entry: 4000.123, stop: 3990, target: 4030, expiresAt: 1_800_000_000_000, comment: "APLUS 1a2b3c4d FH" }, spec, { ctid: 9, symbolId: 41 });
+    expect(o).toMatchObject({ ctidTraderAccountId: 9, symbolId: 41, orderType: 2, tradeSide: 1, volume: 5300, limitPrice: 4000.12, stopLoss: 3990, takeProfit: 4030, timeInForce: 1, expirationTimestamp: 1_800_000_000_000 });
+  });
+  it("refuses orders below the minimum or with levels on the wrong side", async () => {
+    const { buildOrder } = await import("./venues/ctrader.js");
+    const base = { login: 1, symbol: "XAUUSD", side: "short" as const, lots: 0.5, entry: 4000, stop: 4010, target: 3970, expiresAt: 0, comment: "" };
+    expect(() => buildOrder({ ...base, lots: 0.001 }, spec, { ctid: 1, symbolId: 1 })).toThrow(/minimum/);
+    expect(() => buildOrder({ ...base, stop: 3990 }, spec, { ctid: 1, symbolId: 1 })).toThrow(/wrong side/);
   });
 });
