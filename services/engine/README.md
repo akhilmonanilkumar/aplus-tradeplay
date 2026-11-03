@@ -11,7 +11,6 @@ what Vercel functions cannot:
 - **Tick store**: every trade into TimescaleDB, compressed after 2 days, kept 180 days, with 1-second bars.
 - **Signed API** for the web app: `/status`, `/flow`, `/candles`, `/quote`, and allow-listed trading routes per venue.
 - **Own-venue prices**: the CoinSwitch and Fyers arenas read candles and quotes from those venues through here (their keys live only on this host), and the CFD Arena reads the prop broker's cTrader feed.
-- Replaces `services/delta-relay`; the old relay request format still works, so `DELTA_RELAY_URL` can point here.
 
 Nothing trades unless that venue's `*_EXECUTION=on` is set, the endpoint is on the allowlist, and the clock is healthy.
 
@@ -50,9 +49,9 @@ Every request except `/health` carries `x-engine-ts` (ms) and
 6. **Configure**: `cp services/engine/deploy/.env.example services/engine/deploy/.env && chmod 600 services/engine/deploy/.env`,
    then fill it in (generate secrets with `openssl rand -hex 32`).
 7. **Start**: `services/engine/deploy/deploy.sh`. Caddy fetches the HTTPS certificate on first start.
-8. **Connect the web app**: in Vercel set `ENGINE_URL=https://engine.yourdomain.com` and the same `ENGINE_SECRET`;
-   optionally `DELTA_RELAY_URL` to the same URL with `DELTA_RELAY_SECRET=$ENGINE_SECRET`, then remove the
-   Delta keys from Vercel. The Integrations page shows the host, its IP and each venue's clock.
+8. **Connect the web app**: in Vercel set `ENGINE_URL=https://engine.yourdomain.com` and the same `ENGINE_SECRET`.
+   Venue keys (Delta, CoinSwitch, Fyers, cTrader) live only in this host's `.env`, never in Vercel.
+   The Integrations page shows the host, its IP and each venue's clock.
 
 Updates: run `services/engine/deploy/deploy.sh` again. Logs: `cd services/engine/deploy && docker compose logs -f engine`.
 

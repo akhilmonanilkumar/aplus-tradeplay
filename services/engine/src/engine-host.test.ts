@@ -1,6 +1,6 @@
 import { createPublicKey, verify } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { engineSignature, verifyEngine, verifyRelay } from "./auth.js";
+import { engineSignature, verifyEngine } from "./auth.js";
 import { MarketHub } from "./market.js";
 import { allowed } from "./server.js";
 import { coinswitchKey, coinswitchPath, coinswitchPublicHex, coinswitchSign } from "./venues/coinswitch.js";
@@ -70,13 +70,7 @@ describe("engine request auth", () => {
     expect(verifyEngine("s3cret", { ts, sig }, "GET", "/flow", "", 1_700_000_010_000)).toBe(false);
     expect(verifyEngine("", { ts, sig }, "GET", "/status", "", 1_700_000_010_000)).toBe(false);
   });
-  it("keeps the old relay scheme working", () => {
-    const ts = "1700000000000", body = '{"method":"GET"}';
-    const { createHmac } = require("node:crypto") as typeof import("node:crypto");
-    const sig = createHmac("sha256", "k").update(ts + body).digest("hex");
-    expect(verifyRelay("k", { ts, sig }, body, 1_700_000_000_500)).toBe(true);
-    expect(verifyRelay("k", { ts, sig }, body + " ", 1_700_000_000_500)).toBe(false);
-  });
+
 });
 
 describe("trading allowlist", () => {

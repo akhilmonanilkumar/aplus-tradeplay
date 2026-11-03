@@ -274,7 +274,7 @@ export async function liveExecTick(db: SupabaseClient, ctx: { killSwitch: boolea
 export async function liveStatus(db: SupabaseClient) {
   const st = await loadState(db);
   const env = venueEnv(st.mode === "off" || st.mode === "dry-run" ? "testnet" : st.mode);
-  const out: Record<string, unknown> = { mode: st.mode, env, deltaEnv: process.env.DELTA_ENV === "production" ? "production" : "testnet", relay: !!process.env.DELTA_RELAY_URL, keys: { testnet: deltaKeysAvailable("testnet"), production: deltaKeysAvailable("production") } };
+  const out: Record<string, unknown> = { mode: st.mode, env, deltaEnv: process.env.DELTA_ENV === "production" ? "production" : "testnet", engineHost: deltaKeysAvailable() };
   try { const p = await products(env); out.products = ["BTCUSD", "XAUTUSD"].map((s) => p.get(s) ?? { symbol: s, missing: true }); } catch (e) { out.productsError = (e as Error).message; }
   if (deltaKeysAvailable(env)) {
     const tryGet = async (path: string, query?: Record<string, string | number>) => { try { return await deltaPrivate("GET", path, { env, query }); } catch (e) { return { error: (e as Error).message }; } };

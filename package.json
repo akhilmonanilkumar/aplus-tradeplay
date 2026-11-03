@@ -6,10 +6,9 @@
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter @aplus/engine build && pnpm --filter web build",
     "test": "pnpm --filter @aplus/engine test && pnpm --filter @aplus/engine-host test && pnpm --filter web test",
-    "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm --filter web lint"
+    "typecheck": "pnpm -r typecheck"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

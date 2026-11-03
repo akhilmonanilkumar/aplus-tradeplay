@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config.js";
-import { verifyEngine, verifyRelay } from "./auth.js";
+import { verifyEngine } from "./auth.js";
 import { errMsg } from "./http.js";
 import type { MarketHub } from "./market.js";
 import type { TickStore } from "./store.js";
@@ -40,11 +40,6 @@ export function startServer(d: Deps) {
       if (method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, uptimeSec: Math.round((Date.now() - d.startedAt) / 1000) });
       const raw = method === "GET" ? "" : await readBody(req);
 
-      // Old relay clients (the web app's DELTA_RELAY_URL) keep working against this host.
-      if (method === "POST" && url.pathname === "/delta" && req.headers["x-relay-sig"]) {
-        if (!verifyRelay(config.secret, { ts: String(req.headers["x-relay-ts"] ?? ""), sig: String(req.headers["x-relay-sig"] ?? "") }, raw)) return send(res, 401, { success: false, error: "unauthorised" });
-        return proxyDelta(d, raw, res);
-      }
       if (!verifyEngine(config.secret, { ts: String(req.headers["x-engine-ts"] ?? ""), sig: String(req.headers["x-engine-sig"] ?? "") }, method, url.pathname + url.search, raw)) {
         return send(res, 401, { error: "unauthorised" });
       }

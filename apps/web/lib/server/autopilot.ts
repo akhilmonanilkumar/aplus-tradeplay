@@ -13,7 +13,6 @@ import { liveExecTick } from "@/lib/server/liveExec";
 import { venueExecTick } from "@/lib/server/venueExec";
 import { runSelector, selectorConfig, type SelectorOutcome } from "@/lib/server/selector";
 import { modelLedger, storeReleases } from "@/lib/server/ledger";
-import { basisTick } from "@/lib/server/basis";
 
 /**
  * Autopilot: runs the same detector + A+ gate as the desks on the server, on a schedule.
@@ -222,11 +221,6 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
         out.push({ instrument: "SELECTOR", state: "ERROR", action: (err as Error).message });
       }
     })(),
-    // Funding basis trade (paper): accrue settlements, exit on negative funding, enter on positive carry.
-    within(basisTick(db), TAIL_MS, "basis").then(
-      (b) => { if (b) out.push({ instrument: "BASIS", state: "PAPER", action: b }); },
-      (err) => { out.push({ instrument: "BASIS", state: "ERROR", action: (err as Error).message }); },
-    ),
     within(trackSignals(db), TAIL_MS, "ledger").then(
       (n) => { if (n) out.push({ instrument: "LEDGER", state: "TRACKED", action: `${n} signal outcome${n === 1 ? "" : "s"} updated` }); },
       (err) => { out.push({ instrument: "LEDGER", state: "ERROR", action: (err as Error).message }); },

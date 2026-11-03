@@ -9,7 +9,7 @@ export type DeltaEnv = "testnet" | "production";
 export const config = {
   port: Number(env("PORT", "8787")),
   /** Shared with the web app (ENGINE_SECRET there). Every non-health request is HMAC-signed with it. */
-  secret: env("ENGINE_SECRET") || env("DELTA_RELAY_SECRET"),
+  secret: env("ENGINE_SECRET"),
   /** Shown on the Integrations page so the whitelisted IP is visible. */
   publicIp: env("PUBLIC_IP"),
   databaseUrl: env("DATABASE_URL"),
