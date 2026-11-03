@@ -16,7 +16,10 @@ export const FYERS_API = "https://api-t1.fyers.in";
 const FYERS_RES: Record<HostTf, string> = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D" };
 const MASTER_URL = "https://public.fyers.in/sym_details/NSE_FO_sym_master.json";
 
-interface Token { access_token: string; refresh_token?: string; saved_at: number }
+interface Token { access_token: string; refresh_token?: string; saved_at: number; login_at?: number }
+
+/** Fyers refresh tokens last 15 days from the full login. */
+export const REFRESH_DAYS = 15;
 
 export const appIdHash = (appId: string, secretId: string) => createHash("sha256").update(`${appId}:${secretId}`).digest("hex");
 
@@ -69,7 +72,7 @@ export class FyersVenue extends VenueBase {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant_type: "authorization_code", appIdHash: app.hash, code }),
     });
     if (r.body?.s !== "ok" || !r.body.access_token) throw new Error(`Fyers login failed: ${r.body?.message ?? r.status}`);
-    await this.save({ access_token: r.body.access_token, refresh_token: r.body.refresh_token, saved_at: Date.now() });
+    await this.save({ access_token: r.body.access_token, refresh_token: r.body.refresh_token, saved_at: Date.now(), login_at: Date.now() });
   }
 
   /** New day: renew the access token from the 15-day refresh token and PIN, when both are present. */
@@ -158,7 +161,9 @@ export class FyersVenue extends VenueBase {
 
   status() {
     const fresh = tokenFresh(this.token);
+    const loginAt = this.token?.login_at ?? null;
     return this.baseStatus({
+      login: { fresh, at: this.token?.saved_at ?? null, renewsUntil: loginAt && this.token?.refresh_token ? loginAt + REFRESH_DAYS * 86_400_000 : null, autoRenew: !!config.fyers.pin },
       env: "production", keys: !!this.app && fresh, execution: config.fyers.execution, symbols: config.fyers.symbols,
       note: !this.app ? "Set FYERS_APP_ID and FYERS_SECRET_ID." : fresh ? undefined : "Log in for today (Integrations → Fyers).",
     });

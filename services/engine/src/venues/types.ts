@@ -9,6 +9,8 @@ export interface VenueStatus {
   stream: { state: StreamState; lastMessageAt: number | null; messages: number; reconnects: number; error: string | null };
   symbols: string[];
   note?: string;
+  /** Venues with a login session (Fyers): when it was made, and until when it renews by itself. */
+  login?: { fresh: boolean; at: number | null; renewsUntil: number | null; autoRenew: boolean };
 }
 
 /** Shared bookkeeping for every venue adapter. */
