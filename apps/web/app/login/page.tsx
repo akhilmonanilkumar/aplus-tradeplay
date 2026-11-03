@@ -36,7 +36,7 @@ export default function Login() {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)", display: "flex", flexWrap: "wrap" }}>
       <section className="hide-m" style={{ flex: "1 1 520px", padding: 48, display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 32, borderRight: "1px solid var(--line)", background: "var(--surface)" }}>
-        <div className="row"><Logo className="h-9 w-9" /><b style={{ fontSize: 18, letterSpacing: "-0.02em" }}>A+ Tradeplay</b></div>
+        <div className="row"><Logo className="h-9 w-9" /><b style={{ fontSize: 18, letterSpacing: "-0.02em" }}>Tradeplay</b></div>
         <div className="col" style={{ gap: 16, maxWidth: 480 }}>
           <h1 style={{ fontSize: 38, lineHeight: 1.08, letterSpacing: "-0.035em", fontWeight: 600 }}>One edge. Seven boxes. No exceptions.</h1>
           <div className="col" style={{ gap: 8, marginTop: 8 }}>
@@ -50,7 +50,7 @@ export default function Login() {
 
       <section style={{ flex: "1 1 420px", display: "grid", placeItems: "center", padding: "32px 16px" }}>
         <form onSubmit={submit} className="card" style={{ width: "100%", maxWidth: 400, padding: 28, display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="row show-m"><Logo className="h-9 w-9" /><b style={{ fontSize: 17 }}>A+ Tradeplay</b></div>
+          <div className="row show-m"><Logo className="h-9 w-9" /><b style={{ fontSize: 17 }}>Tradeplay</b></div>
           <div className="col" style={{ gap: 4 }}>
             <h2 style={{ fontSize: 20, letterSpacing: "-0.02em" }}>{mode === "forgot" ? "Reset password" : "Sign in"}</h2>
             <span className="muted" style={{ fontSize: 13 }}>Use the email your invite was sent to.</span>

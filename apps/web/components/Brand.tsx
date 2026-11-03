@@ -1,5 +1,5 @@
-/** A+ TradePlay mark: a peak (the "A") and a gold plus. Works on dark and light grounds. */
-export function Logo({ className = "h-8 w-8", title = "A+ TradePlay" }: { className?: string; title?: string }) {
+/** Tradeplay mark: a peak (the "A") and a gold plus. Works on dark and light grounds. */
+export function Logo({ className = "h-8 w-8", title = "Tradeplay" }: { className?: string; title?: string }) {
   return (
     <svg viewBox="0 0 64 64" className={className} role="img" aria-label={title}>
       <rect x="1" y="1" width="62" height="62" rx="16" fill="#121317" stroke="#2A2C33" strokeWidth="1.5" />

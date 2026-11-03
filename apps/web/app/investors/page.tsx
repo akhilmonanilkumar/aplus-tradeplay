@@ -170,14 +170,14 @@ export default function Investors() {
       </section>
 
       <section className="card flush">
-        <div className="ch" style={{ padding: "14px 16px 0" }}><h3>Prop account purchases</h3><span className="sp" /><span className="faint" style={{ fontSize: 12 }}>Registered to A+ Tradeplay · fees as entered</span></div>
+        <div className="ch" style={{ padding: "14px 16px 0" }}><h3>Prop account purchases</h3><span className="sp" /><span className="faint" style={{ fontSize: 12 }}>Registered to Tradeplay · fees as entered</span></div>
         {(purchases.rows ?? []).length === 0 ? <div style={{ padding: 16 }}><Empty>No purchases</Empty></div> : (
           <Table head={["Order", "For investor", "Firm · plan", "Size", "Fee", "Paid by", "Bought", "Status", ""]} right={[3, 4]}>
             {(purchases.rows ?? []).map((p) => (
               <tr key={p.id}>
                 <td className="mono faint">{p.ref}</td><td>{name(p.investor_id)}</td><td>{p.firm} · {p.plan}</td>
                 <td className="r mono">{money(Number(p.size), "USD", 0)}</td><td className="r mono">{p.fee !== null ? money(Number(p.fee)) : "—"}</td>
-                <td>{p.paid_by === "investor" ? "Investor transfer" : "A+ Tradeplay"}</td>
+                <td>{p.paid_by === "investor" ? "Investor transfer" : "Tradeplay"}</td>
                 <td className="mono faint">{dateShort((p as unknown as { purchased_at: string | null }).purchased_at)}</td>
                 <td>
                   <select className={`chip ${P_TONE[p.status]}`} aria-label="Purchase status" value={p.status} onChange={(e) => setPurchase(p.id, e.target.value)}>
@@ -215,7 +215,7 @@ export default function Investors() {
               <label className="fld"><span>Plan</span><div className="inp txt"><input value={pp.plan} onChange={(e) => setPp({ ...pp, plan: e.target.value })} /></div></label>
               <label className="fld"><span>Size</span><div className="inp"><input inputMode="decimal" value={pp.size} onChange={(e) => setPp({ ...pp, size: e.target.value })} /><span className="u">USD</span></div></label>
               <label className="fld"><span>Fee</span><div className="inp"><input inputMode="decimal" value={pp.fee} onChange={(e) => setPp({ ...pp, fee: e.target.value })} /><span className="u">USD</span></div></label>
-              <label className="fld"><span>Paid by</span><div className="inp"><select value={pp.paid_by} onChange={(e) => setPp({ ...pp, paid_by: e.target.value })}><option value="investor">Investor transfer</option><option value="aplus">A+ Tradeplay</option></select></div></label>
+              <label className="fld"><span>Paid by</span><div className="inp"><select value={pp.paid_by} onChange={(e) => setPp({ ...pp, paid_by: e.target.value })}><option value="investor">Investor transfer</option><option value="aplus">Tradeplay</option></select></div></label>
             </div>
             <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri">Save</button></div>
           </form>

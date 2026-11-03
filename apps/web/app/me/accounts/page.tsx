@@ -33,7 +33,7 @@ function Accounts() {
           const floor = r.max_loss_pct ? start * (1 - r.max_loss_pct / 100) : null;
           return (
             <div key={a.id} className="card s6" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div className="between"><div className="col" style={{ gap: 2 }}><b style={{ fontSize: 16 }}>{a.name}</b><span className="faint" style={{ fontSize: 12 }}>{a.venue}{pp ? ` · ${pp.plan}` : ""} · registered to A+ Tradeplay</span></div><Chip tone={stage === "funded" ? "up" : stage === "breached" ? "down" : stage === "managed" ? "acc" : "info"}>{stage.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())}</Chip></div>
+              <div className="between"><div className="col" style={{ gap: 2 }}><b style={{ fontSize: 16 }}>{a.name}</b><span className="faint" style={{ fontSize: 12 }}>{a.venue}{pp ? ` · ${pp.plan}` : ""} · registered to Tradeplay</span></div><Chip tone={stage === "funded" ? "up" : stage === "breached" ? "down" : stage === "managed" ? "acc" : "info"}>{stage.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())}</Chip></div>
               <div className="auto-s" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
                 <div><div className="lbl">Balance</div><b className="mono">{money(Number(a.balance), a.currency)}</b></div>
                 <div><div className="lbl">Profit this cycle</div><b className={`mono ${profit >= 0 ? "up" : "down"}`}>{profit >= 0 ? "+" : ""}{money(profit, a.currency)}</b></div>

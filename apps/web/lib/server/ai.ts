@@ -25,7 +25,7 @@ export async function complete(p: { system: string; user: string; maxTokens?: nu
         "content-type": "application/json",
         authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
         "HTTP-Referer": process.env.APP_URL || "https://tradeplay.cloud",
-        "X-Title": "A+ Tradeplay",
+        "X-Title": "Tradeplay",
       },
       body: JSON.stringify({
         model,
@@ -78,7 +78,7 @@ export async function chat(p: { system: string; turns: ChatTurn[]; maxTokens?: n
         "content-type": "application/json",
         authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
         "HTTP-Referer": process.env.APP_URL || "https://tradeplay.cloud",
-        "X-Title": "A+ Tradeplay",
+        "X-Title": "Tradeplay",
       },
       body: JSON.stringify({ model, max_tokens: p.maxTokens ?? 900, temperature: 0.3, messages }),
     });

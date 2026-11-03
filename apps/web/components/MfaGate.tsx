@@ -26,7 +26,7 @@ export default function MfaGate({ onDone }: { onDone: () => void }) {
       const verified = data.totp.find((f) => f.status === "verified");
       if (verified) return setFactorId(verified.id);
       for (const f of data.all.filter((f) => f.status !== "verified")) await supabase.auth.mfa.unenroll({ factorId: f.id });
-      const en = await supabase.auth.mfa.enroll({ factorType: "totp", friendlyName: "A+ Tradeplay" });
+      const en = await supabase.auth.mfa.enroll({ factorType: "totp", friendlyName: "Tradeplay" });
       if (en.error) return setError(en.error.message);
       setFactorId(en.data.id);
       setQr(en.data.totp.qr_code);
@@ -59,7 +59,7 @@ export default function MfaGate({ onDone }: { onDone: () => void }) {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "32px 16px", background: "var(--bg)" }}>
       <form onSubmit={(e) => { e.preventDefault(); verify(); }} className="card" style={{ width: "100%", maxWidth: 400, padding: 28, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div className="row"><Logo className="h-9 w-9" /><b style={{ fontSize: 17 }}>A+ Tradeplay</b></div>
+        <div className="row"><Logo className="h-9 w-9" /><b style={{ fontSize: 17 }}>Tradeplay</b></div>
         <div className="col" style={{ gap: 4 }}>
           <h2 style={{ fontSize: 20, letterSpacing: "-0.02em" }}>{qr ? "Set up two-factor" : "Two-factor check"}</h2>
           <span className="muted" style={{ fontSize: 13 }}>{qr ? "Scan with your authenticator app, then enter the 6-digit code." : "Enter the 6-digit code from your authenticator app."}</span>
