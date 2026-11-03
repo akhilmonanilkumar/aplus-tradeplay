@@ -105,10 +105,16 @@ export class CoinSwitchVenue extends VenueBase {
     if (tk && Date.now() - tk.t < 15_000 && (tk.last ?? tk.mark)) {
       return { last: (tk.last ?? tk.mark)!, bid: book?.bids[0]?.price ?? null, ask: book?.asks[0]?.price ?? null, ts: tk.t, source: "CoinSwitch PRO" };
     }
-    const r = await this.request<{ list: Record<string, string>[] }>("GET", "/v5/market/tickers", { category: "linear", symbol });
-    const t = r.env.result.list?.[0];
-    if (!t) throw new Error(`CoinSwitch has no ticker for ${symbol}`);
-    return { last: Number(t.lastPrice), bid: Number(t.bid1Price) || null, ask: Number(t.ask1Price) || null, ts: Date.now(), source: "CoinSwitch PRO" };
+    // HFT ticker first; the regular futures ticker works even before the HFT account is funded.
+    try {
+      const r = await this.request<{ list: Record<string, string>[] }>("GET", "/v5/market/tickers", { category: "linear", symbol });
+      const t = r.env.result.list?.[0];
+      if (t && Number(t.lastPrice) > 0) return { last: Number(t.lastPrice), bid: Number(t.bid1Price) || null, ask: Number(t.ask1Price) || null, ts: Date.now(), source: "CoinSwitch PRO" };
+    } catch { /* fall through to the futures ticker */ }
+    const j = await this.pro<{ data?: Record<string, { last_price?: string; best_bid_price?: string; best_ask_price?: string; timestamp?: number }> }>("/trade/api/v2/futures/ticker", { symbol: symbol.toLowerCase(), exchange: "EXCHANGE_2" });
+    const t = j.data?.EXCHANGE_2 ?? Object.values(j.data ?? {})[0];
+    if (!t || !(Number(t.last_price) > 0)) throw new Error(`CoinSwitch has no ticker for ${symbol}`);
+    return { last: Number(t.last_price), bid: Number(t.best_bid_price) || null, ask: Number(t.best_ask_price) || null, ts: Number(t.timestamp) || Date.now(), source: "CoinSwitch PRO" };
   }
 
   /** The envelope's `time` (ms) is the server clock. */

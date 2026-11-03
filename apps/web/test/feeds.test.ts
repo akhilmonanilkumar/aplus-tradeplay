@@ -21,7 +21,7 @@ beforeEach(() => {
     return new Response(typeof body === "string" ? body : JSON.stringify(body), { status: r[2] ?? 200 });
   }));
 });
-afterEach(() => { vi.unstubAllGlobals(); delete process.env.OANDA_API_KEY; });
+afterEach(() => { vi.unstubAllGlobals(); delete process.env.OANDA_API_KEY; delete process.env.TWELVEDATA_API_KEY; });
 
 const M5 = 300_000;
 /** n consecutive 5-minute bars ending with the currently forming one. */
@@ -76,6 +76,22 @@ describe("candles", () => {
     expect(auth.authorization).toBe("Bearer test");
   });
 
+  it("uses Twelve Data for XAUUSD when its key is set (UTC datetimes, oldest first)", async () => {
+    process.env.TWELVEDATA_API_KEY = "td";
+    const b = bars(40, 4100);
+    const iso = (t: number) => new Date(t).toISOString().slice(0, 19).replace("T", " ");
+    routes.push([/api\.twelvedata\.com\/time_series/, (url: string) => {
+      expect(url).toContain("symbol=XAU%2FUSD");
+      expect(url).toContain("interval=5min");
+      return { status: "ok", values: b.map((x) => ({ datetime: iso(x.t), open: String(x.o), high: String(x.h), low: String(x.l), close: String(x.c) })) };
+    }]);
+    const { loadCandles } = await import("@/lib/server/feeds");
+    const r = await loadCandles("XAUUSD", "5m", 30);
+    expect(r.source).toBe("Twelve Data XAU/USD");
+    expect(r.approx).toBe(false);
+    expect(r.candles.at(-1)!.t).toBe(b.at(-2)!.t);
+  });
+
   it("without keys, gold falls back to the labelled Binance XAU index", async () => {
     const b = bars(40, 4100);
     routes.push([/indexPriceKlines\?pair=XAUUSDT/, b.map((x) => [x.t, String(x.o), String(x.h), String(x.l), String(x.c)])]);
@@ -83,7 +99,7 @@ describe("candles", () => {
     const r = await loadCandles("XAUUSD", "5m", 30);
     expect(r.source).toContain("XAU index");
     expect(r.approx).toBe(true);
-    expect(r.note).toMatch(/OANDA/);
+    expect(r.note).toMatch(/cTrader/);
   });
 
   it("drops gold bars printed while the market is closed (weekend, daily break)", async () => {

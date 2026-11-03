@@ -206,7 +206,7 @@ export default function Lab({ deskId }: { deskId: DeskId }) {
             </Card>
           ) : (
             <>
-              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. An OANDA practice key gives broker-grade history.</Note>}
+              {res.approx && <Note tone="warn">Tested on {res.source}, an approximation of the traded price. Connect cTrader (or add a Twelve Data key) for broker-grade history.</Note>}
               {res.partial && <Note tone="warn">{res.partial}. Results cover less than the chosen period.</Note>}
               <div className="g12">
                 <Kpi span={3} label={`Trades · ${days}d`} value={s!.n} foot={<span className="faint">{res.signals} signals · {res.cancelled.ranAway} ran away · {res.cancelled.expired + res.cancelled.windowClosed} expired</span>} />

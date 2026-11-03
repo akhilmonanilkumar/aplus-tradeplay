@@ -19,7 +19,7 @@ Each arena reads only its own venue's prices; analytics read every record across
 
 | Arena | Markets | Source |
 |---|---|---|
-| CFD | XAUUSD, BTCUSD, EURUSD, GBPUSD, USDJPY, US500, NAS100 | The prop broker's cTrader feed (engine host), then an OANDA practice key, then free public references (labelled approximate) |
+| CFD | XAUUSD, BTCUSD, EURUSD, GBPUSD, USDJPY, US500, NAS100 | The prop broker's cTrader feed (engine host), then Twelve Data (or OANDA) if a key is set, then free public references (labelled approximate) |
 | Delta | BTCUSD and XAUTUSD perps | Delta Exchange India public REST and stream |
 | CoinSwitch | BTCUSDT futures | CoinSwitch PRO (signed, through the engine host) |
 | Fyers | Nifty 50 | Fyers (daily login, through the engine host) |
