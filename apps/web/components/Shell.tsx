@@ -314,7 +314,7 @@ function initials(name: string) {
 function Sidebar({ items, active, sub, counts, name, onNavigate }: { items: NavItem[]; active: (h: string) => boolean; sub: string; counts: Record<string, string>; name: string; onNavigate?: () => void }) {
   return (
     <aside className="side">
-      <div className="brand"><Logo /><div><b>A+ Tradeplay</b><small>{sub}</small></div></div>
+      <div className="brand"><Logo /><div><b>Tradeplay</b><small>{sub}</small></div></div>
       <nav className="navs" aria-label="Main">
         {items.map((n, i) =>
           n.h ? <div key={i} className="nav-h">{n.h}</div> : (
@@ -456,7 +456,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const sideItems = investorView && isStaff ? [...INVESTOR_NAV, { h: "Owner" }, { href: "/", l: "Back to owner console", i: "M15 18l-6-6 6-6" }] : items;
   const active = (href: string) => (href === "/" || href === "/me" ? pathname === href : pathname.startsWith(href));
   const key = TITLES[pathname] ? pathname : pathname.startsWith("/arena/") ? pathname.split("/").slice(0, 3).join("/") : "/" + pathname.split("/")[1];
-  const title = investorView && pathname === "/me" ? `Hi ${base.name.split(/[\s._-]/)[0]}` : TITLES[key] ?? "A+ Tradeplay";
+  const title = investorView && pathname === "/me" ? `Hi ${base.name.split(/[\s._-]/)[0]}` : TITLES[key] ?? "Tradeplay";
   const group = investorView ? "" : GROUPS[key] ?? "";
   const tabs = items.filter((n) => n.tl);
   const me: Me = { ...base, isStaff, settings, updateSettings, stepUp };

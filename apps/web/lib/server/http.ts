@@ -6,7 +6,7 @@ export async function getJson<T>(url: string, init: RequestInit & { timeoutMs?: 
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { cache: "no-store", ...rest, signal: ctl.signal, headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (A+ Tradeplay desk)", ...(rest.headers ?? {}) } });
+    const res = await fetch(url, { cache: "no-store", ...rest, signal: ctl.signal, headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (Tradeplay desk)", ...(rest.headers ?? {}) } });
     if (!res.ok) throw new Error(`${new URL(url).host} HTTP ${res.status}`);
     return (await res.json()) as T;
   } catch (e) {
@@ -21,7 +21,7 @@ export async function getText(url: string, timeoutMs = 8000): Promise<string> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { cache: "no-store", signal: ctl.signal, headers: { "user-agent": "Mozilla/5.0 (A+ Tradeplay desk)", accept: "application/rss+xml, application/xml, text/xml, */*" } });
+    const res = await fetch(url, { cache: "no-store", signal: ctl.signal, headers: { "user-agent": "Mozilla/5.0 (Tradeplay desk)", accept: "application/rss+xml, application/xml, text/xml, */*" } });
     if (!res.ok) throw new Error(`${new URL(url).host} HTTP ${res.status}`);
     return await res.text();
   } finally {

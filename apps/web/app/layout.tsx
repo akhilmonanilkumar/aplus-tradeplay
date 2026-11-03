@@ -11,16 +11,16 @@ const siteUrl =
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: { default: "A+ Tradeplay", template: "%s · A+ Tradeplay" },
+  title: { default: "Tradeplay", template: "%s · Tradeplay" },
   description: "Only the A+ trades.",
-  applicationName: "A+ Tradeplay",
+  applicationName: "Tradeplay",
   robots: { index: false, follow: false },
   icons: {
     icon: [{ url: "/favicon.ico", sizes: "any" }, { url: "/icon.svg", type: "image/svg+xml" }],
     apple: "/apple-touch-icon.png",
   },
-  openGraph: { title: "A+ Tradeplay", description: "Only the A+ trades.", images: [{ url: "/og.png", width: 1200, height: 630 }], type: "website" },
-  appleWebApp: { capable: true, title: "A+ Tradeplay", statusBarStyle: "black-translucent" },
+  openGraph: { title: "Tradeplay", description: "Only the A+ trades.", images: [{ url: "/og.png", width: 1200, height: 630 }], type: "website" },
+  appleWebApp: { capable: true, title: "Tradeplay", statusBarStyle: "black-translucent" },
 };
 
 export const viewport: Viewport = {
