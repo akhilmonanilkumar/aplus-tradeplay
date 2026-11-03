@@ -24,9 +24,21 @@ export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, 
 export type InlineButton = { text: string; url: string } | { text: string; callback_data: string };
 export interface ReplyMarkup { inline_keyboard: InlineButton[][] }
 
+/**
+ * Telegram carries only confirmed CFD signals (and their updates and cancellations) unless Settings turn
+ * "everything" back on. Manual sends and tests always go through.
+ */
+export const signalsOnlyAllows = (kind: string, source: string) => kind === "CFD" || source === "manual";
+
+export async function telegramMode(db: SupabaseClient): Promise<"signals" | "all"> {
+  const s = await db.from("app_settings").select("integrations").eq("id", 1).maybeSingle();
+  return (s.data?.integrations as { telegram_mode?: string } | null)?.telegram_mode === "all" ? "all" : "signals";
+}
+
 export async function sendTelegram(db: SupabaseClient, msg: { text: string; chats: Chat[]; kind: string; instrument?: string | null; signalId?: string | null; source: "manual" | "autopilot" | "system"; markup?: ReplyMarkup; cfdAlertId?: string | null }) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const results: { chat: string; ok: boolean; error?: string }[] = [];
+  if (!signalsOnlyAllows(msg.kind, msg.source) && (await telegramMode(db)) === "signals") return { results, error: null, skipped: true as const };
   if (!msg.chats.length) return { results, error: "No Telegram chats configured" };
   for (const c of msg.chats) {
     let ok = false, error: string | undefined, messageId: number | null = null;

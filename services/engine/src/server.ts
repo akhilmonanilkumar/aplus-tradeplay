@@ -7,7 +7,7 @@ import type { TickStore } from "./store.js";
 import type { CoinSwitchVenue } from "./venues/coinswitch.js";
 import type { DeltaVenue } from "./venues/delta.js";
 import type { FyersVenue } from "./venues/fyers.js";
-import type { CTraderSync } from "./venues/ctrader.js";
+import type { CTraderSync, OrderRequest } from "./venues/ctrader.js";
 import { HOST_TF_MS, isHostTf, remember } from "./candles.js";
 
 /** Trading endpoints each venue may reach. Anything else is refused. Writes also need the venue's execution switch. */
@@ -85,6 +85,15 @@ export function startServer(d: Deps) {
       if (method === "GET" && url.pathname === "/ctrader/closed") {
         const from = Number(url.searchParams.get("from") ?? 0) || Date.now() - 30 * 86_400_000;
         return send(res, 200, { accounts: await remember(`ct:closed:${Math.floor(from / 60_000)}`, 60_000, () => d.ctrader.closed(from)) });
+      }
+      if (method === "POST" && url.pathname === "/ctrader/order") {
+        const r = JSON.parse(raw) as OrderRequest;
+        return send(res, 200, await d.ctrader.placeOrder(r));
+      }
+      if (method === "POST" && url.pathname === "/ctrader/cancel") {
+        const { login, orderId } = JSON.parse(raw) as { login?: number; orderId?: number };
+        if (!login || !orderId) return send(res, 400, { error: "login and orderId are required" });
+        return send(res, 200, await d.ctrader.cancelOrder(login, orderId));
       }
       if (method === "GET" && url.pathname === "/ctrader/auth-url") return send(res, 200, { url: d.ctrader.authUrl() });
       if (method === "POST" && url.pathname === "/ctrader/code") {

@@ -122,9 +122,11 @@ function Levels({ a, now }: { a: LiveAlert; now: number }) {
   );
 }
 
-function AlertCard({ a, now, busy, act }: { a: LiveAlert; now: number; busy: boolean; act: (id: string, action: "taken" | "skipped") => void }) {
+function AlertCard({ a, now, busy, act, place, canPlace }: { a: LiveAlert; now: number; busy: boolean; act: (id: string, action: "taken" | "skipped") => void; place: (body: { legId?: string; alertId?: string }) => void; canPlace: boolean }) {
   const open = a.phase !== "ended";
   const unfilled = a.phase === "armed" || a.phase === "trigger";
+  const placeable = canPlace && unfilled && a.status !== "skipped";
+  const ready = a.legs.filter((l) => !l.blocked);
   const tone = a.phase === "trigger" ? (a.side === "long" ? "up" : "down") : a.phase === "in_trade" ? "info" : a.phase === "armed" ? "warn" : "";
   return (
     <div className={`cl-card ${tone} ${open ? "" : "done"}`}>
@@ -150,15 +152,20 @@ function AlertCard({ a, now, busy, act }: { a: LiveAlert; now: number; busy: boo
       {open && a.legs.length > 0 && (
         <div className="cl-legs">
           {a.legs.map((l) => (
-            <div key={l.accountId} className="between" style={{ gap: 8 }}>
+            <div key={l.accountId} className="between" style={{ gap: 8, flexWrap: "wrap" }}>
               <span style={{ fontSize: 12.5, minWidth: 0 }}><b style={{ fontWeight: 500 }}>{l.name}</b> {l.blocked ? <span className="down">· {l.blocked}</span> : <span className="muted">· {num(l.lots, 2)} lots · ${num(l.risk, 0)}</span>}</span>
               <span className="row" style={{ gap: 6 }}>
-                {l.action && <Chip tone={l.action === "taken" ? "up" : ""}>{l.action}</Chip>}
-                {unfilled && l.link && <a className="btn sm" href={l.link} target="_blank" rel="noopener noreferrer">cTrader</a>}
+                {l.pending > 0 ? <Chip tone="up" dot>{l.pending} order{l.pending === 1 ? "" : "s"} on cTrader</Chip> : l.action && <Chip tone={l.action === "taken" ? "up" : ""}>{l.action}</Chip>}
+                {placeable && !l.blocked && <button type="button" className={`btn sm ${l.pending ? "" : "pri"}`} disabled={busy} onClick={() => place({ legId: l.legId })}>{l.pending ? "Replace" : "Place"}</button>}
+                {!placeable && unfilled && l.link && <a className="btn sm" href={l.link} target="_blank" rel="noopener noreferrer">cTrader</a>}
               </span>
+              {l.failed && !l.pending && <span className="down" style={{ fontSize: 11.5, flexBasis: "100%" }}>Last order failed: {l.failed}</span>}
             </div>
           ))}
-          {unfilled && a.status === "armed" && (
+          {placeable && ready.length > 1 && !ready.some((l) => l.pending) && (
+            <button type="button" className="btn pri sm" style={{ marginTop: 4 }} disabled={busy} onClick={() => place({ alertId: a.id })}>Place on all {ready.length} accounts</button>
+          )}
+          {unfilled && a.status === "armed" && !placeable && (
             <div className="row" style={{ gap: 6, marginTop: 4 }}>
               <button className="btn pri sm" disabled={busy} onClick={() => act(a.id, "taken")}>Taken</button>
               <button className="btn ghost sm" disabled={busy} onClick={() => act(a.id, "skipped")}>Skip</button>
@@ -216,6 +223,12 @@ export function CfdLive() {
     setBusy(true); setErr(null);
     try { await staffPost("/api/cfd/alerts", { action, alertId }); reload(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
+  const [placed, setPlaced] = useState<string | null>(null);
+  const place = async (body: { legId?: string; alertId?: string }) => {
+    setBusy(true); setErr(null); setPlaced(null);
+    try { const r = await staffPost<{ message: string }>("/api/cfd/orders", body); setPlaced(r.message); reload(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const canPlace = d?.execMode === "confirm";
 
   const alerts = [...(d?.alerts ?? [])].sort((a, b) => RANK[a.phase]! - RANK[b.phase]! || Date.parse(b.endedAt ?? b.createdAt) - Date.parse(a.endedAt ?? a.createdAt));
   const live = alerts.filter((a) => a.phase !== "ended");
@@ -242,13 +255,14 @@ export function CfdLive() {
         </div>
       </div>
       <ErrorNote error={error || err} />
+      {placed && <p className="up" style={{ fontSize: 12.5, margin: "8px 0 0", whiteSpace: "pre-line" }}>{placed}</p>}
       {d && live.length === 0 && forming.length === 0 && (
         <p className="muted" style={{ fontSize: 13, margin: "12px 0 0" }}>Nothing armed or forming on the CFD markets. Setups appear here from the sweep onwards; confirmed ones get live entry, stop and targets.</p>
       )}
       {(live.length > 0 || (showEnded && ended.length > 0)) && (
         <div className="cl-grid">
-          {live.map((a) => <AlertCard key={a.id} a={a} now={now} busy={busy} act={act} />)}
-          {showEnded && ended.map((a) => <AlertCard key={a.id} a={a} now={now} busy={busy} act={act} />)}
+          {live.map((a) => <AlertCard key={a.id} a={a} now={now} busy={busy} act={act} place={place} canPlace={canPlace} />)}
+          {showEnded && ended.map((a) => <AlertCard key={a.id} a={a} now={now} busy={busy} act={act} place={place} canPlace={canPlace} />)}
         </div>
       )}
       {forming.length > 0 && (

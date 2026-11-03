@@ -4,17 +4,20 @@ import { timedFetch } from "../http.js";
 import { HOST_TF_MS, type HostCandle, type HostQuote, type HostTf } from "../candles.js";
 
 /**
- * cTrader Open API, read-only: balances and open positions of the prop accounts, so the CFD Arena tracks
- * what was actually placed from the alert links, and the CFD Arena's prices (trendbars and live spots)
- * straight from the prop broker's own feed. Uses the JSON protocol on port 5036 and the "accounts"
- * scope; this code sends no trading messages.
+ * cTrader Open API: balances, positions and closed deals of the prop accounts, the CFD Arena's prices
+ * (trendbars and live spots) from the prop broker's own feed, and limit orders placed on request.
+ * Orders go out only when CTRADER_EXECUTION=on on this host and the app asks for one (confirm mode:
+ * the trader taps Place); every order carries its stop loss and take profit. JSON protocol on port 5036.
  */
 export const CT_HOSTS = { live: "wss://live.ctraderapi.com:5036", demo: "wss://demo.ctraderapi.com:5036" } as const;
 export const PT = {
   HEARTBEAT: 51,
   APP_AUTH_REQ: 2100, APP_AUTH_RES: 2101,
   ACCOUNT_AUTH_REQ: 2102, ACCOUNT_AUTH_RES: 2103,
+  NEW_ORDER_REQ: 2106, CANCEL_ORDER_REQ: 2108,
   SYMBOLS_LIST_REQ: 2114, SYMBOLS_LIST_RES: 2115,
+  SYMBOL_BY_ID_REQ: 2116, SYMBOL_BY_ID_RES: 2117,
+  ORDER_ERROR_EVENT: 2132,
   SUBSCRIBE_SPOTS_REQ: 2127, SUBSCRIBE_SPOTS_RES: 2128, SPOT_EVENT: 2131,
   GET_TRENDBARS_REQ: 2137, GET_TRENDBARS_RES: 2138,
   TRADER_REQ: 2121, TRADER_RES: 2122,
@@ -36,6 +39,30 @@ export interface CtAccount { ctid: number; login: number | null; isLive: boolean
 
 interface Token { access_token: string; refresh_token?: string; saved_at: number }
 type Msg = { payloadType: number; clientMsgId?: string; payload?: Record<string, unknown> };
+
+/** What the app asks for: one limit order with its stop and target. */
+export interface OrderRequest { login: number; symbol: string; side: "long" | "short"; lots: number; entry: number; stop: number; target: number; expiresAt: number; comment: string; label?: string }
+export interface SymbolSpec { lotSize: number; minVolume: number; stepVolume: number; maxVolume: number | null; digits: number }
+
+/**
+ * Lots → cTrader volume (hundredths of a unit), rounded down to the symbol's step; prices to its digits.
+ * Refuses orders below the minimum, without a stop, or with the stop or target on the wrong side.
+ */
+export function buildOrder(r: OrderRequest, spec: SymbolSpec, ids: { ctid: number; symbolId: number }) {
+  const long = r.side === "long";
+  if (!(r.stop > 0) || !(r.target > 0) || !(r.entry > 0)) throw new Error("entry, stop and target are required");
+  if (long ? !(r.stop < r.entry && r.target > r.entry) : !(r.stop > r.entry && r.target < r.entry)) throw new Error("stop and target are on the wrong side of the entry");
+  const raw = r.lots * spec.lotSize;
+  const volume = Math.floor(raw / spec.stepVolume) * spec.stepVolume;
+  if (volume < spec.minVolume) throw new Error(`size ${r.lots} lots is below the broker minimum`);
+  if (spec.maxVolume && volume > spec.maxVolume) throw new Error(`size ${r.lots} lots is above the broker maximum`);
+  const px = (x: number) => Number(x.toFixed(spec.digits));
+  return {
+    ctidTraderAccountId: ids.ctid, symbolId: ids.symbolId, orderType: 2, tradeSide: long ? 1 : 2, volume,
+    limitPrice: px(r.entry), stopLoss: px(r.stop), takeProfit: px(r.target),
+    timeInForce: 1, expirationTimestamp: Math.round(r.expiresAt), comment: r.comment.slice(0, 100), label: (r.label ?? "Tradeplay").slice(0, 100),
+  };
+}
 
 /** ProtoOATrendbarPeriod values. */
 const PERIOD: Record<HostTf, number> = { "1m": 1, "5m": 5, "15m": 7, "1h": 9, "4h": 10, "1d": 12 };
@@ -123,11 +150,12 @@ export class CTraderSync {
   private pending = new Map<string, { resolve: (m: Msg) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private spots = new Map<string, { bid: number | null; ask: number | null; ts: number }>();
   private subscribed = new Set<string>();
+  private specs = new Map<string, SymbolSpec>();
   /** Stop, open time and comment of every position seen open, so closed trades keep them. */
   private seen = new Map<number, { sl: number | null; openedAt: number; comment: string | null }>();
   error: string | null = null;
 
-  constructor(private readonly cfg: { clientId: string; clientSecret: string; redirectUri: string; tokenFile: string; symbolMap?: Record<string, string> }) {}
+  constructor(private readonly cfg: { clientId: string; clientSecret: string; redirectUri: string; tokenFile: string; symbolMap?: Record<string, string>; execution?: boolean }) {}
 
   get configured() { return !!(this.cfg.clientId && this.cfg.clientSecret); }
 
@@ -142,9 +170,9 @@ export class CTraderSync {
 
   stop() { for (const t of this.timers) clearInterval(t); for (const ws of Object.values(this.sockets)) ws?.close(); }
 
-  /** Link the trader signs in to; the "accounts" scope is read-only. */
+  /** Link the trader signs in to: "trading" when this host may place orders, else the read-only "accounts" scope. */
   authUrl() {
-    const q = new URLSearchParams({ client_id: this.cfg.clientId, redirect_uri: this.cfg.redirectUri, scope: "accounts", product: "web" });
+    const q = new URLSearchParams({ client_id: this.cfg.clientId, redirect_uri: this.cfg.redirectUri, scope: this.cfg.execution ? "trading" : "accounts", product: "web" });
     return `https://id.ctrader.com/my/settings/openapi/grantingaccess/?${q}`;
   }
 
@@ -237,6 +265,56 @@ export class CTraderSync {
     return out;
   }
 
+  /** The account authorised for a login, with its socket. */
+  private byLogin(login: number) {
+    for (const a of this.accounts.values()) {
+      if (a.login !== login) continue;
+      const ws = this.sockets[a.isLive ? "live" : "demo"];
+      const names = this.symbols.get(a.ctid);
+      if (ws?.readyState === WebSocket.OPEN && names?.size) return { ctid: a.ctid, ws, names };
+      throw new Error(`cTrader account ${login} is still connecting`);
+    }
+    throw new Error(`cTrader account ${login} is not on this sign-in`);
+  }
+
+  private async spec(ws: WebSocket, ctid: number, symbolId: number): Promise<SymbolSpec> {
+    const k = `${ctid}:${symbolId}`;
+    const hit = this.specs.get(k);
+    if (hit) return hit;
+    const m = await this.call(ws, PT.SYMBOL_BY_ID_REQ, { ctidTraderAccountId: ctid, symbolId: [symbolId] });
+    const sym = ((m.payload?.symbol as Record<string, unknown>[] | undefined) ?? [])[0];
+    if (!sym) throw new Error("cTrader returned no symbol details");
+    const spec: SymbolSpec = {
+      lotSize: Number(sym.lotSize ?? 0), minVolume: Number(sym.minVolume ?? 0), stepVolume: Number(sym.stepVolume ?? 1),
+      maxVolume: sym.maxVolume === undefined ? null : Number(sym.maxVolume), digits: Number(sym.digits ?? 5),
+    };
+    if (!(spec.lotSize > 0) || !(spec.stepVolume > 0)) throw new Error("cTrader symbol details are incomplete");
+    this.specs.set(k, spec);
+    return spec;
+  }
+
+  /** Place one limit order (stop and target attached). Refused unless CTRADER_EXECUTION=on. */
+  async placeOrder(r: OrderRequest) {
+    if (!this.cfg.execution) throw new Error("cTrader execution is off on the engine host (CTRADER_EXECUTION)");
+    const a = this.byLogin(r.login);
+    const symbolId = matchSymbol(r.symbol, a.names, this.cfg.symbolMap);
+    if (symbolId === null) throw new Error(`${r.symbol} is not in this account's symbol list; map it with CTRADER_SYMBOL_MAP`);
+    const body = buildOrder(r, await this.spec(a.ws, a.ctid, symbolId), { ctid: a.ctid, symbolId });
+    const m = await this.call(a.ws, PT.NEW_ORDER_REQ, body, 15_000);
+    const order = (m.payload?.order ?? {}) as Record<string, unknown>;
+    this.request(a.ws, a.ctid);
+    return { orderId: Number(order.orderId ?? 0) || null, positionId: Number((m.payload?.position as Record<string, unknown> | undefined)?.positionId ?? 0) || null, volume: body.volume, executionType: m.payload?.executionType ?? null };
+  }
+
+  /** Cancel a pending order (used when a setup dies or its levels move). */
+  async cancelOrder(login: number, orderId: number) {
+    if (!this.cfg.execution) throw new Error("cTrader execution is off on the engine host (CTRADER_EXECUTION)");
+    const a = this.byLogin(login);
+    await this.call(a.ws, PT.CANCEL_ORDER_REQ, { ctidTraderAccountId: a.ctid, orderId }, 15_000);
+    this.request(a.ws, a.ctid);
+    return { ok: true };
+  }
+
   /** Live bid / ask from the broker's spot stream (subscribed on first use). */
   async quote(symbol: string): Promise<HostQuote> {
     const f = this.symbolId(symbol);
@@ -277,7 +355,7 @@ export class CTraderSync {
     if (waiting && m.payloadType !== PT.HEARTBEAT) {
       this.pending.delete(m.clientMsgId!);
       clearTimeout(waiting.timer);
-      if (m.payloadType === PT.ERROR_RES || m.payloadType === 50) waiting.reject(new Error(`cTrader: ${String(p.errorCode ?? "error")} ${String(p.description ?? "")}`.trim()));
+      if (m.payloadType === PT.ERROR_RES || m.payloadType === PT.ORDER_ERROR_EVENT || m.payloadType === 50) waiting.reject(new Error(`cTrader: ${String(p.errorCode ?? "error")} ${String(p.description ?? "")}`.trim()));
       else waiting.resolve(m);
       return;
     }
@@ -350,6 +428,6 @@ export class CTraderSync {
   }
 
   snapshot() {
-    return { configured: this.configured, signedIn: !!this.token, error: this.error, accounts: [...this.accounts.values()], priceFeed: this.feed() ? "connected" : "not connected" };
+    return { configured: this.configured, signedIn: !!this.token, execution: !!this.cfg.execution, error: this.error, accounts: [...this.accounts.values()], priceFeed: this.feed() ? "connected" : "not connected" };
   }
 }

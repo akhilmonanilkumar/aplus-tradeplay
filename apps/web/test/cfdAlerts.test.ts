@@ -48,9 +48,13 @@ describe("CFD alerts", () => {
       { name: "FundedHive", lots: 0.69, legs: [0.34, 0.35], risk: 517.5, blocked: null, bound: "risk" },
       { name: "The5ers", lots: 0, legs: [], risk: 0, blocked: "account breached: daily loss", bound: "daily room" },
     ]);
-    expect(text).toContain("A+ ARMED · XAUUSD LONG");
-    expect(text).toContain("Entry 4,031.90 (limit, expires 16:00 UTC)");
-    expect(text).toContain("FundedHive: <b>0.69 lots</b> (0.34 + 0.35) · risk $518");
+    expect(text).toContain("🟢 <b>BUY XAUUSD</b> · A+ signal");
+    expect(text).toContain("Entry (limit): <b>4,031.90</b>");
+    expect(text).toMatch(/Stop loss: <b>[\d,.]+<\/b>/);
+    expect(text).toMatch(/TP1: <b>[\d,.]+<\/b> \(\d+\.\dR\)/);
+    expect(text).toMatch(/TP2: <b>[\d,.]+<\/b> \(\d+\.\dR\)/);
+    expect(text).toContain("Expires: 21:30 IST");
+    expect(text).toContain("FundedHive: <b>0.69 lots</b> (0.34 at TP1 + 0.35 at TP2) · risk $518");
     expect(text).toContain("⛔ The5ers: account breached: daily loss");
     const b = alertButtons("id-1", [{ name: "FundedHive", lots: 0.69, link: "https://app.ctrader.com/signal?s=XAUUSD" }, { name: "The5ers", lots: 0, link: null }]);
     expect(b).toHaveLength(2);

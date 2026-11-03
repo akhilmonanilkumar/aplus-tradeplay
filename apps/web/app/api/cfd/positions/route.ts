@@ -16,11 +16,11 @@ export async function GET(req: Request) {
   if (!db) return unauthorized();
   if (!engineConfigured()) return json({ connected: false, reason: "The engine host is not connected" });
   try {
-    const snap = await engineFetch<{ configured: boolean; signedIn: boolean; error: string | null; accounts: CtAccount[] }>("GET", "/ctrader");
+    const snap = await engineFetch<{ configured: boolean; signedIn: boolean; execution?: boolean; error: string | null; accounts: CtAccount[] }>("GET", "/ctrader");
     const accs = await db.from("trading_accounts").select("id, name, broker_account").eq("active", true);
     const byLogin = new Map((accs.data ?? []).filter((a) => a.broker_account).map((a) => [String(a.broker_account).trim(), a]));
     return json({
-      connected: true, configured: snap.configured, signedIn: snap.signedIn, error: snap.error,
+      connected: true, configured: snap.configured, signedIn: snap.signedIn, execution: !!snap.execution, error: snap.error,
       accounts: snap.accounts.map((c) => { const a = c.login !== null ? byLogin.get(String(c.login)) : undefined; return { ...c, accountId: a?.id ?? null, name: a?.name ?? null }; }),
     });
   } catch (e) {
