@@ -15,19 +15,19 @@ describe("venue execution plans", () => {
     expect(niftyFuture(new Date("2026-12-30T05:00:00Z")).symbol).toBe("NSE:NIFTY27JANFUT");
   });
   it("maps only the markets each venue trades", () => {
-    expect(venueProduct("coinswitch", "BTCUSDT.P")?.symbol).toBe("BTCUSDT");
-    expect(venueProduct("coinswitch", "XAUUSDT.P")).toBeNull();
+    expect(venueProduct("coinswitch", "BTCUSDT.CS")?.symbol).toBe("BTCUSDT");
+    expect(venueProduct("coinswitch", "BTCUSD.DELTA")).toBeNull();
     expect(venueProduct("fyers", "NIFTY", new Date("2026-11-10T05:00:00Z"))?.contractValue).toBe(75);
-    expect(venueProduct("fyers", "BTCUSDT.P")).toBeNull();
+    expect(venueProduct("fyers", "BTCUSDT.CS")).toBeNull();
   });
   it("sizes CoinSwitch in quantity steps and builds the order with stop and target", () => {
-    const product = venueProduct("coinswitch", "BTCUSDT.P")!;
+    const product = venueProduct("coinswitch", "BTCUSDT.CS")!;
     const r = base(product, 1000, { side: "long", entry: 100_000, stop: 99_500, target: 101_500 }, 100_000);
     expect(r.ok).toBe(true);
-    // 0.5% of 1,000 = $5; one 0.001 BTC step loses $0.50 at the stop + $0.10 fees = $0.60 → 8 steps
-    expect(r.plan!.contracts).toBe(8);
+    // 0.5% of 1,000 = $5; one 0.001 BTC step loses $0.50 at the stop + $0.16 fees = $0.66 → 7 steps
+    expect(r.plan!.contracts).toBe(7);
     const o = coinswitchOrder(r.plan!, product, "sig123");
-    expect(o.body).toEqual({ category: "linear", symbol: "BTCUSDT", side: "Buy", orderType: "Limit", qty: "0.008", price: "100000", positionIdx: 0, timeInForce: "GTC", orderLinkId: "sig123", stopLoss: "99500", takeProfit: "101500" });
+    expect(o.body).toEqual({ category: "linear", symbol: "BTCUSDT", side: "Buy", orderType: "Limit", qty: "0.007", price: "100000", positionIdx: 0, timeInForce: "GTC", orderLinkId: "sig123", stopLoss: "99500", takeProfit: "101500" });
   });
   it("sizes Fyers in lots and builds entry, stop and target orders", () => {
     const product = venueProduct("fyers", "NIFTY", new Date("2026-11-10T05:00:00Z"))!;

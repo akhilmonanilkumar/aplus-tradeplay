@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { config } from "./config.js";
-import { verifyEngine, verifyRelay } from "./auth.js";
+import { verifyEngine } from "./auth.js";
 import { errMsg } from "./http.js";
 import type { MarketHub } from "./market.js";
 import type { TickStore } from "./store.js";
@@ -8,6 +8,7 @@ import type { CoinSwitchVenue } from "./venues/coinswitch.js";
 import type { DeltaVenue } from "./venues/delta.js";
 import type { FyersVenue } from "./venues/fyers.js";
 import type { CTraderSync } from "./venues/ctrader.js";
+import { HOST_TF_MS, isHostTf, remember } from "./candles.js";
 
 /** Trading endpoints each venue may reach. Anything else is refused. Writes also need the venue's execution switch. */
 export const ALLOW = {
@@ -39,11 +40,6 @@ export function startServer(d: Deps) {
       if (method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, uptimeSec: Math.round((Date.now() - d.startedAt) / 1000) });
       const raw = method === "GET" ? "" : await readBody(req);
 
-      // Old relay clients (the web app's DELTA_RELAY_URL) keep working against this host.
-      if (method === "POST" && url.pathname === "/delta" && req.headers["x-relay-sig"]) {
-        if (!verifyRelay(config.secret, { ts: String(req.headers["x-relay-ts"] ?? ""), sig: String(req.headers["x-relay-sig"] ?? "") }, raw)) return send(res, 401, { success: false, error: "unauthorised" });
-        return proxyDelta(d, raw, res);
-      }
       if (!verifyEngine(config.secret, { ts: String(req.headers["x-engine-ts"] ?? ""), sig: String(req.headers["x-engine-sig"] ?? "") }, method, url.pathname + url.search, raw)) {
         return send(res, 401, { error: "unauthorised" });
       }
@@ -62,6 +58,21 @@ export function startServer(d: Deps) {
         });
         return snap ? send(res, 200, snap) : send(res, 404, { error: `no data for ${venue}:${symbol} yet` });
       }
+      if (method === "GET" && (url.pathname === "/candles" || url.pathname === "/quote")) {
+        const venue = url.searchParams.get("venue") ?? "", symbol = url.searchParams.get("symbol") ?? "";
+        const src = venue === "coinswitch" ? d.coinswitch : venue === "fyers" ? d.fyers : venue === "ctrader" ? d.ctrader : null;
+        if (!src || !symbol) return send(res, 400, { error: "venue (coinswitch, fyers or ctrader) and symbol are required" });
+        if (url.pathname === "/quote") return send(res, 200, await remember(`q:${venue}:${symbol}`, 1_500, () => src.quote(symbol)));
+        const tf = url.searchParams.get("tf");
+        if (!isHostTf(tf)) return send(res, 400, { error: "tf must be 1m, 5m, 15m, 1h, 4h or 1d" });
+        const limit = Math.min(5000, Math.max(1, Number(url.searchParams.get("limit") ?? 300)));
+        const end = Number(url.searchParams.get("end") ?? 0) || Date.now();
+        // Live reads share one pull per bar step; history pages (an explicit end) are cached longer.
+        const ttl = url.searchParams.get("end") ? 600_000 : Math.min(30_000, HOST_TF_MS[tf] / 10);
+        const bucket = url.searchParams.get("end") ? end : Math.floor(end / ttl);
+        const candles = await remember(`c:${venue}:${symbol}:${tf}:${limit}:${bucket}`, ttl, () => src.candles(symbol, tf, limit, end));
+        return send(res, 200, { venue, symbol, tf, candles });
+      }
       if (method === "POST" && url.pathname === "/delta") return proxyDelta(d, raw, res);
       if (method === "POST" && url.pathname === "/coinswitch") {
         const r = JSON.parse(raw) as { method: string; path: string; params?: Record<string, string | number>; body?: unknown };
@@ -71,6 +82,10 @@ export function startServer(d: Deps) {
         return send(res, 200, out.env);
       }
       if (method === "GET" && url.pathname === "/ctrader") return send(res, 200, d.ctrader.snapshot());
+      if (method === "GET" && url.pathname === "/ctrader/closed") {
+        const from = Number(url.searchParams.get("from") ?? 0) || Date.now() - 30 * 86_400_000;
+        return send(res, 200, { accounts: await remember(`ct:closed:${Math.floor(from / 60_000)}`, 60_000, () => d.ctrader.closed(from)) });
+      }
       if (method === "GET" && url.pathname === "/ctrader/auth-url") return send(res, 200, { url: d.ctrader.authUrl() });
       if (method === "POST" && url.pathname === "/ctrader/code") {
         const { code } = JSON.parse(raw) as { code?: string };

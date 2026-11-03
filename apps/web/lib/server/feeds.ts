@@ -1,15 +1,20 @@
 import "server-only";
 import { INSTRUMENTS, TF_MS, isFxClosed, type Candle, type InstrumentId, type Tf } from "@aplus/engine";
 import { cached, errMsg, getJson } from "@/lib/server/http";
-import { deltaCandles } from "@/lib/server/delta";
+import { deltaCandles, deltaPublic, type DeltaTicker } from "@/lib/server/delta";
+import { engineConfigured, engineFetch } from "@/lib/server/engineHost";
 
 /**
  * Candle and quote providers with ordered fallbacks per instrument. Each result says
  * which source answered and whether it is an approximation of the traded price.
  *
- * Free, keyless sources only (an OANDA practice key, if set, goes first). Gold uses the Binance
- * XAUUSDT index (a multi-venue spot-gold composite), then PAXG; forex and Nifty use Yahoo;
- * crypto uses the exchanges; approximations are labelled.
+ * Venue markets read only their own venue: Delta (public REST), CoinSwitch and Fyers (through the
+ * engine host, which holds their keys). There is no fallback to another exchange for them: if the
+ * venue is down, the market shows as down.
+ *
+ * CFD markets: the prop broker's own cTrader feed first (through the engine host, free with the
+ * prop account), then an OANDA practice key if set, then free public references, labelled as such.
+ * The older Binance / Coinbase markets stay for research.
  */
 
 export interface CandleSet { candles: Candle[]; forming: Candle | null; source: string; approx: boolean; note?: string }
@@ -26,6 +31,19 @@ type Provider = {
 
 const num = (x: unknown) => Number(x);
 const env = (k: string) => process.env[k]?.trim() || "";
+
+/* ---------------- engine host: CoinSwitch, Fyers and the prop broker's cTrader feed ---------------- */
+
+type HostVenue = "coinswitch" | "fyers" | "ctrader";
+function host(venue: HostVenue, symbol: string): Provider["load"] {
+  return async (tf, r) => {
+    const q = new URLSearchParams({ venue, symbol, tf, limit: String(Math.min(1000, r.limit)) });
+    if (r.endTime) q.set("end", String(r.endTime));
+    const j = await engineFetch<{ candles: Candle[] }>("GET", `/candles?${q}`, undefined, 20_000);
+    return j.candles;
+  };
+}
+const hostProvider = (venue: HostVenue, symbol: string, name: string, approx = false): Provider => ({ name, approx, enabled: engineConfigured, load: host(venue, symbol), pageSize: 1000 });
 
 /* ---------------- crypto venues ---------------- */
 
@@ -207,30 +225,6 @@ export async function feedHealth(opts: { metered?: boolean } = {}) {
  * Upstox v3 historical candles for an NSE instrument key. One call covers up to a month of
  * minute bars or a quarter of hourly bars; today's bars come from the intraday endpoint.
  */
-function upstox(key: string): Provider["load"] {
-  const unit: Record<Tf, [string, number, number]> = {
-    "1m": ["minutes", 1, 7], "5m": ["minutes", 5, 28], "15m": ["minutes", 15, 28], "1h": ["hours", 1, 85], "4h": ["hours", 4, 85], "1d": ["days", 1, 360],
-  };
-  const ist = (t: number) => new Date(t + 330 * 60_000).toISOString().slice(0, 10);
-  const rows = (c: (string | number)[][]) => c.map((x) => ({ t: Date.parse(String(x[0])), o: num(x[1]), h: num(x[2]), l: num(x[3]), c: num(x[4]), v: num(x[5] ?? 0) }));
-  const base = `https://api.upstox.com/v3/historical-candle`;
-  return async (tf, r) => {
-    const [u, n, days] = unit[tf];
-    const to = r.endTime ?? Date.now();
-    const path = `${encodeURIComponent(key)}/${u}/${n}`;
-    const hist = await getJson<{ status: string; data: { candles: (string | number)[][] } }>(`${base}/${path}/${ist(to)}/${ist(to - days * 86_400_000)}`);
-    const out = rows(hist.data.candles);
-    if (!r.endTime && tf !== "1d") {
-      const today = await getJson<{ data: { candles: (string | number)[][] } }>(`${base}/intraday/${path}`).catch(() => null);
-      if (today) out.push(...rows(today.data.candles));
-      // Upstox publishes the finished session to its history endpoint late, so after the close (and
-      // overnight) the newest bars can be a whole session old: fail so the next provider answers.
-      const last = Math.max(...out.map((c) => c.t));
-      if (last < lastNseBarDue(Date.now()) - TF_MS[tf]) throw new Error(`stale: last bar ${new Date(last).toISOString().slice(0, 16)}Z`);
-    }
-    return out.sort((a, b) => a.t - b.t);
-  };
-}
 
 /** Open time of the newest NSE bar that should exist by `now` (09:15–15:30 IST, Monday to Friday; holidays not modelled). */
 function lastNseBarDue(now: number): number {
@@ -253,6 +247,7 @@ const hasOanda = () => !!env("OANDA_API_KEY");
 
 export const CHAINS: Record<InstrumentId, Provider[]> = {
   XAUUSD: [
+    hostProvider("ctrader", "XAUUSD", "cTrader prop broker XAUUSD"),
     { name: "OANDA XAU/USD", approx: false, enabled: hasOanda, load: oanda("XAU_USD") },
     { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
     { name: "PAXG/USDT proxy", approx: true, note: "1 PAXG ≈ 1 oz; trades at a small premium to spot", load: binanceSpot("PAXGUSDT") },
@@ -274,37 +269,44 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
     { name: "Binance BTC/USDT", approx: true, note: "USDT, not USD", load: binanceSpot("BTCUSDT") },
   ],
   BTCUSD: [
+    hostProvider("ctrader", "BTCUSD", "cTrader prop broker BTCUSD"),
     { name: "OANDA BTC/USD CFD", approx: false, enabled: hasOanda, load: oanda("BTC_USD") },
     { name: "Coinbase BTC-USD (CFD reference)", approx: true, note: "Broker CFD tracks USD spot plus its spread", load: coinbase("BTC-USD") },
     { name: "Kraken XBT/USD (CFD reference)", approx: true, load: kraken("XBTUSD") },
   ],
   EURUSD: [
+    hostProvider("ctrader", "EURUSD", "cTrader prop broker EURUSD"),
     { name: "OANDA EUR/USD", approx: false, enabled: hasOanda, load: oanda("EUR_USD") },
     // Yahoo keeps 60 days of 5M; longer backtests fall through to Binance EUR/USDT.
     { name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") },
     { name: "Binance EUR/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("EURUSDT") },
   ],
   GBPUSD: [
+    hostProvider("ctrader", "GBPUSD", "cTrader prop broker GBPUSD"),
     { name: "OANDA GBP/USD", approx: false, enabled: hasOanda, load: oanda("GBP_USD") },
     { name: "Yahoo GBP/USD", approx: false, load: yahoo("GBPUSD=X") },
     { name: "Binance GBP/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("GBPUSDT") },
   ],
   USDJPY: [
+    hostProvider("ctrader", "USDJPY", "cTrader prop broker USDJPY"),
     { name: "OANDA USD/JPY", approx: false, enabled: hasOanda, load: oanda("USD_JPY") },
     { name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") },
   ],
   NAS100: [
+    hostProvider("ctrader", "NAS100", "cTrader prop broker NAS100"),
     { name: "OANDA NAS100", approx: false, enabled: hasOanda, load: oanda("NAS100_USD") },
     { name: "Binance QQQUSDT.P (Nasdaq-100 tracker)", approx: true, note: "QQQ ETF perpetual: tracks the Nasdaq-100 in %, not in index points", load: binanceFutures("klines", "QQQUSDT") },
   ],
   SPX500: [
+    hostProvider("ctrader", "US500", "cTrader prop broker US500"),
     { name: "OANDA SPX500", approx: false, enabled: hasOanda, load: oanda("SPX500_USD") },
     { name: "Binance SPYUSDT.P (S&P 500 tracker)", approx: true, note: "SPY ETF perpetual: tracks the S&P 500 in %, not in index points", load: binanceFutures("klines", "SPYUSDT") },
   ],
-  NIFTY: [
-    { name: "Upstox NSE Nifty 50", approx: false, load: upstox("NSE_INDEX|Nifty 50") },
-    { name: "Yahoo Nifty 50 (^NSEI)", approx: false, load: yahoo("^NSEI") },
-  ],
+  // Venue markets: their own venue only.
+  "BTCUSD.DELTA": [{ name: "Delta Exchange BTCUSD perp", approx: false, load: (tf, r) => deltaCandles("BTCUSD", tf, r), pageSize: 2000 }],
+  "XAUTUSD.DELTA": [{ name: "Delta Exchange XAUTUSD perp", approx: false, load: (tf, r) => deltaCandles("XAUTUSD", tf, r), pageSize: 2000 }],
+  "BTCUSDT.CS": [hostProvider("coinswitch", "BTCUSDT", "CoinSwitch PRO BTCUSDT perp")],
+  NIFTY: [hostProvider("fyers", "NSE:NIFTY50-INDEX", "Fyers Nifty 50")],
 };
 
 /** Latest candles: closed ones for the engine, the forming bar for the chart. */
@@ -551,27 +553,7 @@ const swissquote = (base: string, quote: string): QuoteProvider => ({
   },
 });
 
-/** Last 1M bar of the NSE session from Upstox (no keyless tick feed for the index). */
-const upstoxQuote = (key: string, name: string): QuoteProvider => ({
-  name,
-  load: async () => {
-    const j = await getJson<{ data: { candles: (string | number)[][] } }>(`https://api.upstox.com/v3/historical-candle/intraday/${encodeURIComponent(key)}/minutes/1`);
-    const c = j.data.candles[0];
-    if (!c) throw new Error("no session bars today");
-    return { bid: null, ask: null, last: num(c[4]), ts: Date.parse(String(c[0])) + 60_000, source: `${name} (1M bar)`, approx: true };
-  },
-});
 
-/** Last trade from Yahoo's chart metadata (keyless). */
-const yahooQuote = (symbol: string, name: string): QuoteProvider => ({
-  name,
-  load: async () => {
-    const j = await getJson<{ chart: { result: { meta: { regularMarketPrice: number; regularMarketTime: number } }[] | null } }>(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d`);
-    const m = j.chart.result?.[0]?.meta;
-    if (!m?.regularMarketPrice) throw new Error("no price");
-    return { bid: null, ask: null, last: m.regularMarketPrice, ts: m.regularMarketTime * 1000, source: name, approx: false };
-  },
-});
 
 const coinbaseQuote: QuoteProvider = {
   name: "Coinbase BTC-USD",
@@ -581,8 +563,26 @@ const coinbaseQuote: QuoteProvider = {
   },
 };
 
+const hostQuote = (venue: HostVenue, symbol: string, name: string): QuoteProvider => ({
+  name, enabled: engineConfigured,
+  load: async () => {
+    const q = await engineFetch<{ last: number; bid: number | null; ask: number | null; ts: number }>("GET", `/quote?${new URLSearchParams({ venue, symbol })}`, undefined, 8_000);
+    return { ...q, source: name, approx: false };
+  },
+});
+
+const deltaQuote = (symbol: string): QuoteProvider => ({
+  name: `Delta Exchange ${symbol}`,
+  load: async () => {
+    const t = await deltaPublic<DeltaTicker>(`/v2/tickers/${symbol}`);
+    const bid = num(t.quotes?.best_bid ?? NaN), ask = num(t.quotes?.best_ask ?? NaN);
+    return { bid: Number.isFinite(bid) ? bid : null, ask: Number.isFinite(ask) ? ask : null, last: num(t.close), mark: num(t.mark_price), index: t.spot_price ? num(t.spot_price) : undefined, ts: t.timestamp ? Math.round(t.timestamp / 1000) : Date.now(), source: `Delta Exchange ${symbol}`, approx: false };
+  },
+});
+
 const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   XAUUSD: [
+    hostQuote("ctrader", "XAUUSD", "cTrader prop broker XAUUSD"),
     {
       name: "OANDA XAU/USD",
       enabled: () => hasOanda() && !!env("OANDA_ACCOUNT_ID"),
@@ -608,13 +608,16 @@ const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   "XAUUSDT.P": [binanceFutQuote("XAUUSDT", "Binance XAUUSDT.P")],
   "BTCUSDT.P": [binanceFutQuote("BTCUSDT", "Binance BTCUSDT.P")],
   "BTCUSD.SPOT": [coinbaseQuote],
-  BTCUSD: [coinbaseQuote],
-  EURUSD: [swissquote("EUR", "USD")],
-  GBPUSD: [swissquote("GBP", "USD")],
-  USDJPY: [swissquote("USD", "JPY")],
-  NAS100: [binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P")],
-  SPX500: [binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P")],
-  NIFTY: [upstoxQuote("NSE_INDEX|Nifty 50", "Upstox Nifty 50"), yahooQuote("^NSEI", "Yahoo Nifty 50")],
+  BTCUSD: [hostQuote("ctrader", "BTCUSD", "cTrader prop broker BTCUSD"), coinbaseQuote],
+  EURUSD: [hostQuote("ctrader", "EURUSD", "cTrader prop broker EURUSD"), swissquote("EUR", "USD")],
+  GBPUSD: [hostQuote("ctrader", "GBPUSD", "cTrader prop broker GBPUSD"), swissquote("GBP", "USD")],
+  USDJPY: [hostQuote("ctrader", "USDJPY", "cTrader prop broker USDJPY"), swissquote("USD", "JPY")],
+  NAS100: [hostQuote("ctrader", "NAS100", "cTrader prop broker NAS100"), binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P (approx)")],
+  SPX500: [hostQuote("ctrader", "US500", "cTrader prop broker US500"), binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P (approx)")],
+  "BTCUSD.DELTA": [deltaQuote("BTCUSD")],
+  "XAUTUSD.DELTA": [deltaQuote("XAUTUSD")],
+  "BTCUSDT.CS": [hostQuote("coinswitch", "BTCUSDT", "CoinSwitch PRO BTCUSDT perp")],
+  NIFTY: [hostQuote("fyers", "NSE:NIFTY50-INDEX", "Fyers Nifty 50")],
 };
 
 export const instrumentOk = (id: string | null): id is InstrumentId => !!id && id in INSTRUMENTS;

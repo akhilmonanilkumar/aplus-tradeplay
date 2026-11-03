@@ -44,8 +44,8 @@ const ARENAS: Record<VenueId, { name: string; sub: string; ac: string; mode: str
   delta: {
     name: "Delta Arena", sub: "Delta Exchange India · runs promoted strategies on its own", ac: "--delta", mode: "Autonomous",
     markets: [
-      { id: "BTCUSD", label: "BTCUSD perp", desk: "btc", engine: "BTCUSDT.P", flow: DELTA_BTC, derivs: "BTCUSDT" },
-      { id: "XAUTUSD", label: "XAUTUSD perp", desk: "gold", engine: "XAUUSDT.P", flow: DELTA_XAU, derivs: "XAUUSDT" },
+      { id: "BTCUSD", label: "BTCUSD perp", desk: "btc", engine: "BTCUSD.DELTA", flow: DELTA_BTC },
+      { id: "XAUTUSD", label: "XAUTUSD perp", desk: "gold", engine: "XAUTUSD.DELTA", flow: DELTA_XAU },
       { id: "ETHUSD", label: "ETHUSD perp", desk: "btc", engine: null, flow: { venue: "delta", symbol: "ETHUSD", tick: 1, digits: 2 } },
       { id: "BTC-OPT", label: "BTC options", desk: "btc", engine: null },
     ],
@@ -54,8 +54,8 @@ const ARENAS: Record<VenueId, { name: string; sub: string; ac: string; mode: str
   coinswitch: {
     name: "CoinSwitch Arena", sub: "CoinSwitch PRO · runs promoted strategies on its own", ac: "--cs", mode: "Paper",
     markets: [
-      { id: "BTCUSDT", label: "BTCUSDT perp", desk: "btc", engine: "BTCUSDT.P", flow: { venue: "coinswitch", symbol: "BTCUSDT", tick: 10, digits: 1 }, derivs: "BTCUSDT" },
-      { id: "XAU", label: "Gold perp", desk: "gold", engine: "XAUUSDT.P" },
+      { id: "BTCUSDT", label: "BTCUSDT perp", desk: "btc", engine: "BTCUSDT.CS", flow: { venue: "coinswitch", symbol: "BTCUSDT", tick: 10, digits: 1 } },
+      { id: "XAU", label: "Gold perp", desk: "gold", engine: null },
       { id: "ETHUSDT", label: "ETHUSDT perp", desk: "btc", engine: null, flow: { venue: "coinswitch", symbol: "ETHUSDT", tick: 1, digits: 2 } },
       { id: "XAG", label: "Silver perp", desk: "gold", engine: null },
     ],

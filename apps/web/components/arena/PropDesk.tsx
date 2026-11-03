@@ -131,6 +131,12 @@ type CtSnap = { connected: boolean; reason?: string; configured?: boolean; signe
 /** What is actually open on the prop accounts, read from cTrader (read-only). */
 function CTraderPositions() {
   const [snap, setSnap] = useState<CtSnap | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const syncNow = async () => {
+    setSyncing(true); setNote(null);
+    try { const r = await staffPost<{ note?: string; error?: string }>("/api/cfd/positions", {}); setNote(r.error ?? r.note ?? "Synced"); } catch (e) { setNote((e as Error).message); } finally { setSyncing(false); }
+  };
   useEffect(() => {
     const load = () => staffGet<CtSnap>("/api/cfd/positions").then(setSnap, (e: Error) => setSnap({ connected: false, reason: e.message }));
     load();
@@ -158,7 +164,13 @@ function CTraderPositions() {
           ))}
         </div>
       ))}
-      <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>Accounts link by login number: put each cTrader login in the account's broker account field.</p>
+      {snap?.connected && snap.signedIn && (
+        <div className="row" style={{ marginTop: 10, gap: 8 }}>
+          <button type="button" className="btn sm" disabled={syncing} onClick={syncNow}>{syncing ? "Syncing…" : "Sync trades now"}</button>
+          {note && <span className="faint" style={{ fontSize: 12 }}>{note}</span>}
+        </div>
+      )}
+      <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>Accounts link by login number: put each cTrader login in the account's broker account field. Every few minutes the app imports closed trades into the journal and P&amp;L, updates balances, and marks an alert Taken when its order shows up. The sync is read-only.</p>
     </Card>
   );
 }

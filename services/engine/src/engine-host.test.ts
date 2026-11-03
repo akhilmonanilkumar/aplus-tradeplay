@@ -1,6 +1,6 @@
 import { createPublicKey, verify } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { engineSignature, verifyEngine, verifyRelay } from "./auth.js";
+import { engineSignature, verifyEngine } from "./auth.js";
 import { MarketHub } from "./market.js";
 import { allowed } from "./server.js";
 import { coinswitchKey, coinswitchPath, coinswitchPublicHex, coinswitchSign } from "./venues/coinswitch.js";
@@ -70,13 +70,7 @@ describe("engine request auth", () => {
     expect(verifyEngine("s3cret", { ts, sig }, "GET", "/flow", "", 1_700_000_010_000)).toBe(false);
     expect(verifyEngine("", { ts, sig }, "GET", "/status", "", 1_700_000_010_000)).toBe(false);
   });
-  it("keeps the old relay scheme working", () => {
-    const ts = "1700000000000", body = '{"method":"GET"}';
-    const { createHmac } = require("node:crypto") as typeof import("node:crypto");
-    const sig = createHmac("sha256", "k").update(ts + body).digest("hex");
-    expect(verifyRelay("k", { ts, sig }, body, 1_700_000_000_500)).toBe(true);
-    expect(verifyRelay("k", { ts, sig }, body + " ", 1_700_000_000_500)).toBe(false);
-  });
+
 });
 
 describe("trading allowlist", () => {
@@ -142,5 +136,34 @@ describe("cTrader read-only sync", async () => {
     }, new Map([[41, "XAUUSD"]]));
     expect(ps[0]).toEqual({ id: 7, symbol: "XAUUSD", side: "long", units: 66, entry: 4031.9, sl: 4024.4, tp: 4054.4, swap: -1.2, commission: -3.3, openedAt: 1_700_000_000_000, comment: "APLUS 12345678 FundedHive" });
     expect(ps[1]).toMatchObject({ symbol: "99", side: "short", units: 1, sl: null, tp: null });
+  });
+});
+
+describe("cTrader price feed", () => {
+  it("turns trendbars into candles from the low and its deltas", async () => {
+    const { parseTrendbars } = await import("./venues/ctrader.js");
+    const c = parseTrendbars({ trendbar: [{ low: "400012345", deltaOpen: "100", deltaHigh: "250", deltaClose: "50", volume: 12, utcTimestampInMinutes: 29_000_000 }] });
+    expect(c).toEqual([{ t: 29_000_000 * 60_000, o: 4000.12445, h: 4000.12595, l: 4000.12345, c: 4000.12395, v: 12 }]);
+  });
+  it("finds the broker's symbol: exact, suffixed, or mapped", async () => {
+    const { matchSymbol } = await import("./venues/ctrader.js");
+    const names = new Map([[1, "XAUUSD."], [2, "USTEC"], [3, "EURUSD"], [4, "US500"]]);
+    expect(matchSymbol("EURUSD", names)).toBe(3);
+    expect(matchSymbol("XAUUSD", names)).toBe(1);
+    expect(matchSymbol("NAS100", names)).toBeNull();
+    expect(matchSymbol("NAS100", names, { NAS100: "USTEC" })).toBe(2);
+  });
+});
+
+describe("cTrader deal history", () => {
+  it("turns closing deals into closed trades with net P&L and the stop seen while open", async () => {
+    const { parseDeals } = await import("./venues/ctrader.js");
+    const deals = { deal: [
+      { dealId: 1, positionId: 77, symbolId: 5, volume: 100, tradeSide: 1, executionPrice: 4000, executionTimestamp: 1_000, dealStatus: 2 },
+      { dealId: 2, positionId: 77, symbolId: 5, volume: 100, tradeSide: 2, executionPrice: 4010, executionTimestamp: 9_000, dealStatus: 2,
+        closePositionDetail: { entryPrice: 4000, grossProfit: 1000, swap: -50, commission: -70, balance: 10_088_000, closedVolume: 100, moneyDigits: 2 } },
+    ] };
+    const t = parseDeals(deals, new Map([[5, "XAUUSD"]]), new Map([[77, { sl: 3990, openedAt: 1_000, comment: "APLUS 1a2b3c4d FundedHive" }]]));
+    expect(t).toEqual([{ dealId: 2, positionId: 77, symbol: "XAUUSD", side: "long", units: 1, entry: 4000, exit: 4010, sl: 3990, pnl: 8.8, fees: 1.2, openedAt: 1_000, closedAt: 9_000, balanceAfter: 100_880, comment: "APLUS 1a2b3c4d FundedHive" }]);
   });
 });

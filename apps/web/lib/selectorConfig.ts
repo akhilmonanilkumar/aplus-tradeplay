@@ -17,7 +17,7 @@ export interface SelectorConfig {
 
 export const DEFAULT_SELECTOR_CONFIG: SelectorConfig = {
   enabled: false,
-  universe: ["XAUUSD", "XAUUSDT.P", "BTCUSDT.P", "BTCUSD", "BTCUSD.SPOT"],
+  universe: ["XAUUSD", "BTCUSD"],
   minScore: DEFAULT_SELECTOR.minScore,
   allowGradeA: false,
   maxPerDay: 3,

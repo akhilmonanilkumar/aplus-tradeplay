@@ -5,7 +5,7 @@ import { errMsg, json } from "@/lib/server/http";
 
 export const dynamic = "force-dynamic";
 
-const OURS: Record<string, InstrumentId> = { BTCUSD: "BTCUSDT.P", XAUTUSD: "XAUUSD" };
+const OURS: Record<string, InstrumentId> = { BTCUSD: "BTCUSD", XAUTUSD: "XAUUSD" };
 
 /**
  * GET /api/market/delta?symbol=BTCUSD|XAUTUSD → Delta Exchange India venue snapshot: mark, spot, best

@@ -1,6 +1,5 @@
 import { isInstrument } from "@aplus/engine";
 import { hasSecret, hasVaultSecret, staffFromRequest } from "@/lib/server/auth";
-import { basisResearch } from "@/lib/server/basisResearch";
 import { deltaProbe } from "@/lib/server/delta";
 import { feedHealth } from "@/lib/server/feeds";
 import { errMsg } from "@/lib/server/http";
@@ -24,10 +23,6 @@ export async function GET(req: Request) {
   }
   if (family === ("feeds" as Family)) {
     try { return Response.json(await feedHealth({ metered: q.get("metered") === "1" })); } catch (e) { return Response.json({ error: errMsg(e) }, { status: 500 }); }
-  }
-  if (family === ("basis" as Family)) {
-    const symbols = (q.get("symbols") || "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT").split(",").filter((s) => /^[A-Z0-9]{3,20}$/.test(s)).slice(0, 12);
-    try { return Response.json(await basisResearch(symbols)); } catch (e) { return Response.json({ error: errMsg(e) }, { status: 500 }); }
   }
   if (!i || !isInstrument(i)) return Response.json({ error: "unknown instrument" }, { status: 400 });
   if (family === ("structure" as Family)) {

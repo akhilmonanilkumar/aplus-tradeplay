@@ -2,6 +2,7 @@ import { createPrivateKey, createPublicKey, sign, type KeyObject } from "node:cr
 import { CLOCK_BUDGET_MS, config } from "../config.js";
 import { timedFetch } from "../http.js";
 import type { MarketHub } from "../market.js";
+import { HOST_TF_MS, type HostCandle, type HostQuote, type HostTf } from "../candles.js";
 import { VenueBase } from "./types.js";
 
 /**
@@ -10,6 +11,9 @@ import { VenueBase } from "./types.js";
  * The body is not part of the signed message (as in CoinSwitch's reference client).
  */
 export const CS_BASE = "https://dma.coinswitch.co";
+/** CoinSwitch PRO futures REST (same keys and signing): used for klines. */
+export const CS_PRO = "https://coinswitch.co";
+const CS_INTERVAL: Record<HostTf, string> = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "1440" };
 
 /** PKCS#8 DER prefix for a raw 32-byte Ed25519 seed. */
 const PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
@@ -70,6 +74,41 @@ export class CoinSwitchVenue extends VenueBase {
     }, 5_000);
     if (!r.ok || !r.body || r.body.retCode !== 0) throw new Error(`coinswitch ${method} ${path}: ${r.body?.retMsg ?? `HTTP ${r.status}`}`);
     return { env: r.body, sentAt: r.sentAt, receivedAt: r.receivedAt };
+  }
+
+  /** Signed GET on the PRO futures API (plain `{ data }` responses, no retCode envelope). */
+  private async pro<T>(path: string, params: Record<string, string | number>): Promise<T> {
+    if (!this.key || !config.coinswitch.apiKey) throw new Error("CoinSwitch keys are not set on the engine host");
+    const decoded = coinswitchPath(path, params);
+    const epoch = String(Math.round(this.clock.now()));
+    const r = await timedFetch<T & { message?: string }>(`${CS_PRO}${decoded}`, {
+      headers: { "content-type": "application/json", "X-AUTH-APIKEY": config.coinswitch.apiKey, "X-AUTH-SIGNATURE": coinswitchSign(this.key, "GET", decoded, epoch), "X-AUTH-EPOCH": epoch },
+    }, 10_000);
+    if (!r.ok) throw new Error(`coinswitch GET ${path}: ${(r.body as { message?: string } | null)?.message ?? `HTTP ${r.status}`}`);
+    return r.body;
+  }
+
+  /** CoinSwitch's own futures candles (KLines), oldest first. */
+  async candles(symbol: string, tf: HostTf, limit: number, endTime = Date.now()): Promise<HostCandle[]> {
+    const ms = HOST_TF_MS[tf];
+    const n = Math.min(Math.max(limit, 1), 1000);
+    const j = await this.pro<{ data?: { o: string; h: string; l: string; c: string; volume: string; start_time: string }[] }>("/trade/api/v2/futures/klines", {
+      symbol: symbol.toLowerCase(), exchange: "EXCHANGE_2", interval: CS_INTERVAL[tf], start_time: String(endTime - n * ms), end_time: String(endTime), limit: n,
+    });
+    return (j.data ?? []).map((x) => ({ t: Number(x.start_time), o: Number(x.o), h: Number(x.h), l: Number(x.l), c: Number(x.c), v: Number(x.volume) }))
+      .filter((x) => Number.isFinite(x.t) && x.c > 0).sort((a, b) => a.t - b.t);
+  }
+
+  /** Latest price from the polled ticker and book, or a direct ticker read for symbols not polled. */
+  async quote(symbol: string): Promise<HostQuote> {
+    const tk = this.hub.ticker("coinswitch", symbol), book = this.hub.book("coinswitch", symbol);
+    if (tk && Date.now() - tk.t < 15_000 && (tk.last ?? tk.mark)) {
+      return { last: (tk.last ?? tk.mark)!, bid: book?.bids[0]?.price ?? null, ask: book?.asks[0]?.price ?? null, ts: tk.t, source: "CoinSwitch PRO" };
+    }
+    const r = await this.request<{ list: Record<string, string>[] }>("GET", "/v5/market/tickers", { category: "linear", symbol });
+    const t = r.env.result.list?.[0];
+    if (!t) throw new Error(`CoinSwitch has no ticker for ${symbol}`);
+    return { last: Number(t.lastPrice), bid: Number(t.bid1Price) || null, ask: Number(t.ask1Price) || null, ts: Date.now(), source: "CoinSwitch PRO" };
   }
 
   /** The envelope's `time` (ms) is the server clock. */

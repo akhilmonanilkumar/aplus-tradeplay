@@ -1,6 +1,7 @@
 import { staffFromRequest, unauthorized } from "@/lib/server/auth";
 import { engineConfigured, engineFetch } from "@/lib/server/engineHost";
 import { errMsg, json } from "@/lib/server/http";
+import { syncCTrader } from "@/lib/server/ctraderSync";
 
 export const dynamic = "force-dynamic";
 
@@ -25,4 +26,11 @@ export async function GET(req: Request) {
   } catch (e) {
     return json({ connected: false, reason: errMsg(e) });
   }
+}
+
+/** POST → sync now: balances, closed trades and alert legs from cTrader. */
+export async function POST(req: Request) {
+  const db = await staffFromRequest(req);
+  if (!db) return unauthorized();
+  try { return json({ ok: true, note: (await syncCTrader(db)) || "Nothing new" }); } catch (e) { return json({ error: errMsg(e) }, 0, 502); }
 }

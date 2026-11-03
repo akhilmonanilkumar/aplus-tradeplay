@@ -105,20 +105,6 @@ export interface Payout {
 }
 
 export interface Plan { id: string; name: string; price_inr: number; months: number; active: boolean }
-export interface TrackedLink { id: string; slug: string; source: string; campaign: string | null; target_url: string; created_at: string }
-export interface TgMember {
-  id: string;
-  telegram_user_id: number;
-  username: string | null;
-  source: string | null;
-  first_link_id: string | null;
-  plan_id: string | null;
-  status: "free" | "active" | "expiring" | "lapsed" | "removed";
-  paid_until: string | null;
-  first_seen: string;
-}
-export interface TgEvent { id: number; tg_member_id: string | null; type: string; chat: "vip" | "free"; amount_inr: number | null; at: string }
-export interface TgPost { id: string; destination: string; kind: string; views: number | null; reactions: number | null; clicks: number | null; status: string; sent_at: string | null; created_at: string }
 
 export interface Signal {
   id: string;
@@ -152,8 +138,6 @@ export interface Signal {
 export interface Order { id: string; signal_id: string | null; account_id: string; client_order_id: string; action: string; side: string; qty: number; entry: number; stop: number; target: number | null; risk_amount: number | null; status: string; reasons: string[]; fill_price: number | null; latency_ms: number | null; created_at: string; filled_at: string | null }
 export interface NewsEvent { id: string; at: string; currency: string; title: string; impact: "high" | "medium" | "low"; instruments: string[]; actual: string | null; forecast: string | null; previous: string | null }
 export interface SetupZone { id: string; instrument: string; side: "long" | "short"; timeframe: string; kind: string; top: number; bottom: number; fresh: boolean; liquidity_story: boolean; created_bos: boolean; alert_set: boolean; status: string; note: string | null; created_at: string }
-export interface AlertLog { id: number; title: string; body: string | null; severity: "info" | "warn" | "critical"; read: boolean; at: string }
-export interface CopyRoute { id: string; instrument: string; master_account_id: string; target_account_id: string; risk_pct: number | null; symbol: string | null; enabled: boolean }
 
 export interface Snapshot { id: number; account_id: string; at: string; balance: number; equity: number; note: string | null }
 export interface CashFlow { id: string; account_id: string; kind: "deposit" | "withdrawal" | "fee" | "payout" | "adjustment"; amount: number; at: string; note: string | null }

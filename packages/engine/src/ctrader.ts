@@ -19,8 +19,9 @@ export const CTRADER_SPECS: Record<string, CTraderSpec> = {
 
 /** Engine instrument → cTrader CFD symbol (perps and spot map to the matching CFD). */
 export function toCTraderSymbol(instrument: string): string | null {
-  if (instrument.startsWith('XAU')) return 'XAUUSD';
-  if (instrument.startsWith('BTC')) return 'BTCUSD';
+  // Only CFD markets alert to the prop accounts; venue perps (Delta, CoinSwitch) stay on their venues.
+  if (instrument === 'XAUUSD') return 'XAUUSD';
+  if (instrument === 'BTCUSD') return 'BTCUSD';
   if (instrument === 'SPX500') return 'US500';
   return CTRADER_SPECS[instrument] ? instrument : null;
 }

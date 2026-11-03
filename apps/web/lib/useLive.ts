@@ -63,7 +63,7 @@ export function useLive(id: InstrumentId): Live {
           }
         };
         ws.onopen = () => patch({ connected: true, source: `Binance ${id} stream` });
-      } else if (id === "BTCUSD" || id === "BTCUSD.SPOT") {
+      } else if (id === "BTCUSD.SPOT") {
         ws = new WebSocket("wss://ws-feed.exchange.coinbase.com");
         ws.onopen = () => { ws?.send(JSON.stringify({ type: "subscribe", product_ids: ["BTC-USD"], channels: ["ticker"] })); patch({ connected: true, source: "Coinbase BTC-USD stream" }); };
         ws.onmessage = (ev) => {

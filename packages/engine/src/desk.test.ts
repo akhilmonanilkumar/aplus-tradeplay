@@ -37,9 +37,9 @@ function agg(base: Candle[], ms: number): Candle[] {
 }
 
 describe('instruments', () => {
-  it('trades five instruments live and keeps the forex and index desks research-only', () => {
-    expect([...LIVE_INSTRUMENT_IDS].sort()).toEqual(['BTCUSD', 'BTCUSD.SPOT', 'BTCUSDT.P', 'XAUUSD', 'XAUUSDT.P']);
-    expect(Object.keys(INSTRUMENTS).filter((id) => INSTRUMENTS[id as keyof typeof INSTRUMENTS].research).sort()).toEqual(['EURUSD', 'GBPUSD', 'NAS100', 'NIFTY', 'SPX500', 'USDJPY']);
+  it('trades the CFD and venue markets live and keeps the older and research markets off the desks', () => {
+    expect([...LIVE_INSTRUMENT_IDS].sort()).toEqual(['BTCUSD', 'BTCUSD.DELTA', 'BTCUSDT.CS', 'XAUTUSD.DELTA', 'XAUUSD']);
+    expect(Object.keys(INSTRUMENTS).filter((id) => INSTRUMENTS[id as keyof typeof INSTRUMENTS].research).sort()).toEqual(['BTCUSD.SPOT', 'BTCUSDT.P', 'EURUSD', 'GBPUSD', 'NAS100', 'NIFTY', 'SPX500', 'USDJPY', 'XAUUSDT.P']);
   });
   it('trades the Nifty in India Q and everything else in London Q and NY Q', () => {
     expect(tradeWindows('NIFTY')).toEqual(['india_q']);

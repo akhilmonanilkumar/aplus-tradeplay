@@ -1,15 +1,15 @@
 import "server-only";
-import { createHmac } from "node:crypto";
 import type { Candle, Tf } from "@aplus/engine";
 import { getJson } from "@/lib/server/http";
+import { engineConfigured, engineSignature } from "@/lib/server/engineHost";
 
 /**
  * Delta Exchange India: public market data (always from production, which is the real market) and the
  * signed trading API, pointed at the demo testnet unless DELTA_ENV=production is set deliberately.
  *
- * Signing: HMAC-SHA256(secret, METHOD + timestamp + path + query + body), hex, sent as `api-key`,
- * `timestamp` (Unix seconds) and `signature` headers. Testnet keys come from the Delta demo account and
- * only work on the testnet host; production keys only on api.india.delta.exchange.
+ * Trading requests go through the engine host, which holds the keys and signs them. Testnet keys come
+ * from the Delta demo account and only work on the testnet host; production keys only on
+ * api.india.delta.exchange.
  */
 
 export type DeltaEnv = "testnet" | "production";
@@ -19,12 +19,6 @@ export const DELTA_HOSTS: Record<DeltaEnv, { rest: string; socket: string }> = {
 };
 
 export const deltaEnv = (): DeltaEnv => (process.env.DELTA_ENV === "production" ? "production" : "testnet");
-const creds = (env: DeltaEnv) => {
-  const key = (env === "production" ? process.env.DELTA_API_KEY : process.env.DELTA_TESTNET_API_KEY)?.trim();
-  const secret = (env === "production" ? process.env.DELTA_API_SECRET : process.env.DELTA_TESTNET_API_SECRET)?.trim();
-  return key && secret ? { key, secret } : null;
-};
-export const deltaConfigured = (env: DeltaEnv = deltaEnv()) => !!creds(env);
 
 interface Envelope<T> { success: boolean; result: T; error?: { code?: string; context?: unknown } | string; meta?: unknown }
 
@@ -36,50 +30,23 @@ export async function deltaPublic<T>(path: string, query: Record<string, string 
   return j.result;
 }
 
-export function deltaSignature(secret: string, method: string, timestamp: string, path: string, query: string, body: string) {
-  return createHmac("sha256", secret).update(method + timestamp + path + query + body).digest("hex");
-}
-
-/** The fixed-IP signer: the old relay, or the engine host that replaced it. */
-const relayUrl = () => process.env.DELTA_RELAY_URL?.trim() || process.env.ENGINE_URL?.trim() || "";
-const relaySecret = () => (process.env.DELTA_RELAY_URL?.trim() ? process.env.DELTA_RELAY_SECRET : process.env.ENGINE_SECRET)?.trim() ?? "";
-
 /**
- * Signed request to the trading API of the configured environment. With DELTA_RELAY_URL set (or, failing
- * that, ENGINE_URL: the engine host accepts the same relay requests and signs with the Delta clock), the request
- * goes through the fixed-IP relay (services/delta-relay), which holds the keys and signs it; the app
- * authenticates to the relay with DELTA_RELAY_SECRET. Without it, the app signs and calls Delta directly.
+ * Signed request to Delta's trading API. Keys live only on the engine host (Delta whitelists its static
+ * IP), which signs with its synced Delta clock; the app signs its request to the host with ENGINE_SECRET.
  */
 export async function deltaPrivate<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, opts: { query?: Record<string, string | number>; body?: unknown; env?: DeltaEnv } = {}): Promise<T> {
-  const relay = relayUrl();
-  if (!relay) return deltaDirect<T>(method, path, opts);
-  const env = opts.env ?? deltaEnv();
-  const payload = JSON.stringify({ env, method, path, query: opts.query ?? {}, body: opts.body ?? null });
+  const base = process.env.ENGINE_URL?.trim().replace(/\/$/, ""), secret = process.env.ENGINE_SECRET?.trim();
+  if (!base || !secret) throw new Error("Delta trading runs through the engine host: set ENGINE_URL and ENGINE_SECRET");
+  const raw = JSON.stringify({ env: opts.env ?? deltaEnv(), method, path, query: opts.query ?? {}, body: opts.body ?? null });
   const ts = String(Date.now());
-  const sig = createHmac("sha256", relaySecret()).update(ts + payload).digest("hex");
-  const res = await fetch(`${relay.replace(/\/$/, "")}/delta`, { method: "POST", cache: "no-store", body: payload, headers: { "content-type": "application/json", "x-relay-ts": ts, "x-relay-sig": sig } });
-  const j = (await res.json().catch(() => ({ success: false, error: `relay HTTP ${res.status}` }))) as Envelope<T>;
-  if (!res.ok || !j.success) throw new Error(`delta ${method} ${path} (relay): ${typeof j.error === "string" ? j.error : JSON.stringify(j.error ?? `HTTP ${res.status}`)}`);
-  return j.result;
-}
-
-export const deltaKeysAvailable = (env: DeltaEnv = deltaEnv()) => deltaConfigured(env) || !!relayUrl();
-
-async function deltaDirect<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, opts: { query?: Record<string, string | number>; body?: unknown; env?: DeltaEnv }): Promise<T> {
-  const env = opts.env ?? deltaEnv();
-  const c = creds(env);
-  if (!c) throw new Error(`Delta ${env} keys are not set`);
-  const qs = opts.query && Object.keys(opts.query).length ? `?${new URLSearchParams(Object.entries(opts.query).map(([k, v]) => [k, String(v)]))}` : "";
-  const body = opts.body === undefined ? "" : JSON.stringify(opts.body);
-  const ts = String(Math.floor(Date.now() / 1000));
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 10_000);
+  const t = setTimeout(() => ctl.abort(), 12_000);
   try {
-    const res = await fetch(`${DELTA_HOSTS[env].rest}${path}${qs}`, {
-      method, signal: ctl.signal, cache: "no-store", body: body || undefined,
-      headers: { "api-key": c.key, timestamp: ts, signature: deltaSignature(c.secret, method, ts, path, qs, body), "content-type": "application/json", "user-agent": "aplus-tradeplay" },
+    const res = await fetch(`${base}/delta`, {
+      method: "POST", cache: "no-store", signal: ctl.signal, body: raw,
+      headers: { "content-type": "application/json", "x-engine-ts": ts, "x-engine-sig": engineSignature(secret, ts, "POST", "/delta", raw) },
     });
-    const j = (await res.json().catch(() => ({ success: false, error: `HTTP ${res.status}` }))) as Envelope<T>;
+    const j = (await res.json().catch(() => ({ success: false, error: `engine host HTTP ${res.status}` }))) as Envelope<T>;
     if (!res.ok || !j.success) throw new Error(`delta ${method} ${path}: ${typeof j.error === "string" ? j.error : JSON.stringify(j.error ?? `HTTP ${res.status}`)}`);
     return j.result;
   } catch (e) {
@@ -89,6 +56,9 @@ async function deltaDirect<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: s
     clearTimeout(t);
   }
 }
+
+/** Delta trading is available when the engine host is connected (it holds the keys). */
+export const deltaKeysAvailable = (_env: DeltaEnv = deltaEnv()) => engineConfigured();
 
 /* ---------------- market data ---------------- */
 
@@ -112,7 +82,7 @@ export async function deltaCandles(symbol: string, tf: Tf, r: { limit: number; e
 
 /** Read-only connectivity and market map, for the feed probe and the integration plan. */
 export async function deltaProbe() {
-  const out: Record<string, unknown> = { env: deltaEnv(), keys: { testnet: deltaConfigured("testnet"), production: deltaConfigured("production") } };
+  const out: Record<string, unknown> = { env: deltaEnv(), keys: { engineHost: engineConfigured() } };
   for (const env of ["production", "testnet"] as const) {
     const t0 = Date.now();
     try {
@@ -128,7 +98,7 @@ export async function deltaProbe() {
       out[env] = { ok: false, ms: Date.now() - t0, error: (e as Error).message };
     }
   }
-  if (deltaConfigured("testnet")) {
+  if (engineConfigured() && deltaEnv() === "testnet") {
     try { out.testnetWallet = await deltaPrivate("GET", "/v2/wallet/balances", { env: "testnet" }); } catch (e) { out.testnetWallet = { error: (e as Error).message }; }
   }
   return out;

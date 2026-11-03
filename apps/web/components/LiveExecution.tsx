@@ -19,13 +19,13 @@ interface Order {
   id: string; created_at: string; candidate_key: string; mode: string; symbol: string; side: string; contracts: number; limit_price: number | null; stop: number | null; target: number | null;
   risk_usd: number | null; rr: number | null; basis: number | null; status: string; reasons: string[]; error: string | null; fill_price: number | null; exit_price: number | null; pnl: number | null; meta: { strategy?: string; instrument?: string };
 }
-interface Status { mode: Mode; env: string; deltaEnv: string; relay: boolean; keys: { testnet: boolean; production: boolean }; products?: { symbol: string; productId?: number; contractValue?: number; missing?: boolean }[]; wallet?: unknown; positions?: unknown; openOrders?: unknown }
+interface Status { mode: Mode; env: string; deltaEnv: string; engineHost: boolean; products?: { symbol: string; productId?: number; contractValue?: number; missing?: boolean }[]; wallet?: unknown; positions?: unknown; openOrders?: unknown }
 
 const MODES: { v: Mode; l: string; d: string }[] = [
   { v: "off", l: "Off", d: "Nothing is planned or sent" },
   { v: "dry-run", l: "Dry run", d: "Plans every order through the risk gate and records it; sends nothing" },
   { v: "testnet", l: "Testnet", d: "Sends real orders to the Delta demo account" },
-  { v: "production", l: "Production", d: "Real money. Needs DELTA_ENV=production and production keys (via the relay)" },
+  { v: "production", l: "Production", d: "Real money. Needs DELTA_ENV=production and production keys on the engine host" },
 ];
 const TONE: Record<string, "up" | "down" | "warn" | "info" | "acc" | ""> = { filled: "up", closed: "info", open: "acc", submitted: "acc", "dry-run": "info", rejected: "", cancelled: "", error: "down" };
 const FIELDS: [keyof LivePolicy, string, string][] = [
@@ -111,8 +111,8 @@ export default function LiveExecution() {
 
         <section className="g12" style={{ marginTop: 10 }}>
           <div className="s4 col" style={{ gap: 0 }}>
-            <Row k="Venue keys" v={<span>{status ? <>testnet {status.keys.testnet ? <Chip tone="up">set</Chip> : <Chip>missing</Chip>} · production {status.keys.production ? <Chip tone="up">set</Chip> : <Chip>missing</Chip>}</> : "…"}</span>} />
-            <Row k="Route" v={status ? (status.relay ? "fixed-IP relay" : "direct from Vercel") : "…"} />
+            <Row k="Signing" v={status ? (status.engineHost ? <Chip tone="up">engine host connected</Chip> : <Chip tone="down">engine host not connected</Chip>) : "…"} />
+            <Row k="Keys" v="On the engine host only (static IP whitelisted at Delta)" />
             <Row k="Delta env (Vercel)" v={status?.deltaEnv ?? "…"} />
             <Row k="Products" v={<span className="mono" style={{ fontSize: 11.5 }}>{status?.products?.map((p) => (p.missing ? `${p.symbol} missing` : `${p.symbol} #${p.productId}`)).join(" · ") ?? "…"}</span>} />
           </div>

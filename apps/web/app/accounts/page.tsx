@@ -9,6 +9,7 @@ import { istDay, todayIst } from "@/lib/derive";
 import type { AccountType, CashFlow, CopyPolicy, Investor, Order, Signal, Snapshot, Trade, TradingAccount } from "@/lib/types";
 import { dateShort, money, num, pct, signed, toNum } from "@/lib/fmt";
 import { Chip, Empty, ErrorNote, Seg, Spark, Table, Toggle } from "@/components/ui";
+import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 
 const TYPES: AccountType[] = ["master", "sub", "eval", "demo", "investor"];
 const POLICIES: CopyPolicy[] = ["PAPER", "MANUAL", "CONFIRM", "AUTO", "BLOCKED"];
@@ -26,60 +27,112 @@ function InstrumentPicker({ value, onChange }: { value: string[]; onChange: (v: 
   );
 }
 
-function AddAccount({ investors, onDone, onClose }: { investors: Investor[]; onDone: () => void; onClose: () => void }) {
-  const [f, setF] = useState({ name: "", type: "sub" as AccountType, venue: "Binance", investor_id: "", currency: "USD", start: "", risk: "0.5", policy: "PAPER" as CopyPolicy, daily: "", max: "", target: "", split: "", broker: "" });
-  const [inst, setInst] = useState<string[]>([]);
+/** Create an account, or edit every field of an existing one. Firm-rule keys this form does not show are kept. */
+function AccountForm({ investors, account, onDone, onClose }: { investors: Investor[]; account?: TradingAccount; onDone: () => void; onClose: () => void }) {
+  const r0 = (account?.firm_rules ?? {}) as Rules;
+  const str = (x: number | undefined | null) => (x === undefined || x === null ? "" : String(x));
+  const [f, setF] = useState({
+    name: account?.name ?? "", type: (account?.type ?? "sub") as AccountType, venue: account?.venue ?? "Binance", investor_id: account?.investor_id ?? "", currency: account?.currency ?? "USD",
+    start: str(account?.start_balance), risk: account ? String(account.risk_pct) : "0.5", policy: (account?.copy_policy ?? "PAPER") as CopyPolicy,
+    daily: str(r0.daily_loss_pct), max: str(r0.max_loss_pct), target: str(r0.profit_target_pct), split: r0.split !== undefined ? String(r0.split * 100) : "", broker: account?.broker_account ?? "",
+  });
+  const [inst, setInst] = useState<string[]>(account?.instruments ?? []);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [k]: e.target.value, ...(k === "investor_id" && e.target.value ? { type: "investor" as AccountType } : {}) });
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const start = toNum(f.start);
     if (!f.name.trim() || !(start > 0)) return setErr("Name and a positive balance are required");
     if (f.type === "investor" && !f.investor_id) return setErr("Investor accounts need an investor");
-    const rules: Rules = {};
-    if (f.daily) rules.daily_loss_pct = toNum(f.daily);
-    if (f.max) rules.max_loss_pct = toNum(f.max);
-    if (f.target) rules.profit_target_pct = toNum(f.target);
-    if (f.split) rules.split = toNum(f.split) / 100;
-    const { data, error } = await supabase.from("trading_accounts").insert({ name: f.name.trim(), type: f.type, venue: f.venue, investor_id: f.investor_id || null, currency: f.currency, start_balance: start, balance: start, equity: start, hwm: start, risk_pct: toNum(f.risk), copy_policy: f.policy, firm_rules: rules, instruments: inst, broker_account: f.broker || null }).select("id").single();
-    if (error) return setErr(error.message);
-    await supabase.from("cash_flows").insert({ account_id: data.id, kind: "deposit", amount: start, note: "Opening balance" });
+    const rules: Rules & Record<string, unknown> = { ...((account?.firm_rules ?? {}) as Record<string, unknown>) };
+    const put = (k: keyof Rules, v: string, scale = 1) => { if (v.trim()) rules[k] = toNum(v) / scale; else delete rules[k]; };
+    put("daily_loss_pct", f.daily); put("max_loss_pct", f.max); put("profit_target_pct", f.target); put("split", f.split, 100);
+    const fields = { name: f.name.trim(), type: f.type, venue: f.venue, investor_id: f.investor_id || null, currency: f.currency, start_balance: start, risk_pct: toNum(f.risk), copy_policy: f.policy, firm_rules: rules, instruments: inst, broker_account: f.broker.trim() || null };
+    setBusy(true); setErr(null);
+    if (account) {
+      const { error } = await supabase.from("trading_accounts").update(fields).eq("id", account.id);
+      setBusy(false);
+      if (error) return setErr(error.message);
+    } else {
+      const { data, error } = await supabase.from("trading_accounts").insert({ ...fields, balance: start, equity: start, hwm: start }).select("id").single();
+      if (error) { setBusy(false); return setErr(error.message); }
+      await supabase.from("cash_flows").insert({ account_id: data.id, kind: "deposit", amount: start, note: "Opening balance" });
+      setBusy(false);
+    }
     onDone();
   };
-  const sel = (k: keyof typeof f, opts: readonly string[]) => <div className="inp"><select value={f[k]} onChange={set(k)}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select></div>;
+  const sel = (k: keyof typeof f, opts: readonly string[]) => <div className="inp"><select value={f[k]} onChange={set(k)}>{[...new Set([...opts, f[k]])].map((o) => <option key={o} value={o}>{o}</option>)}</select></div>;
   return (
-    <div className="modal" role="dialog" aria-modal="true" aria-label="New account">
+    <div className="modal" role="dialog" aria-modal="true" aria-label={account ? `Edit ${account.name}` : "New account"}>
       <form className="card" onSubmit={submit}>
-        <div className="ch"><h3>New account</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={onClose}>Close</button></div>
+        <div className="ch"><h3>{account ? `Edit ${account.name}` : "New account"}</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={onClose}>Close</button></div>
         <div className="auto-s" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
           <label className="fld"><span>Name</span><div className="inp txt"><input value={f.name} onChange={set("name")} /></div></label>
           <label className="fld"><span>Owner</span><div className="inp"><select value={f.investor_id} onChange={set("investor_id")}><option value="">Own (firm)</option>{investors.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></div></label>
           <label className="fld"><span>Type</span>{sel("type", TYPES)}</label>
           <label className="fld"><span>Venue</span>{sel("venue", VENUES)}</label>
           <label className="fld"><span>Login / account no.</span><div className="inp"><input value={f.broker} onChange={set("broker")} /></div></label>
-          <label className="fld"><span>Currency</span>{sel("currency", ["USD", "USDT"])}</label>
-          <label className="fld"><span>Opening balance</span><div className="inp"><input inputMode="decimal" value={f.start} onChange={set("start")} /></div></label>
+          <label className="fld"><span>Currency</span>{sel("currency", ["USD", "USDT", "INR"])}</label>
+          <label className="fld"><span>{account ? "Starting balance" : "Opening balance"}</span><div className="inp"><input inputMode="decimal" value={f.start} onChange={set("start")} /></div></label>
           <label className="fld"><span>Risk per trade</span><div className="inp"><input inputMode="decimal" value={f.risk} onChange={set("risk")} /><span className="u">%</span></div></label>
           <label className="fld"><span>Execution</span>{sel("policy", POLICIES)}</label>
           <label className="fld"><span>Daily loss limit</span><div className="inp"><input inputMode="decimal" value={f.daily} onChange={set("daily")} /><span className="u">%</span></div></label>
           <label className="fld"><span>Max loss</span><div className="inp"><input inputMode="decimal" value={f.max} onChange={set("max")} /><span className="u">%</span></div></label>
           <label className="fld"><span>Profit target</span><div className="inp"><input inputMode="decimal" value={f.target} onChange={set("target")} /><span className="u">%</span></div></label>
+          <label className="fld"><span>Profit split (yours)</span><div className="inp"><input inputMode="decimal" value={f.split} onChange={set("split")} /><span className="u">%</span></div></label>
         </div>
         <div className="lbl-u" style={{ margin: "12px 0 6px" }}>Instruments traded (none = all)</div>
         <InstrumentPicker value={inst} onChange={setInst} />
+        {account && <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>Balance and equity are changed from the account panel or through money in / out, so the growth log stays right.</p>}
         {err && <p className="down" style={{ fontSize: 12.5, marginTop: 8 }}>{err}</p>}
-        <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri">Add account</button></div>
+        <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri" disabled={busy}>{account ? "Save changes" : "Add account"}</button></div>
       </form>
     </div>
   );
 }
 
-function Detail({ a, investors, flows, snaps, onSaved }: { a: TradingAccount; investors: Investor[]; flows: CashFlow[]; snaps: Snapshot[]; onSaved: () => void }) {
+/** How a cash flow moves the balance (fees and payouts already left the account). */
+const flowEffect = (kind: CashFlow["kind"], amount: number) => (kind === "deposit" ? amount : kind === "withdrawal" ? -amount : 0);
+
+function FlowForm({ flow, currency, onSave, onClose }: { flow: CashFlow; currency: string; onSave: (v: { kind: CashFlow["kind"]; amount: number; note: string | null; at: string }) => Promise<string | null>; onClose: () => void }) {
+  const [v, setV] = useState({ kind: flow.kind, amount: String(flow.amount), note: flow.note ?? "", at: flow.at.slice(0, 10) });
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = toNum(v.amount);
+    if (!(amount > 0)) return setErr("Enter a positive amount");
+    const at = v.at === flow.at.slice(0, 10) ? flow.at : new Date(`${v.at}T12:00:00Z`).toISOString();
+    const e2 = await onSave({ kind: v.kind, amount, note: v.note.trim() || null, at });
+    if (e2) setErr(e2); else onClose();
+  };
+  return (
+    <div className="modal" role="dialog" aria-modal="true" aria-label="Edit money in / out">
+      <form className="card" style={{ maxWidth: 440 }} onSubmit={submit}>
+        <div className="ch"><h3>Edit {flow.kind}</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={onClose}>Close</button></div>
+        <div className="auto-s" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
+          <label className="fld"><span>Kind</span><div className="inp"><select value={v.kind} onChange={(e) => setV({ ...v, kind: e.target.value as CashFlow["kind"] })}>{(["deposit", "withdrawal", "payout", "fee", "adjustment"] as const).map((k) => <option key={k}>{k}</option>)}</select></div></label>
+          <label className="fld"><span>Amount</span><div className="inp"><input inputMode="decimal" value={v.amount} onChange={(e) => setV({ ...v, amount: e.target.value })} /><span className="u">{currency}</span></div></label>
+          <label className="fld"><span>Date</span><div className="inp"><input type="date" value={v.at} onChange={(e) => setV({ ...v, at: e.target.value })} /></div></label>
+          <label className="fld"><span>Note</span><div className="inp txt"><input value={v.note} onChange={(e) => setV({ ...v, note: e.target.value })} /></div></label>
+        </div>
+        <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>Deposits and withdrawals move the balance; changing one here adjusts the balance by the difference.</p>
+        {err && <p className="down" style={{ fontSize: 12.5, marginTop: 8 }}>{err}</p>}
+        <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri">Save</button></div>
+      </form>
+    </div>
+  );
+}
+
+function Detail({ a, investors, flows, snaps, onSaved, onEdit, onDelete }: { a: TradingAccount; investors: Investor[]; flows: CashFlow[]; snaps: Snapshot[]; onSaved: () => void; onEdit: () => void; onDelete: () => void }) {
   const r = (a.firm_rules ?? {}) as Rules;
   const [v, setV] = useState({ risk: String(a.risk_pct), daily: String(r.daily_loss_pct ?? ""), max: String(r.max_loss_pct ?? ""), bal: String(a.balance), eq: String(a.equity), owner: a.investor_id ?? "", notes: a.notes ?? "" });
   const [inst, setInst] = useState<string[]>(a.instruments ?? []);
   const [flow, setFlow] = useState({ kind: "deposit" as CashFlow["kind"], amount: "", note: "" });
   const [msg, setMsg] = useState<string | null>(null);
+  const [editFlow, setEditFlow] = useState<CashFlow | null>(null);
+  const [delFlow, setDelFlow] = useState<CashFlow | null>(null);
+  const [allFlows, setAllFlows] = useState(false);
   const owner = ownerOf(a, investors);
   const myFlows = flows.filter((f) => f.account_id === a.id);
   const netDeposits = myFlows.reduce((s, f) => s + FLOW_SIGN[f.kind] * Number(f.amount), 0);
@@ -109,10 +162,29 @@ function Detail({ a, investors, flows, snaps, onSaved }: { a: TradingAccount; in
     setMsg(`${flow.kind} recorded`);
     onSaved();
   };
+  const moveBalance = async (delta: number) => {
+    if (!delta) return null;
+    const { error } = await supabase.from("trading_accounts").update({ balance: Number(a.balance) + delta, equity: Number(a.equity) + delta }).eq("id", a.id);
+    return error?.message ?? null;
+  };
+  const updateFlow = async (old: CashFlow, v: { kind: CashFlow["kind"]; amount: number; note: string | null; at: string }) => {
+    const { error } = await supabase.from("cash_flows").update(v).eq("id", old.id);
+    if (error) return error.message;
+    const e = await moveBalance(flowEffect(v.kind, v.amount) - flowEffect(old.kind, Number(old.amount)));
+    setMsg(e ?? "Entry updated"); onSaved();
+    return null;
+  };
+  const removeFlow = async (old: CashFlow) => {
+    const { error } = await supabase.from("cash_flows").delete().eq("id", old.id);
+    if (error) return error.message;
+    const e = await moveBalance(-flowEffect(old.kind, Number(old.amount)));
+    setMsg(e ?? "Entry deleted"); onSaved();
+    return null;
+  };
   const fld = (k: "risk" | "daily" | "max" | "bal" | "eq", label: string, unit?: string) => <label className="fld"><span>{label}</span><div className="inp"><input inputMode="decimal" value={v[k]} onChange={(e) => setV({ ...v, [k]: e.target.value })} />{unit && <span className="u">{unit}</span>}</div></label>;
   return (
     <div className="card s4">
-      <div className="ch"><h3>{a.name}</h3><span className="sp" /><Chip tone={owner.own ? "acc" : "info"}>{owner.label}</Chip></div>
+      <div className="ch"><h3>{a.name}</h3><span className="sp" /><Chip tone={owner.own ? "acc" : "info"}>{owner.label}</Chip><EditDeleteButtons label={a.name} onEdit={onEdit} onDelete={onDelete} /></div>
       <span className="faint" style={{ fontSize: 12 }}>{a.venue} · {a.type}{a.broker_account ? ` · ${a.broker_account}` : ""}</span>
       <div className="auto-s" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginTop: 10 }}>
         <div><div className="lbl">Net deposits</div><b className="mono">{money(netDeposits, a.currency, 0)}</b></div>
@@ -140,12 +212,23 @@ function Detail({ a, investors, flows, snaps, onSaved }: { a: TradingAccount; in
         <div className="inp txt" style={{ flex: 1, minWidth: 90 }}><input placeholder="Note" aria-label="Note" value={flow.note} onChange={(e) => setFlow({ ...flow, note: e.target.value })} /></div>
         <button className="btn sm" onClick={addFlow}>Add</button>
       </div>
-      {myFlows.slice(0, 6).map((f) => (
-        <div key={f.id} className="between" style={{ fontSize: 12, padding: "5px 0", borderBottom: "1px solid var(--line)" }}>
-          <span>{dateShort(f.at)} · {f.kind}{f.note ? <span className="faint"> · {f.note}</span> : null}</span>
-          <span className={`mono ${FLOW_SIGN[f.kind] > 0 ? "up" : FLOW_SIGN[f.kind] < 0 ? "down" : ""}`}>{FLOW_SIGN[f.kind] > 0 ? "+" : FLOW_SIGN[f.kind] < 0 ? "−" : ""}{money(Number(f.amount), a.currency)}</span>
+      {(allFlows ? myFlows : myFlows.slice(0, 6)).map((f) => (
+        <div key={f.id} className="between" style={{ fontSize: 12, padding: "3px 0", borderBottom: "1px solid var(--line)", gap: 6 }}>
+          <span style={{ minWidth: 0 }}>{dateShort(f.at)} · {f.kind}{f.note ? <span className="faint"> · {f.note}</span> : null}</span>
+          <span className="row" style={{ gap: 2, flexWrap: "nowrap" }}>
+            <span className={`mono ${FLOW_SIGN[f.kind] > 0 ? "up" : FLOW_SIGN[f.kind] < 0 ? "down" : ""}`}>{FLOW_SIGN[f.kind] > 0 ? "+" : FLOW_SIGN[f.kind] < 0 ? "−" : ""}{money(Number(f.amount), a.currency)}</span>
+            <EditDeleteButtons size="xs" label={`${f.kind} ${f.amount}`} onEdit={() => setEditFlow(f)} onDelete={() => setDelFlow(f)} />
+          </span>
         </div>
       ))}
+      {myFlows.length > 6 && <button type="button" className="btn ghost sm" style={{ marginTop: 4 }} onClick={() => setAllFlows((x) => !x)}>{allFlows ? "Show fewer" : `Show all ${myFlows.length}`}</button>}
+      {editFlow && <FlowForm flow={editFlow} currency={a.currency} onSave={(v) => updateFlow(editFlow, v)} onClose={() => setEditFlow(null)} />}
+      {delFlow && (
+        <ConfirmDelete title={`Delete this ${delFlow.kind}?`} onConfirm={() => removeFlow(delFlow)} onClose={() => setDelFlow(null)}>
+          <span>{dateShort(delFlow.at)} · {money(Number(delFlow.amount), a.currency)}{delFlow.note ? ` · ${delFlow.note}` : ""}</span>
+          {flowEffect(delFlow.kind, Number(delFlow.amount)) !== 0 && <span>The balance and equity move by {money(-flowEffect(delFlow.kind, Number(delFlow.amount)), a.currency)} to match.</span>}
+        </ConfirmDelete>
+      )}
       {msg && <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>{msg}</p>}
     </div>
   );
@@ -163,6 +246,8 @@ export default function Accounts() {
   const [type, setType] = useState<"all" | AccountType>("all");
   const [sel, setSel] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<TradingAccount | null>(null);
+  const [deleting, setDeleting] = useState<TradingAccount | null>(null);
 
   const invs = investors.rows ?? [];
   const acc = accounts.rows ?? [];
@@ -215,7 +300,7 @@ export default function Accounts() {
             </Table>
           )}
         </div>
-        {selected ? <Detail key={selected.id} a={selected} investors={invs} flows={flows.rows ?? []} snaps={snaps.rows ?? []} onSaved={reload} /> : <div className="card s4"><Empty>Select an account</Empty></div>}
+        {selected ? <Detail key={selected.id} a={selected} investors={invs} flows={flows.rows ?? []} snaps={snaps.rows ?? []} onSaved={reload} onEdit={() => setEditing(selected)} onDelete={() => setDeleting(selected)} /> : <div className="card s4"><Empty>Select an account</Empty></div>}
       </section>
 
       <section className="card flush">
@@ -242,7 +327,16 @@ export default function Accounts() {
           </Table>
         )}
       </section>
-      {adding && <AddAccount investors={invs} onClose={() => setAdding(false)} onDone={() => { setAdding(false); reload(); }} />}
+      {adding && <AccountForm investors={invs} onClose={() => setAdding(false)} onDone={() => { setAdding(false); reload(); }} />}
+      {editing && <AccountForm key={editing.id} investors={invs} account={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />}
+      {deleting && (
+        <ConfirmDelete title={`Delete ${deleting.name}?`} confirmName={deleting.name} inUse="Some records still point at this account. Switch it off instead, or remove those records first."
+          onConfirm={async () => { const { error } = await supabase.from("trading_accounts").delete().eq("id", deleting.id); if (!error) { setSel(null); reload(); } return error?.message; }}
+          onClose={() => setDeleting(null)}>
+          <span>Its trades, orders, money in / out, equity history and CFD alert sizes are deleted with it. Payout records stay but lose the link to this account.</span>
+          <span>To keep the history, switch the account off with the Active toggle instead.</span>
+        </ConfirmDelete>
+      )}
     </>
   );
 }

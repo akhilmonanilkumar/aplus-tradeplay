@@ -12,7 +12,7 @@ import { modelName, strategyName, type LeagueStats } from "@aplus/engine";
 import { money, num, pct, timeShort } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Icon } from "@/components/ui";
 import { ICONS, sessionName, useMe } from "@/components/Shell";
-import { useOpenTrades, type LiveRow } from "@/components/DashboardLive";
+import { useOpenTrades, type LiveRow } from "@/lib/useOpenTrades";
 import { CfdLive } from "@/components/CfdLive";
 import { arenaOf, type ArenaId } from "@/lib/arenas";
 

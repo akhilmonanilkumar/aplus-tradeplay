@@ -7,6 +7,7 @@ import { useRows } from "@/lib/useRows";
 import type { Investor, Payout, PropPurchase, Stage, TradingAccount } from "@/lib/types";
 import { dateShort, money, pct, signed, toNum } from "@/lib/fmt";
 import { Chip, Empty, ErrorNote, Note, Seg, Table } from "@/components/ui";
+import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 
 const LIFE: { s: Stage; l: string }[] = [
   { s: "kyc", l: "Agreement & KYC" }, { s: "payment", l: "Payment received" }, { s: "to_purchase", l: "To purchase" },
@@ -30,6 +31,13 @@ export default function Investors() {
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
   const [inv, setInv] = useState({ name: "", email: "", model: "prop_profit_share", fee: "20" });
   const [pp, setPp] = useState({ investor_id: "", firm: "FundedHive", plan: "2-step", size: "", fee: "", paid_by: "investor" });
+  const [editId, setEditId] = useState<string | null>(null);
+  const [delInv, setDelInv] = useState<Investor | null>(null);
+  const [delPp, setDelPp] = useState<PropPurchase | null>(null);
+  const blankInv = { name: "", email: "", model: "prop_profit_share", fee: "20" };
+  const blankPp = { investor_id: "", firm: "FundedHive", plan: "2-step", size: "", fee: "", paid_by: "investor" };
+  const openInv = (i?: Investor) => { setEditId(i?.id ?? null); setInv(i ? { name: i.name, email: i.email ?? "", model: i.model, fee: String(Math.round(Number(i.fee_rate) * 10000) / 100) } : blankInv); setModal("inv"); };
+  const openPp = (p?: PropPurchase) => { setEditId(p?.id ?? null); setPp(p ? { investor_id: p.investor_id, firm: p.firm, plan: p.plan, size: String(p.size), fee: p.fee !== null ? String(p.fee) : "", paid_by: p.paid_by } : blankPp); setModal("pp"); };
 
   const list = investors.rows ?? [];
   const accs = accounts.rows ?? [];
@@ -50,14 +58,22 @@ export default function Investors() {
     e.preventDefault();
     const fee = toNum(inv.fee) / 100;
     if (!inv.name.trim() || !(fee >= 0 && fee <= 1)) return setMsg({ ok: false, t: "Name and a fee between 0 and 100%" });
-    const { error } = await supabase.from("investors").insert({ name: inv.name.trim(), email: inv.email.trim() || null, model: inv.model, fee_rate: fee });
+    const row = { name: inv.name.trim(), email: inv.email.trim() || null, model: inv.model, fee_rate: fee };
+    const { error } = editId ? await supabase.from("investors").update(row).eq("id", editId) : await supabase.from("investors").insert(row);
     if (error) return setMsg({ ok: false, t: error.message });
-    setModal(null); setInv({ name: "", email: "", model: "prop_profit_share", fee: "20" }); investors.reload();
+    setMsg({ ok: true, t: editId ? "Investor updated" : "Investor added" });
+    setModal(null); setEditId(null); setInv(blankInv); investors.reload();
   };
   const addPurchase = async (e: React.FormEvent) => {
     e.preventDefault();
     const size = toNum(pp.size);
     if (!pp.investor_id || !(size > 0)) return setMsg({ ok: false, t: "Investor and size are required" });
+    if (editId) {
+      const { error } = await supabase.from("prop_purchases").update({ investor_id: pp.investor_id, firm: pp.firm, plan: pp.plan, size, fee: toNum(pp.fee) || null, paid_by: pp.paid_by }).eq("id", editId);
+      if (error) return setMsg({ ok: false, t: error.message });
+      setMsg({ ok: true, t: "Purchase updated" }); setModal(null); setEditId(null); purchases.reload();
+      return;
+    }
     const n = (purchases.rows ?? []).length + 1;
     const { error } = await supabase.from("prop_purchases").insert({ ref: `PA-${String(n).padStart(4, "0")}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`, investor_id: pp.investor_id, firm: pp.firm, plan: pp.plan, size, fee: toNum(pp.fee) || null, paid_by: pp.paid_by, payment_received_at: pp.paid_by === "investor" ? new Date().toISOString() : null });
     if (error) return setMsg({ ok: false, t: error.message });
@@ -87,7 +103,7 @@ export default function Investors() {
       </section>
 
       <section className="card">
-        <div className="ch"><h3>Lifecycle</h3><span className="sp" /><button className="btn sm" onClick={() => setModal("pp")}>Record purchase</button><button className="btn pri sm" onClick={() => setModal("inv")}>Add investor</button></div>
+        <div className="ch"><h3>Lifecycle</h3><span className="sp" /><button className="btn sm" onClick={() => openPp()}>Record purchase</button><button className="btn pri sm" onClick={() => openInv()}>Add investor</button></div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(130px, 1fr))", gap: 8, overflowX: "auto" }}>
           {LIFE.map((x) => {
             const who = list.filter((i) => i.stage === x.s);
@@ -127,7 +143,7 @@ export default function Investors() {
         <div className="card s4">
           {!d ? <Empty>Select an investor</Empty> : (
             <>
-              <div className="ch"><h3>{d.name}</h3><span className="sp" /><Chip tone={STAGE_TONE[d.stage] ?? ""}>{label(d.stage)}</Chip></div>
+              <div className="ch"><h3>{d.name}</h3><span className="sp" /><Chip tone={STAGE_TONE[d.stage] ?? ""}>{label(d.stage)}</Chip><EditDeleteButtons label={d.name} onEdit={() => openInv(d)} onDelete={() => setDelInv(d)} /></div>
               {[
                 ["Email", d.email ?? "—"],
                 ["Model", MODEL[d.model]],
@@ -156,7 +172,7 @@ export default function Investors() {
       <section className="card flush">
         <div className="ch" style={{ padding: "14px 16px 0" }}><h3>Prop account purchases</h3><span className="sp" /><span className="faint" style={{ fontSize: 12 }}>Registered to A+ Tradeplay · fees as entered</span></div>
         {(purchases.rows ?? []).length === 0 ? <div style={{ padding: 16 }}><Empty>No purchases</Empty></div> : (
-          <Table head={["Order", "For investor", "Firm · plan", "Size", "Fee", "Paid by", "Bought", "Status"]} right={[3, 4]}>
+          <Table head={["Order", "For investor", "Firm · plan", "Size", "Fee", "Paid by", "Bought", "Status", ""]} right={[3, 4]}>
             {(purchases.rows ?? []).map((p) => (
               <tr key={p.id}>
                 <td className="mono faint">{p.ref}</td><td>{name(p.investor_id)}</td><td>{p.firm} · {p.plan}</td>
@@ -168,6 +184,7 @@ export default function Investors() {
                     {["to_purchase", "evaluation", "funded", "breached", "refunded", "closed"].map((s) => <option key={s} value={s}>{label(s)}</option>)}
                   </select>
                 </td>
+                <td><EditDeleteButtons size="xs" label={`purchase ${p.ref}`} onEdit={() => openPp(p)} onDelete={() => setDelPp(p)} /></td>
               </tr>
             ))}
           </Table>
@@ -177,7 +194,7 @@ export default function Investors() {
       {modal === "inv" && (
         <div className="modal" role="dialog" aria-modal="true" aria-label="Add investor">
           <form className="card" onSubmit={addInvestor}>
-            <div className="ch"><h3>Add investor</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={() => setModal(null)}>Close</button></div>
+            <div className="ch"><h3>{editId ? "Edit investor" : "Add investor"}</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={() => { setModal(null); setEditId(null); }}>Close</button></div>
             <div className="auto-s" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
               <label className="fld"><span>Name</span><div className="inp txt"><input value={inv.name} onChange={(e) => setInv({ ...inv, name: e.target.value })} /></div></label>
               <label className="fld"><span>Email</span><div className="inp txt"><input type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} /></div></label>
@@ -191,10 +208,10 @@ export default function Investors() {
       {modal === "pp" && (
         <div className="modal" role="dialog" aria-modal="true" aria-label="Record purchase">
           <form className="card" onSubmit={addPurchase}>
-            <div className="ch"><h3>Record prop purchase</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={() => setModal(null)}>Close</button></div>
+            <div className="ch"><h3>{editId ? "Edit prop purchase" : "Record prop purchase"}</h3><span className="sp" /><button type="button" className="btn ghost sm" onClick={() => { setModal(null); setEditId(null); }}>Close</button></div>
             <div className="auto-s" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
               <label className="fld"><span>Investor</span><div className="inp"><select value={pp.investor_id} onChange={(e) => setPp({ ...pp, investor_id: e.target.value })}><option value="">—</option>{list.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></div></label>
-              <label className="fld"><span>Firm</span><div className="inp"><select value={pp.firm} onChange={(e) => setPp({ ...pp, firm: e.target.value })}>{["FundedHive", "The5ers", "Breakout", "FundedIN", "Other"].map((f) => <option key={f}>{f}</option>)}</select></div></label>
+              <label className="fld"><span>Firm</span><div className="inp"><select value={pp.firm} onChange={(e) => setPp({ ...pp, firm: e.target.value })}>{["FundedHive", "The5ers", "Breakout", "FundedIN", "Other"].map((f) => <option key={f}>{f}</option>)}{!["FundedHive", "The5ers", "Breakout", "FundedIN", "Other"].includes(pp.firm) && <option>{pp.firm}</option>}</select></div></label>
               <label className="fld"><span>Plan</span><div className="inp txt"><input value={pp.plan} onChange={(e) => setPp({ ...pp, plan: e.target.value })} /></div></label>
               <label className="fld"><span>Size</span><div className="inp"><input inputMode="decimal" value={pp.size} onChange={(e) => setPp({ ...pp, size: e.target.value })} /><span className="u">USD</span></div></label>
               <label className="fld"><span>Fee</span><div className="inp"><input inputMode="decimal" value={pp.fee} onChange={(e) => setPp({ ...pp, fee: e.target.value })} /><span className="u">USD</span></div></label>
@@ -203,6 +220,22 @@ export default function Investors() {
             <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}><button className="btn pri">Save</button></div>
           </form>
         </div>
+      )}
+      {delInv && (
+        <ConfirmDelete title={`Delete ${delInv.name}?`} confirmName={delInv.name}
+          inUse={`${delInv.name} still has prop purchases or payouts on record. Delete those first, or set the stage to Closed to keep the history.`}
+          onConfirm={async () => { const { error } = await supabase.from("investors").delete().eq("id", delInv.id); if (!error) { setSel(null); investors.reload(); accounts.reload(); } return error?.message; }}
+          onClose={() => setDelInv(null)}>
+          <span>Their accounts stay and become your own (firm) accounts. Their app login, if any, loses access to these records.</span>
+          <span>An investor with prop purchases or payouts on record cannot be deleted until those are removed.</span>
+        </ConfirmDelete>
+      )}
+      {delPp && (
+        <ConfirmDelete title={`Delete purchase ${delPp.ref}?`}
+          onConfirm={async () => { const { error } = await supabase.from("prop_purchases").delete().eq("id", delPp.id); if (!error) purchases.reload(); return error?.message; }}
+          onClose={() => setDelPp(null)}>
+          <span>{name(delPp.investor_id)} · {delPp.firm} · {delPp.plan} · {money(Number(delPp.size), "USD", 0)}</span>
+        </ConfirmDelete>
       )}
     </>
   );

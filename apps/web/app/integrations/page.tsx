@@ -7,7 +7,7 @@ import { useApi } from "@/lib/useApi";
 import { Card, Chip } from "@/components/ui";
 import IntegrationsCard from "@/components/IntegrationsCard";
 
-type DeltaStatus = { mode: string; env: string; deltaEnv: string; relay: boolean; keys: { testnet: boolean; production: boolean }; productsError?: string; wallet?: unknown };
+type DeltaStatus = { mode: string; env: string; deltaEnv: string; engineHost: boolean; productsError?: string; wallet?: unknown };
 type HostVenue = { id: string; env: string; keys: boolean; execution: boolean; note?: string; symbols: string[];
   clock: { offsetMs: number | null; rttP95Ms: number | null; healthy: boolean; budgetMs: number };
   stream: { state: string; lastMessageAt: number | null; reconnects: number; error: string | null } };
@@ -84,13 +84,13 @@ export default function IntegrationsPage() {
   const rtt = useRtt("/api/market/delta?symbol=BTCUSD");
   const skew = deltaMkt.data ? Math.round(Date.now() - deltaMkt.data.at) : null;
 
-  const keys = delta ? (delta.env === "production" ? delta.keys.production : delta.keys.testnet) : false;
+  const keys = delta ? delta.engineHost : false;
   const venues: Venue[] = [
     {
       id: "delta", name: "Delta Exchange India", logo: "Δ", ac: "--delta", sub: delta ? `${delta.env} · mode ${delta.mode}` : "API trading",
       status: deltaErr ? "warn" : delta && keys ? "ok" : "warn", label: deltaErr ? "Check" : delta ? (keys ? "Connected" : "Keys missing") : "Checking",
-      metrics: [["Round trip", rtt === null ? "—" : `${rtt} ms`], ["Data age", skew === null ? "—" : `${(skew / 1000).toFixed(1)} s`], ["Relay", delta ? (delta.relay ? "on" : "off") : "—"]],
-      rows: [["Signing", "HMAC-SHA256 · 5 s window"], ["Keys", delta ? `testnet ${delta.keys.testnet ? "✓" : "—"} · production ${delta.keys.production ? "✓" : "—"}` : deltaErr ?? "…"], ["Whitelisted IP", delta?.relay ? "engine host" : "needs the engine host"], ["Products", delta?.productsError ? "unreachable" : "BTCUSD, XAUTUSD"]],
+      metrics: [["Round trip", rtt === null ? "—" : `${rtt} ms`], ["Data age", skew === null ? "—" : `${(skew / 1000).toFixed(1)} s`], ["Engine host", delta ? (delta.engineHost ? "connected" : "off") : "—"]],
+      rows: [["Signing", "HMAC-SHA256 · 5 s window"], ["Keys", delta ? (delta.engineHost ? "on the engine host" : "connect the engine host") : deltaErr ?? "…"], ["Whitelisted IP", "engine host"], ["Products", delta?.productsError ? "unreachable" : "BTCUSD, XAUTUSD"]],
     },
     {
       id: "coinswitch", name: "CoinSwitch PRO", logo: "CS", ac: "--cs", sub: "HFT API · Ed25519", status: "off", label: "Not connected",

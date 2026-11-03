@@ -9,7 +9,7 @@ export type DeltaEnv = "testnet" | "production";
 export const config = {
   port: Number(env("PORT", "8787")),
   /** Shared with the web app (ENGINE_SECRET there). Every non-health request is HMAC-signed with it. */
-  secret: env("ENGINE_SECRET") || env("DELTA_RELAY_SECRET"),
+  secret: env("ENGINE_SECRET"),
   /** Shown on the Integrations page so the whitelisted IP is visible. */
   publicIp: env("PUBLIC_IP"),
   databaseUrl: env("DATABASE_URL"),
@@ -52,6 +52,8 @@ export const config = {
     clientSecret: env("CTRADER_CLIENT_SECRET"),
     redirectUri: env("CTRADER_REDIRECT_URI"),
     tokenFile: env("CTRADER_TOKEN_FILE", "/data/ctrader-token.json"),
+    /** App symbol → broker symbol where the prop broker names it differently, e.g. "NAS100=USTEC,US500=SPX500". */
+    symbolMap: Object.fromEntries(list("CTRADER_SYMBOL_MAP", "").map((x) => x.split("=").map((y) => y.trim())).filter((x) => x.length === 2 && x[0] && x[1])) as Record<string, string>,
   },
 } as const;
 

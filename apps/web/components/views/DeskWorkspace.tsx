@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   DESKS, EDGE_RULES, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, TF_MS, WINDOWS_BY_ID, evaluateGate, guardrails, isFxWeekend, isInWindow,
   shiftText, stateFromSetup, tradeWindows, type DeskId, type LiveDeskId, type SessionWindow, type GateInput, type InstrumentId, type ModelId,
+  gateInstrument,
 } from "@aplus/engine";
 import { useRows } from "@/lib/useRows";
 import { useMarket } from "@/lib/useMarket";
@@ -69,7 +70,8 @@ export default function DeskWorkspace({ deskId, inst }: { deskId: DeskId; inst: 
 
   const market = useMarket(inst);
   const live = useLive(inst);
-  const derivs = useApi<Derivs>(ctxDesk ? `/api/market/derivs?symbol=${ctxDesk === "btc" ? "BTCUSDT" : "XAUUSDT"}` : null, 60_000);
+  const venueMarket = inst.endsWith(".DELTA") || inst.endsWith(".CS");
+  const derivs = useApi<Derivs>(ctxDesk && !venueMarket ? `/api/market/derivs?symbol=${ctxDesk === "btc" ? "BTCUSDT" : "XAUUSDT"}` : null, 60_000);
   const macro = useApi<Macro>(ctxDesk ? `/api/market/macro?desk=${ctxDesk}` : null, 300_000);
   const news = useApi<{ items: Headline[]; errors: string[] }>(ctxDesk ? `/api/news?desk=${ctxDesk}` : null, 300_000);
   const cal = useApi<{ items: CalEvent[] }>("/api/calendar", 1_800_000);
@@ -122,7 +124,7 @@ export default function DeskWorkspace({ deskId, inst }: { deskId: DeskId; inst: 
       swept: triVal(ov.swept, !!a.sweep), shifted: triVal(ov.shifted, !!a.shift?.t || !!a.ltfShift), shiftDetail: shiftText(a),
       timing: { inWindow: !!liveWindow && !closed, newsClear, windowId: liveWindow?.id ?? null, minutesSinceNews: lastRelease ? (now - lastRelease) / 60000 : null },
       plan: plan ? { ...plan, targetIsStructural: targetReal, stopIsStructural: true } : undefined,
-      minStopPct: def.minStopPct, qualityConcern: concern.trim() || null, model, instrument: inst === "XAUUSDT.P" ? "XAUUSD" : inst, modelChecks: checks,
+      minStopPct: def.minStopPct, qualityConcern: concern.trim() || null, model, instrument: gateInstrument(inst), modelChecks: checks,
       conditions: { capReached: g && !g.canTrade ? g.reasons[0] : null, ranAway: !planForm.entry && (a.after?.ranAway ?? false) },
       config: { aggressiveEntryAllowed: me.settings?.aggressive_entry_allowed, counterTrendAllowed: me.settings?.counter_trend_allowed, advancedModelsAllowed: me.settings?.advanced_models_allowed },
     };
@@ -306,11 +308,12 @@ export default function DeskWorkspace({ deskId, inst }: { deskId: DeskId; inst: 
       </div>
 
       {ctxDesk && <div className="g12">
-        {ctxDesk === "btc"
+        {/* Venue markets show only their own venue's data: OI and funding are in the arena's own tabs. */}
+        {!venueMarket && (ctxDesk === "btc"
           ? <DerivsCard span={4} d={d} error={derivs.error} liqs={inst === "BTCUSDT.P" ? live.liqs : undefined} />
-          : <DerivsCard span={4} d={d} error={derivs.error} liqs={inst === "XAUUSDT.P" ? live.liqs : undefined} title="XAUUSDT.P positioning (crypto gold perp)" />}
-        <MacroCard span={4} m={m} error={macro.error} desk={ctxDesk} />
-        <DeltaVenue desk={ctxDesk} />
+          : <DerivsCard span={4} d={d} error={derivs.error} liqs={inst === "XAUUSDT.P" ? live.liqs : undefined} title="XAUUSDT.P positioning (crypto gold perp)" />)}
+        <MacroCard span={venueMarket && !inst.endsWith(".DELTA") ? 12 : venueMarket ? 6 : 4} m={m} error={macro.error} desk={ctxDesk} />
+        {(!venueMarket || inst.endsWith(".DELTA")) && <DeltaVenue desk={ctxDesk} />}
       </div>}
 
       <div className="g12">

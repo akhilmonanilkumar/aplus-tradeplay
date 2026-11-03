@@ -23,7 +23,7 @@ export function DerivsCard({ d, error, liqs, title = "Derivatives positioning", 
   const takerRatio = takerLast.length ? takerLast.reduce((a, x) => a + x.buy, 0) / Math.max(1e-9, takerLast.reduce((a, x) => a + x.sell, 0)) : null;
   const top = d.ls.top.at(-1), glob = d.ls.global.at(-1);
   return (
-    <Card span={span} title={title} right={<Chip>Binance{d.venues.length > 1 ? ` + ${d.venues.length - 1} venues` : ""} · {timeShort(d.at, "Asia/Kolkata")}</Chip>}>
+    <Card span={span} title={title} right={<Chip>{d.venues.map((v) => v.venue).join(" + ") || "Binance"} · {timeShort(d.at, "Asia/Kolkata")}</Chip>}>
       <div className="auto-s" style={{ gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: 10 }}>
         <div><div className="lbl">Funding / 8h</div><div className={`kv sm ${tone(f.last)}`}>{f.last !== null ? `${(f.last * 100).toFixed(4)}%` : "—"}</div><div className="faint" style={{ fontSize: 11 }}>{f.state?.replace("_", " ") ?? ""} · {f.apr !== null ? `${f.apr.toFixed(1)}% APR` : ""}</div></div>
         <div><div className="lbl">Open interest</div><div className="kv sm">{compact(d.oi.nowUsd)}</div><div className="faint" style={{ fontSize: 11 }}>{compact(d.oi.now)} contracts</div></div>

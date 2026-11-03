@@ -9,6 +9,7 @@ import { useMe } from "@/components/Shell";
 import type { Trade, TradingAccount } from "@/lib/types";
 import { num } from "@/lib/fmt";
 import { Bar, Card, Chip, Empty, ErrorNote, Note } from "@/components/ui";
+import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 
 type Checkin = { id: string; phase: "pre" | "post"; score: number; tags: string[]; sleep_hours: number | null; note: string | null; at: string };
 const TAGS = ["Calm", "Focused", "Tired", "Anxious", "FOMO", "Revenge urge", "Distracted", "Confident"];
@@ -33,6 +34,8 @@ export default function Discipline() {
   const [score, setScore] = useState<number | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [sleep, setSleep] = useState("");
+  const [editC, setEditC] = useState<Checkin | null>(null);
+  const [delC, setDelC] = useState<Checkin | null>(null);
   const [note, setNote] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
 
@@ -68,10 +71,16 @@ export default function Discipline() {
   const advice = score === null ? { t: "Pick a number", c: "" } : score <= 4 ? { t: "Confirm before every order today", c: "down" } : score <= 6 ? { t: "Trade A+ only, base risk", c: "warn" } : { t: "Clear to follow the plan", c: "up" };
   const save = async () => {
     if (score === null) return;
-    const { error } = await supabase.from("mood_checkins").insert({ user_id: me.session.user.id, phase, score, tags, sleep_hours: sleep ? Number(sleep) : null, note: note.trim() || null });
-    setMsg(error ? { ok: false, t: error.message } : { ok: true, t: "Check-in saved" });
-    if (!error) { setScore(null); setTags([]); setNote(""); checks.reload(); }
+    const row = { phase, score, tags, sleep_hours: sleep ? Number(sleep) : null, note: note.trim() || null };
+    const { error } = editC
+      ? await supabase.from("mood_checkins").update(row).eq("id", editC.id)
+      : await supabase.from("mood_checkins").insert({ ...row, user_id: me.session.user.id });
+    setMsg(error ? { ok: false, t: error.message } : { ok: true, t: editC ? "Check-in updated" : "Check-in saved" });
+    if (!error) { setScore(null); setTags([]); setNote(""); setSleep(""); setEditC(null); checks.reload(); }
   };
+  const startEdit = (c: Checkin) => { setEditC(c); setPhase(c.phase); setScore(c.score); setTags(c.tags ?? []); setSleep(c.sleep_hours !== null ? String(c.sleep_hours) : ""); setNote(c.note ?? ""); };
+  const cancelEdit = () => { setEditC(null); setScore(null); setTags([]); setNote(""); setSleep(""); };
+  const recent = [...(checks.rows ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 8);
 
   return (
     <>
@@ -112,7 +121,8 @@ export default function Discipline() {
 
       <section className="g12">
         <Card span={6} title="Mood check-in" right={<div className="seg" role="group" aria-label="Check-in">{(["pre", "post"] as const).map((p) => <button key={p} type="button" className={phase === p ? "on" : ""} onClick={() => setPhase(p)}>{p === "pre" ? "Pre-session" : "Post-session"}</button>)}</div>}>
-          {todayPre && phase === "pre" && <div className="banner info" style={{ marginBottom: 10 }}><span className="dot" />Today&apos;s pre-session check-in: {todayPre.score}/10</div>}
+          {editC && <div className="banner warn" style={{ marginBottom: 10 }}><span className="dot" />Editing the {editC.phase === "pre" ? "pre" : "post"}-session check-in from {new Date(editC.at).toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} IST <button type="button" className="btn ghost sm" style={{ marginLeft: "auto" }} onClick={cancelEdit}>Cancel</button></div>}
+          {!editC && todayPre && phase === "pre" && <div className="banner info" style={{ marginBottom: 10 }}><span className="dot" />Today&apos;s pre-session check-in: {todayPre.score}/10</div>}
           <div className="lbl" style={{ marginBottom: 6 }}>How settled do you feel? (1 = rattled, 10 = calm and focused)</div>
           <div role="group" aria-label="Mood 1 to 10" style={{ display: "grid", gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gap: 6 }}>
             {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
@@ -127,7 +137,20 @@ export default function Discipline() {
             <label className="fld"><span>Sleep last night</span><div className="inp"><input inputMode="decimal" value={sleep} onChange={(e) => setSleep(e.target.value)} /><span className="u">hours</span></div></label>
             <label className="fld"><span>One line</span><div className="inp txt"><input value={note} placeholder="Anything on your mind?" onChange={(e) => setNote(e.target.value)} /></div></label>
           </div>
-          <div className="between" style={{ marginTop: 14 }}><Chip tone={advice.c as "up" | "down" | "warn" | ""}>{advice.t}</Chip><button className="btn pri" disabled={score === null} onClick={save}>Save check-in</button></div>
+          <div className="between" style={{ marginTop: 14 }}><Chip tone={advice.c as "up" | "down" | "warn" | ""}>{advice.t}</Chip><button className="btn pri" disabled={score === null} onClick={save}>{editC ? "Save changes" : "Save check-in"}</button></div>
+          {recent.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div className="lbl" style={{ marginBottom: 4 }}>Recent check-ins</div>
+              {recent.map((c) => (
+                <div key={c.id} className="between" style={{ fontSize: 12.5, padding: "4px 0", borderTop: "1px solid var(--line)", gap: 8 }}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span className="mono faint">{new Date(c.at).toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span> · {c.phase === "pre" ? "Pre" : "Post"} · <b className="mono">{c.score}/10</b>{c.tags?.length ? <span className="faint"> · {c.tags.join(", ")}</span> : null}{c.note ? <span className="faint"> · {c.note}</span> : null}
+                  </span>
+                  <EditDeleteButtons size="xs" label="check-in" onEdit={() => startEdit(c)} onDelete={() => setDelC(c)} />
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
         <Card span={6} title="Mood vs daily result" right={<span className="mono faint" style={{ fontSize: 12 }}>r = {fit ? num(fit.r, 2) : "—"} · {pts.length} days</span>}>
           {pts.length < 3 ? <Empty>Check in before sessions to see the link</Empty> : (
@@ -148,6 +171,11 @@ export default function Discipline() {
           )}
         </Card>
       </section>
+      {delC && (
+        <ConfirmDelete title="Delete this check-in?" onConfirm={async () => { const { error } = await supabase.from("mood_checkins").delete().eq("id", delC.id); if (!error) { if (editC?.id === delC.id) cancelEdit(); checks.reload(); } return error?.message; }} onClose={() => setDelC(null)}>
+          <span>{delC.phase === "pre" ? "Pre" : "Post"}-session · {delC.score}/10 · {new Date(delC.at).toLocaleString("en-GB", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} IST</span>
+        </ConfirmDelete>
+      )}
     </>
   );
 }
