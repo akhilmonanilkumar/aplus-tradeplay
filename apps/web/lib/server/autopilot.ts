@@ -277,6 +277,14 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
     out.push({ instrument: "VENUES", state: "ERROR", action: (err as Error).message });
   }
   try {
+    // cTrader: balances, closed trades and alert legs placed from the links.
+    const { syncCTrader } = await import("@/lib/server/ctraderSync");
+    const ct = await within(syncCTrader(db), 40_000, "ctrader");
+    if (ct) out.push({ instrument: "CTRADER", state: "SYNC", action: ct });
+  } catch (err) {
+    out.push({ instrument: "CTRADER", state: "ERROR", action: (err as Error).message });
+  }
+  try {
     // CFD live board: fills, expiries, ran-away and dead setups, and level updates, even when no one is watching.
     const { syncCfdLive } = await import("@/lib/server/cfdLive");
     const board = await within(syncCfdLive(db), 40_000, "cfd live");

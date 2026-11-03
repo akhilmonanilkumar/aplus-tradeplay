@@ -19,12 +19,19 @@ export const PT = {
   GET_TRENDBARS_REQ: 2137, GET_TRENDBARS_RES: 2138,
   TRADER_REQ: 2121, TRADER_RES: 2122,
   RECONCILE_REQ: 2124, RECONCILE_RES: 2125,
+  DEAL_LIST_REQ: 2133, DEAL_LIST_RES: 2134,
   EXECUTION_EVENT: 2126,
   ERROR_RES: 2142,
   ACCOUNTS_BY_TOKEN_REQ: 2149, ACCOUNTS_BY_TOKEN_RES: 2150,
 } as const;
 
 export interface CtPosition { id: number; symbol: string; side: "long" | "short"; units: number; entry: number; sl: number | null; tp: number | null; swap: number; commission: number; openedAt: number; comment: string | null }
+/** A position closed on the broker: one row per closing deal (partial closes give several). */
+export interface CtClosed {
+  dealId: number; positionId: number; symbol: string; side: "long" | "short"; units: number;
+  entry: number; exit: number; sl: number | null; pnl: number; fees: number; openedAt: number | null; closedAt: number; balanceAfter: number | null; comment: string | null;
+}
+
 export interface CtAccount { ctid: number; login: number | null; isLive: boolean; balance: number | null; positions: CtPosition[]; syncedAt: number | null; error: string | null }
 
 interface Token { access_token: string; refresh_token?: string; saved_at: number }
@@ -34,6 +41,36 @@ type Msg = { payloadType: number; clientMsgId?: string; payload?: Record<string,
 const PERIOD: Record<HostTf, number> = { "1m": 1, "5m": 5, "15m": 7, "1h": 9, "4h": 10, "1d": 12 };
 /** cTrader sends prices as integers in 1/100,000 of a unit. */
 const PX = 100_000;
+
+/**
+ * Closing deals → closed trades. A closing deal's side is the opposite of the position's; money fields are
+ * in 10^-moneyDigits; volume in hundredths of a unit. Opening times and stops come from what the host saw.
+ */
+export function parseDeals(payload: Record<string, unknown>, symbols: Map<number, string>, seen: Map<number, { sl: number | null; openedAt: number; comment: string | null }> = new Map()): CtClosed[] {
+  const list = (payload.deal as Record<string, unknown>[] | undefined) ?? [];
+  const opened = new Map<number, number>();
+  for (const d of list) if (!d.closePositionDetail) {
+    const pid = Number(d.positionId), t = Number(d.executionTimestamp ?? d.createTimestamp ?? 0);
+    if (t && (!opened.has(pid) || t < opened.get(pid)!)) opened.set(pid, t);
+  }
+  return list.filter((d) => d.closePositionDetail && Number(d.dealStatus ?? 2) === 2).map((d) => {
+    const c = d.closePositionDetail as Record<string, unknown>;
+    const md = Number(c.moneyDigits ?? d.moneyDigits ?? 2);
+    const money = (x: unknown) => Number(x ?? 0) / 10 ** md;
+    const pid = Number(d.positionId);
+    const sold = Number(d.tradeSide) === 2 || d.tradeSide === "SELL";
+    const commission = money(c.commission), swap = money(c.swap);
+    const s = seen.get(pid);
+    return {
+      dealId: Number(d.dealId), positionId: pid, symbol: symbols.get(Number(d.symbolId)) ?? String(d.symbolId),
+      side: sold ? "long" : "short", units: Number(c.closedVolume ?? d.filledVolume ?? d.volume ?? 0) / 100,
+      entry: Number(c.entryPrice ?? 0), exit: Number(d.executionPrice ?? 0), sl: s?.sl ?? null,
+      pnl: Math.round((money(c.grossProfit) + swap + commission) * 100) / 100, fees: Math.round(-(commission + swap) * 100) / 100,
+      openedAt: s?.openedAt ?? opened.get(pid) ?? null, closedAt: Number(d.executionTimestamp ?? d.createTimestamp ?? 0),
+      balanceAfter: c.balance === undefined ? null : money(c.balance), comment: s?.comment ?? null,
+    } satisfies CtClosed;
+  });
+}
 
 /** Trendbars → candles: low plus deltas, timestamps in minutes. */
 export function parseTrendbars(payload: Record<string, unknown>): HostCandle[] {
@@ -86,6 +123,8 @@ export class CTraderSync {
   private pending = new Map<string, { resolve: (m: Msg) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private spots = new Map<string, { bid: number | null; ask: number | null; ts: number }>();
   private subscribed = new Set<string>();
+  /** Stop, open time and comment of every position seen open, so closed trades keep them. */
+  private seen = new Map<number, { sl: number | null; openedAt: number; comment: string | null }>();
   error: string | null = null;
 
   constructor(private readonly cfg: { clientId: string; clientSecret: string; redirectUri: string; tokenFile: string; symbolMap?: Record<string, string> }) {}
@@ -180,6 +219,24 @@ export class CTraderSync {
     return out.filter((c) => (seen.has(c.t) ? false : (seen.add(c.t), true))).sort((a, b) => a.t - b.t).slice(-limit);
   }
 
+  /** Closed trades of every signed-in account since `from` (deal history, in windows of a week). */
+  async closed(from: number, to = Date.now()) {
+    const out: { ctid: number; login: number | null; balance: number | null; trades: CtClosed[]; error: string | null }[] = [];
+    for (const a of this.accounts.values()) {
+      const ws = this.sockets[a.isLive ? "live" : "demo"];
+      const trades: CtClosed[] = [];
+      let error: string | null = null;
+      try {
+        for (let start = Math.max(from, to - 90 * 86_400_000); start < to; start += 7 * 86_400_000) {
+          const m = await this.call(ws, PT.DEAL_LIST_REQ, { ctidTraderAccountId: a.ctid, fromTimestamp: start, toTimestamp: Math.min(to, start + 7 * 86_400_000), maxRows: 1000 }, 15_000);
+          trades.push(...parseDeals(m.payload ?? {}, this.symbols.get(a.ctid) ?? new Map(), this.seen));
+        }
+      } catch (e) { error = (e as Error).message; }
+      out.push({ ctid: a.ctid, login: a.login, balance: a.balance, trades, error });
+    }
+    return out;
+  }
+
   /** Live bid / ask from the broker's spot stream (subscribed on first use). */
   async quote(symbol: string): Promise<HostQuote> {
     const f = this.symbolId(symbol);
@@ -264,7 +321,11 @@ export class CTraderSync {
       case PT.RECONCILE_RES: {
         const ctid = Number(p.ctidTraderAccountId);
         const acc = this.accounts.get(ctid);
-        if (acc) { acc.positions = parsePositions(p, this.symbols.get(ctid) ?? new Map()); acc.syncedAt = Date.now(); acc.error = null; }
+        if (acc) {
+          acc.positions = parsePositions(p, this.symbols.get(ctid) ?? new Map()); acc.syncedAt = Date.now(); acc.error = null;
+          for (const x of acc.positions) this.seen.set(x.id, { sl: x.sl ?? this.seen.get(x.id)?.sl ?? null, openedAt: x.openedAt, comment: x.comment });
+          if (this.seen.size > 5000) this.seen.delete(this.seen.keys().next().value!);
+        }
         break;
       }
       case PT.EXECUTION_EVENT:

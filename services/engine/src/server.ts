@@ -82,6 +82,10 @@ export function startServer(d: Deps) {
         return send(res, 200, out.env);
       }
       if (method === "GET" && url.pathname === "/ctrader") return send(res, 200, d.ctrader.snapshot());
+      if (method === "GET" && url.pathname === "/ctrader/closed") {
+        const from = Number(url.searchParams.get("from") ?? 0) || Date.now() - 30 * 86_400_000;
+        return send(res, 200, { accounts: await remember(`ct:closed:${Math.floor(from / 60_000)}`, 60_000, () => d.ctrader.closed(from)) });
+      }
       if (method === "GET" && url.pathname === "/ctrader/auth-url") return send(res, 200, { url: d.ctrader.authUrl() });
       if (method === "POST" && url.pathname === "/ctrader/code") {
         const { code } = JSON.parse(raw) as { code?: string };

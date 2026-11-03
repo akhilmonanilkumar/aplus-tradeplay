@@ -154,3 +154,16 @@ describe("cTrader price feed", () => {
     expect(matchSymbol("NAS100", names, { NAS100: "USTEC" })).toBe(2);
   });
 });
+
+describe("cTrader deal history", () => {
+  it("turns closing deals into closed trades with net P&L and the stop seen while open", async () => {
+    const { parseDeals } = await import("./venues/ctrader.js");
+    const deals = { deal: [
+      { dealId: 1, positionId: 77, symbolId: 5, volume: 100, tradeSide: 1, executionPrice: 4000, executionTimestamp: 1_000, dealStatus: 2 },
+      { dealId: 2, positionId: 77, symbolId: 5, volume: 100, tradeSide: 2, executionPrice: 4010, executionTimestamp: 9_000, dealStatus: 2,
+        closePositionDetail: { entryPrice: 4000, grossProfit: 1000, swap: -50, commission: -70, balance: 10_088_000, closedVolume: 100, moneyDigits: 2 } },
+    ] };
+    const t = parseDeals(deals, new Map([[5, "XAUUSD"]]), new Map([[77, { sl: 3990, openedAt: 1_000, comment: "APLUS 1a2b3c4d FundedHive" }]]));
+    expect(t).toEqual([{ dealId: 2, positionId: 77, symbol: "XAUUSD", side: "long", units: 1, entry: 4000, exit: 4010, sl: 3990, pnl: 8.8, fees: 1.2, openedAt: 1_000, closedAt: 9_000, balanceAfter: 100_880, comment: "APLUS 1a2b3c4d FundedHive" }]);
+  });
+});
