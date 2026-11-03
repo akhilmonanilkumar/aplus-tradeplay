@@ -283,6 +283,14 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
     out.push({ instrument: "VENUES", state: "ERROR", action: (err as Error).message });
   }
   try {
+    // CFD live board: fills, expiries, ran-away and dead setups, and level updates, even when no one is watching.
+    const { syncCfdLive } = await import("@/lib/server/cfdLive");
+    const board = await within(syncCfdLive(db), 40_000, "cfd live");
+    if (board.notes.length) out.push({ instrument: "CFD", state: "LIVE", action: board.notes.join(" · ") });
+  } catch (err) {
+    out.push({ instrument: "CFD", state: "ERROR", action: (err as Error).message });
+  }
+  try {
     const sent = await within(dispatchTelegram(db, chats, integ?.notify), 20_000, "telegram");
     if (sent) out.push({ instrument: "NOTIFY", state: "TELEGRAM", action: `${sent} sent` });
     if (new Date().getUTCMinutes() < 5) await pruneNotifications(db);

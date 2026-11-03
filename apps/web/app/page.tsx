@@ -13,6 +13,7 @@ import { money, num, pct, timeShort } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Icon } from "@/components/ui";
 import { ICONS, sessionName, useMe } from "@/components/Shell";
 import { useOpenTrades, type LiveRow } from "@/components/DashboardLive";
+import { CfdLive } from "@/components/CfdLive";
 import { arenaOf, type ArenaId } from "@/lib/arenas";
 
 const REFRESH_MS = 30_000;
@@ -140,6 +141,8 @@ export default function Dashboard() {
         <div className="inp" style={{ width: 170, height: 32 }}><select aria-label="Owner" value={owner} onChange={(e) => setOwner(e.target.value)}>{ownerOptions(investors.rows ?? []).map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}</select></div>
         <div className="seg" role="group" aria-label="Period">{[30, 90, 365].map((d) => <button key={d} type="button" className={days === d ? "on" : ""} onClick={() => setDays(d)}>{d === 365 ? "1Y" : `${d}D`}</button>)}</div>
       </div>
+
+      <CfdLive />
 
       <section className="g12">
         <Card span={8}>
