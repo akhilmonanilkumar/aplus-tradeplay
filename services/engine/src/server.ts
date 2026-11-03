@@ -102,7 +102,7 @@ export function startServer(d: Deps) {
         await d.ctrader.exchangeCode(code);
         return send(res, 200, { ok: true });
       }
-      if (method === "GET" && url.pathname === "/fyers/login-url") return send(res, 200, { url: d.fyers.loginUrl() });
+      if (method === "GET" && url.pathname === "/fyers/login-url") return send(res, 200, { url: d.fyers.loginUrl(url.searchParams.get("state") ?? "fyers") });
       if (method === "POST" && url.pathname === "/fyers/token") {
         const { code } = JSON.parse(raw) as { code?: string };
         if (!code) return send(res, 400, { error: "auth code missing" });

@@ -9,6 +9,7 @@ import IntegrationsCard from "@/components/IntegrationsCard";
 
 type DeltaStatus = { mode: string; env: string; deltaEnv: string; engineHost: boolean; productsError?: string; wallet?: unknown };
 type HostVenue = { id: string; env: string; keys: boolean; execution: boolean; note?: string; symbols: string[];
+  login?: { fresh: boolean; at: number | null; renewsUntil: number | null; autoRenew: boolean };
   clock: { offsetMs: number | null; rttP95Ms: number | null; healthy: boolean; budgetMs: number };
   stream: { state: string; lastMessageAt: number | null; reconnects: number; error: string | null } };
 type Host = { connected: boolean; reason?: string; publicIp?: string | null; uptimeSec?: number; venues?: HostVenue[]; store?: { enabled: boolean; written: number; buffered: number; error: string | null } };
@@ -63,13 +64,22 @@ export default function IntegrationsPage() {
   const [ct, setCt] = useState<{ connected: boolean; configured?: boolean; signedIn?: boolean; error?: string | null; accounts?: { name: string | null; positions: unknown[]; syncedAt: number | null }[]; reason?: string } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => { staffGet<typeof ct>("/api/cfd/positions").then(setCt, () => setCt(null)); }, []);
-  // cTrader sends the trader back here with ?code= after sign-in.
+  // Logins come back here: Fyers with ?auth_code= (and its own ?code=200), cTrader with ?code=.
   useEffect(() => {
-    const code = new URLSearchParams(window.location.search).get("code");
-    if (!code) return;
+    const q = new URLSearchParams(window.location.search);
+    const fyersCode = q.get("auth_code"), code = q.get("code");
+    if (!fyersCode && !code) return;
     window.history.replaceState(null, "", "/integrations");
-    staffPost("/api/cfd/ctrader", { code }).then(() => setNote("cTrader connected. Positions appear within a minute."), (e: Error) => setNote(`cTrader sign-in failed: ${e.message}`));
+    if (fyersCode) {
+      staffPost("/api/fyers", { code: fyersCode }).then(() => setNote("Fyers logged in. Prices load within a minute; the login renews itself daily for 15 days."), (e: Error) => setNote(`Fyers login failed: ${e.message}`));
+      return;
+    }
+    if (q.get("s") === "error") { setNote(`Fyers login failed: ${q.get("message") ?? "cancelled"}`); return; }
+    staffPost("/api/cfd/ctrader", { code: code! }).then(() => setNote("cTrader connected. Positions appear within a minute."), (e: Error) => setNote(`cTrader sign-in failed: ${e.message}`));
   }, []);
+  const loginFyers = async () => {
+    try { const r = await staffGet<{ url: string }>("/api/fyers"); window.location.href = r.url; } catch (e) { setNote(`Fyers: ${(e as Error).message}`); }
+  };
   const connectCTrader = async () => {
     try { const r = await staffGet<{ url: string }>("/api/cfd/ctrader"); window.location.href = r.url; } catch (e) { setNote((e as Error).message); }
   };
@@ -117,7 +127,27 @@ export default function IntegrationsPage() {
     },
   ];
 
-  const shown = venues.map((v) => { const h = hv(v.id); return h ? { ...v, ...fromHost(h) } : v; });
+  const shown = venues.map((v) => {
+    const h = hv(v.id);
+    const out: Venue = h ? { ...v, ...fromHost(h) } : v;
+    if (v.id !== "fyers") return out;
+    // Fyers: a daily login, renewed by the host each morning with the PIN until the 15-day refresh token runs out.
+    const l = h?.login;
+    const until = l?.renewsUntil ?? null;
+    const daysLeft = until ? Math.ceil((until - Date.now()) / 86_400_000) : null;
+    const day = (t: number) => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "Asia/Kolkata" });
+    const loginRows: [string, string][] = !h ? [] : [
+      ["Login", l?.fresh ? `valid today · since ${new Date(l.at!).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} IST` : "needed"],
+      ["Renews by itself", !l?.autoRenew ? "no: set FYERS_PIN on the host" : until ? `until ${day(until)}${daysLeft !== null && daysLeft <= 2 ? " · log in again soon" : ""}` : "after the first login"],
+    ];
+    const needs = !!h && (!l?.fresh || (daysLeft !== null && daysLeft <= 2));
+    return {
+      ...out,
+      ...(h && !l?.fresh ? { status: "warn" as const, label: "Login needed" } : {}),
+      rows: [...loginRows, ...out.rows.filter(([k]) => k !== "Session token" && k !== "Refresh token")],
+      action: h ? <button className={`btn sm ${needs ? "pri" : ""}`} onClick={loginFyers}>{l?.fresh ? "Log in to Fyers again" : "Log in to Fyers"}</button> : <span className="faint" style={{ fontSize: 12 }}>Connect the engine host first</span>,
+    };
+  });
 
   return (
     <>
