@@ -149,6 +149,5 @@ export function planLiveOrder(i: RiskInput): { ok: true; plan: OrderPlan; reason
 
 /** Instruments a promoted strategy may trade on Delta, by our market id. */
 export const DELTA_SYMBOL: Record<string, string> = {
-  "BTCUSDT.P": "BTCUSD", BTCUSD: "BTCUSD", "BTCUSD.SPOT": "BTCUSD",
-  XAUUSD: "XAUTUSD", "XAUUSDT.P": "XAUTUSD",
+  "BTCUSD.DELTA": "BTCUSD", "XAUTUSD.DELTA": "XAUTUSD",
 };

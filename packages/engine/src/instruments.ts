@@ -15,7 +15,13 @@ export const liveDesk = (id: InstrumentId): LiveDeskId => {
   if (d !== 'gold' && d !== 'btc') throw new Error(`${id} is a research instrument`);
   return d;
 };
-export type InstrumentId = 'XAUUSD' | 'XAUUSDT.P' | 'BTCUSD' | 'BTCUSDT.P' | 'BTCUSD.SPOT' | 'EURUSD' | 'GBPUSD' | 'USDJPY' | 'NAS100' | 'SPX500' | 'NIFTY';
+/**
+ * Markets. Venue markets carry the venue in the id and read only that venue's own prices:
+ * BTCUSD.DELTA / XAUTUSD.DELTA (Delta Exchange India perps), BTCUSDT.CS (CoinSwitch PRO futures),
+ * NIFTY (Fyers). CFD markets read the prop broker's cTrader feed first. BTCUSDT.P, XAUUSDT.P and
+ * BTCUSD.SPOT are the older Binance/Coinbase markets, kept for history and research.
+ */
+export type InstrumentId = 'XAUUSD' | 'XAUUSDT.P' | 'BTCUSD' | 'BTCUSDT.P' | 'BTCUSD.SPOT' | 'BTCUSD.DELTA' | 'XAUTUSD.DELTA' | 'BTCUSDT.CS' | 'EURUSD' | 'GBPUSD' | 'USDJPY' | 'NAS100' | 'SPX500' | 'NIFTY';
 export type Tf = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
 export const TF_MS: Record<Tf, number> = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000 };
@@ -78,7 +84,7 @@ export const INSTRUMENTS: Record<InstrumentId, InstrumentDef> = {
     htf: '1h', poi: '15m', ltf: '5m', digits: 2,
     stopBuffer: (p) => p * 0.0001, costRate: 0.001,
     sizing: { kind: 'perp', spec: XAU_PERP, leverage: 10, unit: 'oz' },
-    fxHours: false, priceBasis: 'Binance USDⓈ-M mark price',
+    fxHours: false, priceBasis: 'Binance USDⓈ-M mark price', research: true,
   },
   BTCUSD: {
     id: 'BTCUSD', desk: 'btc', label: 'BTCUSD · CFD', short: 'BTCUSD', kind: 'cfd',
@@ -92,14 +98,38 @@ export const INSTRUMENTS: Record<InstrumentId, InstrumentDef> = {
     htf: '4h', poi: '15m', ltf: '5m', digits: 1,
     stopBuffer: (p) => p * 0.0005, costRate: 0.001,
     sizing: { kind: 'perp', spec: BTCUSDT_PERP_DEFAULT, leverage: 10, unit: 'BTC' },
-    fxHours: false, priceBasis: 'Binance USDⓈ-M mark price (stops trigger on mark)',
+    fxHours: false, priceBasis: 'Binance USDⓈ-M mark price (stops trigger on mark)', research: true,
+  },
+  'BTCUSD.DELTA': {
+    // Delta Exchange India BTCUSD perpetual: 0.001 BTC contracts, USD-settled; taker 0.05% a side.
+    id: 'BTCUSD.DELTA', desk: 'btc', label: 'BTCUSD · Delta perp', short: 'BTCUSD Δ', kind: 'perp',
+    htf: '4h', poi: '15m', ltf: '5m', digits: 1,
+    stopBuffer: (p) => p * 0.0005, costRate: 0.0014,
+    sizing: { kind: 'perp', spec: BTCUSDT_PERP_DEFAULT, leverage: 10, unit: 'BTC' },
+    fxHours: false, priceBasis: 'Delta Exchange India BTCUSD perpetual',
+  },
+  'XAUTUSD.DELTA': {
+    // Delta Exchange India XAUTUSD perpetual (Tether Gold): tracks spot gold, trades 24/7.
+    id: 'XAUTUSD.DELTA', desk: 'gold', label: 'XAUTUSD · Delta perp', short: 'XAUTUSD Δ', kind: 'perp',
+    htf: '1h', poi: '15m', ltf: '5m', digits: 2,
+    stopBuffer: (p) => p * 0.0001, costRate: 0.0014,
+    sizing: { kind: 'perp', spec: XAU_PERP, leverage: 10, unit: 'oz' },
+    fxHours: false, priceBasis: 'Delta Exchange India XAUTUSD perpetual',
+  },
+  'BTCUSDT.CS': {
+    // CoinSwitch PRO BTCUSDT futures (USDT-margined); taker fees assumed 0.08% a side until confirmed.
+    id: 'BTCUSDT.CS', desk: 'btc', label: 'BTCUSDT · CoinSwitch perp', short: 'BTCUSDT CS', kind: 'perp',
+    htf: '4h', poi: '15m', ltf: '5m', digits: 1,
+    stopBuffer: (p) => p * 0.0005, costRate: 0.0016,
+    sizing: { kind: 'perp', spec: BTCUSDT_PERP_DEFAULT, leverage: 10, unit: 'BTC' },
+    fxHours: false, priceBasis: 'CoinSwitch PRO BTCUSDT futures',
   },
   'BTCUSD.SPOT': {
     id: 'BTCUSD.SPOT', desk: 'btc', label: 'BTCUSD · spot', short: 'BTC spot', kind: 'spot',
     htf: '4h', poi: '15m', ltf: '5m', digits: 2,
     stopBuffer: (p) => p * 0.0005, costRate: 0.002,
     sizing: { kind: 'spot', spec: BTC_SPOT, unit: 'BTC' },
-    fxHours: false, priceBasis: 'Coinbase BTC-USD last trade',
+    fxHours: false, priceBasis: 'Coinbase BTC-USD last trade', research: true,
   },
   EURUSD: {
     id: 'EURUSD', desk: 'fx', label: 'EURUSD · CFD', short: 'EURUSD', kind: 'cfd',
@@ -142,7 +172,7 @@ export const INSTRUMENTS: Record<InstrumentId, InstrumentDef> = {
     htf: '1h', poi: '15m', ltf: '5m', digits: 2,
     stopBuffer: (p) => p * 0.00005, costRate: 0.0004,
     sizing: { kind: 'cfd', spec: INDEX_CFD, unit: 'lot' },
-    fxHours: true, priceBasis: 'NSE Nifty 50 index', windows: ['india_q'], research: true,
+    fxHours: true, priceBasis: 'NSE Nifty 50 index from Fyers', windows: ['india_q'], research: true,
   },
 };
 
@@ -152,8 +182,8 @@ export const tradeWindows = (id: InstrumentId): string[] => INSTRUMENTS[id].wind
 export const INSTRUMENT_IDS = Object.keys(INSTRUMENTS) as InstrumentId[];
 
 export const DESKS: Record<DeskId, { id: DeskId; name: string; instruments: InstrumentId[]; primary: InstrumentId }> = {
-  gold: { id: 'gold', name: 'Gold desk', instruments: ['XAUUSD', 'XAUUSDT.P'], primary: 'XAUUSD' },
-  btc: { id: 'btc', name: 'BTC desk', instruments: ['BTCUSDT.P', 'BTCUSD', 'BTCUSD.SPOT'], primary: 'BTCUSDT.P' },
+  gold: { id: 'gold', name: 'Gold desk', instruments: ['XAUUSD', 'XAUTUSD.DELTA', 'XAUUSDT.P'], primary: 'XAUUSD' },
+  btc: { id: 'btc', name: 'BTC desk', instruments: ['BTCUSD', 'BTCUSD.DELTA', 'BTCUSDT.CS', 'BTCUSDT.P', 'BTCUSD.SPOT'], primary: 'BTCUSD' },
   fx: { id: 'fx', name: 'Forex lab', instruments: ['EURUSD', 'GBPUSD', 'USDJPY'], primary: 'EURUSD' },
   indices: { id: 'indices', name: 'Index lab', instruments: ['NAS100', 'SPX500', 'NIFTY'], primary: 'NAS100' },
 };
@@ -181,6 +211,11 @@ export function normalizeInstrument(id: string): InstrumentId | null {
   if (u === 'BTCUSD') return 'BTCUSD';
   return null;
 }
+
+/** Gold markets the gate treats as gold (model F and gold-only rules). */
+export const GOLD_IDS: readonly InstrumentId[] = ['XAUUSD', 'XAUUSDT.P', 'XAUTUSD.DELTA'];
+/** The instrument name the A+ gate and model rules read: every gold market is gold. */
+export const gateInstrument = (id: string): string => (GOLD_IDS.includes(id as InstrumentId) ? 'XAUUSD' : id);
 
 /** Round-trip cost in R for a given stop distance: costRate × entry ÷ |entry − stop|. */
 export function costInR(def: Pick<InstrumentDef, 'costRate'>, entry: number, stop: number): number {

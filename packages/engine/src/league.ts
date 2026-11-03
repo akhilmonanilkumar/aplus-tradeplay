@@ -13,18 +13,20 @@ export const stageRiskScale = (s: Stage) => (s === 'live' ? 1 : s === 'live_smal
 
 /** Where a market's strategies can run, and the round-trip cost each venue adds beyond the engine's own. */
 export function venuesFor(instrument: string): Venue[] {
-  if (instrument === 'BTCUSDT.P' || instrument === 'XAUUSDT.P' || instrument === 'BTCUSD.SPOT') return ['delta', 'coinswitch'];
+  // Each venue market reads only its own venue's prices, so it scores for that venue alone.
+  if (instrument === 'BTCUSD.DELTA' || instrument === 'XAUTUSD.DELTA') return ['delta'];
+  if (instrument === 'BTCUSDT.CS') return ['coinswitch'];
   if (instrument === 'NIFTY') return ['fyers'];
+  // Older Binance / Coinbase markets: history and research only, not traded on any venue.
+  if (instrument === 'BTCUSDT.P' || instrument === 'XAUUSDT.P' || instrument === 'BTCUSD.SPOT') return [];
   return ['cfd'];
 }
 
-/** Extra cost per side as a fraction of price, on top of the costs already in the signal's net R. */
-export const VENUE_EXTRA_COST: Record<Venue, number> = {
-  cfd: 0,            // prop CFD spread is already in the instrument's cost rate
-  delta: 0.0002,     // Delta BTC perp taker 0.05% vs the 0.03% the engine assumes for Binance
-  coinswitch: 0.0003, // CoinSwitch futures taker, conservative until the fee schedule is confirmed
-  fyers: 0,          // Nifty costs (STT, exchange, slippage) are already in the cost rate
-};
+/**
+ * Extra cost per side as a fraction of price, on top of the costs already in the signal's net R.
+ * Venue markets carry their own venue's fees in their cost rate, so nothing is added.
+ */
+export const VENUE_EXTRA_COST: Record<Venue, number> = { cfd: 0, delta: 0, coinswitch: 0, fyers: 0 };
 
 /** Net R on a venue: the signal's net R minus the venue's extra round-trip cost, in R. */
 export function venueNetR(netR: number, entry: number, stop: number, venue: Venue): number {

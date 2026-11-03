@@ -10,7 +10,9 @@ describe("strategy agent", () => {
     expect(todaysJobs(0)).toHaveLength(4);
   });
   it("attaches backtests to the League entries they belong to, per venue", () => {
-    expect(keysForRow("BTCUSDT.P", "session", "asia-fade-p-t")).toEqual(["delta/BTCUSDT.P:S:asia-fade-p-t", "coinswitch/BTCUSDT.P:S:asia-fade-p-t"]);
+    expect(keysForRow("BTCUSD.DELTA", "session", "asia-fade-p-t")).toEqual(["delta/BTCUSD.DELTA:S:asia-fade-p-t"]);
+    expect(keysForRow("BTCUSDT.CS", "session", "asia-fade-p-t")).toEqual(["coinswitch/BTCUSDT.CS:S:asia-fade-p-t"]);
+    expect(keysForRow("BTCUSDT.P", "session", "asia-fade-p-t")).toEqual([]);
     expect(keysForRow("XAUUSD", "a5", "live")).toEqual(["cfd/XAUUSD:A"]);
     expect(keysForRow("XAUUSD", "a5", "core15")).toEqual([]); // research-only variant, not logged live
   });

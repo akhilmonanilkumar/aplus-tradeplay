@@ -144,3 +144,19 @@ describe("cTrader read-only sync", async () => {
     expect(ps[1]).toMatchObject({ symbol: "99", side: "short", units: 1, sl: null, tp: null });
   });
 });
+
+describe("cTrader price feed", () => {
+  it("turns trendbars into candles from the low and its deltas", async () => {
+    const { parseTrendbars } = await import("./venues/ctrader.js");
+    const c = parseTrendbars({ trendbar: [{ low: "400012345", deltaOpen: "100", deltaHigh: "250", deltaClose: "50", volume: 12, utcTimestampInMinutes: 29_000_000 }] });
+    expect(c).toEqual([{ t: 29_000_000 * 60_000, o: 4000.12445, h: 4000.12595, l: 4000.12345, c: 4000.12395, v: 12 }]);
+  });
+  it("finds the broker's symbol: exact, suffixed, or mapped", async () => {
+    const { matchSymbol } = await import("./venues/ctrader.js");
+    const names = new Map([[1, "XAUUSD."], [2, "USTEC"], [3, "EURUSD"], [4, "US500"]]);
+    expect(matchSymbol("EURUSD", names)).toBe(3);
+    expect(matchSymbol("XAUUSD", names)).toBe(1);
+    expect(matchSymbol("NAS100", names)).toBeNull();
+    expect(matchSymbol("NAS100", names, { NAS100: "USTEC" })).toBe(2);
+  });
+});

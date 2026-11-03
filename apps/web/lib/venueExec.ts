@@ -13,8 +13,7 @@ export interface VenueProduct extends ProductSpec { venue: ExecVenue; currency: 
 
 /** CoinSwitch HFT linear futures. Steps and fees are conservative until the instruments-info call confirms them. */
 const CS: Record<string, Omit<VenueProduct, "venue" | "currency" | "productId">> = {
-  "BTCUSDT.P": { symbol: "BTCUSDT", contractValue: 0.001, tick: 0.1, takerFee: 0.0005, unitLabel: "BTC", verified: false, note: "qty step and tick from instruments-info before the first live order" },
-  "BTCUSD.SPOT": { symbol: "BTCUSDT", contractValue: 0.001, tick: 0.1, takerFee: 0.0005, unitLabel: "BTC", verified: false },
+  "BTCUSDT.CS": { symbol: "BTCUSDT", contractValue: 0.001, tick: 0.1, takerFee: 0.0008, unitLabel: "BTC", verified: false, note: "qty step and tick from instruments-info before the first live order" },
 };
 
 /** NSE monthly index futures expire on the last Tuesday of the month (from September 2025). */

@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  INSTRUMENTS, TF_MS, WINDOWS_BY_ID, tradeWindows, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
+  INSTRUMENTS, TF_MS, WINDOWS_BY_ID, gateInstrument, tradeWindows, analyzeSetup, clientOrderId, costInR, evaluateGate, isFxWeekend, isInWindow, pnlMultiplier, resolveSignal,
   shiftText, sizePosition, stateFromSetup, type Candle, type DeskId, type GateResult, type SessionWindow, type InstrumentId, type SetupAnalysis,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
@@ -69,7 +69,7 @@ export async function evaluate(id: InstrumentId, opts: { bias?: "long" | "short"
       swept: !!a.sweep, shifted, shiftDetail: shiftText(a),
       timing: { inWindow: !!win && !(def.fxHours && isFxWeekend(now)), newsClear, windowId: win?.id ?? null },
       plan: a.suggest ? { ...a.suggest, targetIsStructural: true, stopIsStructural: true } : undefined,
-      minStopPct: def.minStopPct, minRR: opts.filters?.minRR, model, instrument: id === "XAUUSDT.P" ? "XAUUSD" : id,
+      minStopPct: def.minStopPct, minRR: opts.filters?.minRR, model, instrument: gateInstrument(id),
       modelChecks: model === "G" ? { fractal_shift: shifted } : undefined,
       conditions: { ranAway: a.after?.ranAway ?? false },
       config: { counterTrendAllowed: opts.settings?.counter_trend_allowed, advancedModelsAllowed: opts.settings?.advanced_models_allowed },
@@ -237,7 +237,7 @@ export async function tick(db: SupabaseClient): Promise<{ results: { instrument:
   const integ = settings?.integrations as { notify?: unknown; ai_model?: string } | undefined;
   try {
     const briefContext = async (desk: "gold" | "btc") => {
-      const e = await evalFor(desk === "gold" ? "XAUUSD" : "BTCUSDT.P");
+      const e = await evalFor(desk === "gold" ? "XAUUSD" : "BTCUSD");
       return {
         instrument: e.instrument, side: e.side, state: e.state, price: e.price, window: e.window, newsClear: e.newsClear,
         gate: e.gate && { verdict: e.gate.verdict, grade: e.gate.grade, waitingFor: e.gate.waitingFor, blockers: e.gate.blockers, boxes: e.gate.boxes.map((b) => ({ label: b.label, status: b.status, reason: b.reason })) },

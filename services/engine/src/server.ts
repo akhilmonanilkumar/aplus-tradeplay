@@ -8,6 +8,7 @@ import type { CoinSwitchVenue } from "./venues/coinswitch.js";
 import type { DeltaVenue } from "./venues/delta.js";
 import type { FyersVenue } from "./venues/fyers.js";
 import type { CTraderSync } from "./venues/ctrader.js";
+import { HOST_TF_MS, isHostTf, remember } from "./candles.js";
 
 /** Trading endpoints each venue may reach. Anything else is refused. Writes also need the venue's execution switch. */
 export const ALLOW = {
@@ -61,6 +62,21 @@ export function startServer(d: Deps) {
           bars: Math.min(48, Number(url.searchParams.get("bars") ?? 12)), depthPct: Number(url.searchParams.get("depth") ?? 0.01),
         });
         return snap ? send(res, 200, snap) : send(res, 404, { error: `no data for ${venue}:${symbol} yet` });
+      }
+      if (method === "GET" && (url.pathname === "/candles" || url.pathname === "/quote")) {
+        const venue = url.searchParams.get("venue") ?? "", symbol = url.searchParams.get("symbol") ?? "";
+        const src = venue === "coinswitch" ? d.coinswitch : venue === "fyers" ? d.fyers : venue === "ctrader" ? d.ctrader : null;
+        if (!src || !symbol) return send(res, 400, { error: "venue (coinswitch, fyers or ctrader) and symbol are required" });
+        if (url.pathname === "/quote") return send(res, 200, await remember(`q:${venue}:${symbol}`, 1_500, () => src.quote(symbol)));
+        const tf = url.searchParams.get("tf");
+        if (!isHostTf(tf)) return send(res, 400, { error: "tf must be 1m, 5m, 15m, 1h, 4h or 1d" });
+        const limit = Math.min(5000, Math.max(1, Number(url.searchParams.get("limit") ?? 300)));
+        const end = Number(url.searchParams.get("end") ?? 0) || Date.now();
+        // Live reads share one pull per bar step; history pages (an explicit end) are cached longer.
+        const ttl = url.searchParams.get("end") ? 600_000 : Math.min(30_000, HOST_TF_MS[tf] / 10);
+        const bucket = url.searchParams.get("end") ? end : Math.floor(end / ttl);
+        const candles = await remember(`c:${venue}:${symbol}:${tf}:${limit}:${bucket}`, ttl, () => src.candles(symbol, tf, limit, end));
+        return send(res, 200, { venue, symbol, tf, candles });
       }
       if (method === "POST" && url.pathname === "/delta") return proxyDelta(d, raw, res);
       if (method === "POST" && url.pathname === "/coinswitch") {

@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { CLOCK_BUDGET_MS, config } from "../config.js";
 import { timedFetch } from "../http.js";
 import type { MarketHub } from "../market.js";
+import { HOST_TF_MS, type HostCandle, type HostQuote, type HostTf } from "../candles.js";
 import { VenueBase } from "./types.js";
 
 /**
@@ -12,6 +13,7 @@ import { VenueBase } from "./types.js";
  * static IP but uses the same daily token.
  */
 export const FYERS_API = "https://api-t1.fyers.in";
+const FYERS_RES: Record<HostTf, string> = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D" };
 const MASTER_URL = "https://public.fyers.in/sym_details/NSE_FO_sym_master.json";
 
 interface Token { access_token: string; refresh_token?: string; saved_at: number }
@@ -108,6 +110,31 @@ export class FyersVenue extends VenueBase {
       if (book) this.hub.setBook("fyers", focus, { bids: book.bids.map((l) => ({ price: l.price, size: l.volume })), asks: book.ask.map((l) => ({ price: l.price, size: l.volume })), t: Date.now() });
     }
     this.seen();
+  }
+
+  /** Fyers' own candles (/data/history), oldest first. Intraday requests stay within Fyers' 100-day window. */
+  async candles(symbol: string, tf: HostTf, limit: number, endTime = Date.now()): Promise<HostCandle[]> {
+    if (!tokenFresh(this.token)) throw new Error("Fyers session expired; log in for today on Integrations");
+    const ms = HOST_TF_MS[tf];
+    // Calendar span for `limit` bars of a 6¼-hour session day, capped at Fyers' window.
+    const perDay = tf === "1d" ? 1 : Math.max(1, Math.floor(375 * 60_000 / ms));
+    const days = Math.min(tf === "1d" ? 365 : 99, Math.ceil((limit / perDay) * 1.6) + 4);
+    const to = Math.floor(endTime / 1000), from = to - days * 86_400;
+    const q = new URLSearchParams({ symbol, resolution: FYERS_RES[tf], date_format: "0", range_from: String(from), range_to: String(to), cont_flag: "1" });
+    const r = await timedFetch<{ s: string; candles?: number[][]; message?: string }>(`${FYERS_API}/data/history?${q}`, { headers: this.headers() }, 15_000);
+    if (r.body?.s !== "ok") throw new Error(`Fyers history: ${r.body?.message ?? `HTTP ${r.status}`}`);
+    return (r.body.candles ?? []).map((x) => ({ t: x[0]! * 1000, o: x[1]!, h: x[2]!, l: x[3]!, c: x[4]!, v: x[5] ?? 0 })).slice(-limit);
+  }
+
+  /** Latest Fyers price: the polled ticker while it is fresh, else a direct quote. */
+  async quote(symbol: string): Promise<HostQuote> {
+    const tk = this.hub.ticker("fyers", symbol), book = this.hub.book("fyers", symbol);
+    if (tk?.last && Date.now() - tk.t < 15_000) return { last: tk.last, bid: book?.bids[0]?.price ?? null, ask: book?.asks[0]?.price ?? null, ts: tk.t, source: "Fyers" };
+    if (!tokenFresh(this.token)) throw new Error("Fyers session expired; log in for today on Integrations");
+    const q = await timedFetch<{ s: string; d?: { n: string; v: Record<string, number> }[]; message?: string }>(`${FYERS_API}/data/quotes?symbols=${encodeURIComponent(symbol)}`, { headers: this.headers() });
+    const v = q.body?.d?.[0]?.v;
+    if (!v?.lp) throw new Error(`Fyers quote: ${q.body?.message ?? "no price"}`);
+    return { last: v.lp, bid: v.bid || null, ask: v.ask || null, ts: Date.now(), source: "Fyers" };
   }
 
   /** Daily F&O symbol master: every order symbol must exist and its quantity must be a lot multiple. */

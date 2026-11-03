@@ -73,8 +73,10 @@ describe('propSize', () => {
 
 describe('cTrader', () => {
   it('maps engine instruments to CFD symbols', () => {
-    expect(toCTraderSymbol('XAUUSDT.P')).toBe('XAUUSD');
-    expect(toCTraderSymbol('BTCUSDT.P')).toBe('BTCUSD');
+    expect(toCTraderSymbol('XAUUSD')).toBe('XAUUSD');
+    expect(toCTraderSymbol('BTCUSD')).toBe('BTCUSD');
+    expect(toCTraderSymbol('XAUTUSD.DELTA')).toBeNull();
+    expect(toCTraderSymbol('BTCUSDT.CS')).toBeNull();
     expect(toCTraderSymbol('SPX500')).toBe('US500');
     expect(toCTraderSymbol('NIFTY')).toBeNull();
   });

@@ -103,7 +103,7 @@ export interface DetectOptions extends AnalyzeOptions {
   recentBars?: number;
 }
 
-const GOLD = new Set(['XAUUSD', 'XAUUSDT.P']);
+const GOLD = new Set(['XAUUSD', 'XAUUSDT.P', 'XAUTUSD.DELTA']);
 
 /**
  * Every model setup for one side. The analysis is the gate's input (HTF, half, POI, sweep);

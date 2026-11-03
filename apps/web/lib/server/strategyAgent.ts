@@ -15,7 +15,7 @@ import { strategyLab, type Family } from "@/lib/server/strategyLab";
  *    or changes the gates; proposals wait in the League's ideas list).
  */
 
-const MARKETS: InstrumentId[] = ["XAUUSD", "BTCUSDT.P", "XAUUSDT.P", "EURUSD", "GBPUSD", "USDJPY", "NAS100", "SPX500", "NIFTY"];
+const MARKETS: InstrumentId[] = ["XAUUSD", "BTCUSD", "BTCUSD.DELTA", "XAUTUSD.DELTA", "BTCUSDT.CS", "EURUSD", "GBPUSD", "USDJPY", "NAS100", "SPX500", "NIFTY"];
 const FAMILIES: Family[] = ["session", "a5"];
 export const JOBS = MARKETS.flatMap((m) => FAMILIES.map((f) => ({ instrument: m, family: f })));
 

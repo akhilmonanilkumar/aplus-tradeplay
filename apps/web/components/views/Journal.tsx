@@ -12,6 +12,8 @@ import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
 
 type Gate = { n: number; label: string; status: string; reason: string }[];
 type T = Trade & { gate: Gate | null; sweep_type: string | null; htf_zone: string | null; target_type: string | null };
+/** CFD markets (the journal is for the prop accounts). */
+const JOURNAL_MARKETS = ["XAUUSD", "BTCUSD", "EURUSD", "GBPUSD", "USDJPY", "US500", "NAS100"];
 const WIN: Record<string, string> = { london_q: "London Q", ny_q: "NY Q", other: "Outside" };
 const BREAKS = ["chased", "no sweep", "counter-trend", "off-window", "moved stop", "stretched TP", "over-size", "revenge", "news"];
 const EMOTIONS = ["calm", "confident", "fearful", "greedy", "FOMO", "hopeful", "revenge", "doubt"];
@@ -115,7 +117,7 @@ export default function Journal() {
       <div className="row">
         {chipSel("model", "Model", MODEL_IDS.map((m) => [m, ENTRY_MODELS[m].short]))}
         {chipSel("win", "Window", [["london_q", "London Q"], ["ny_q", "NY Q"], ["other", "Outside"]])}
-        {chipSel("inst", "Instrument", [["XAUUSD", "XAUUSD"], ["BTCUSDT.P", "BTCUSDT.P"], ["GOLDM", "GOLDM"]])}
+        {chipSel("inst", "Instrument", JOURNAL_MARKETS.map((m) => [m, m]))}
         <button className={`chip ${fm.breaks ? "down" : ""}`} onClick={() => setFm({ ...fm, breaks: !fm.breaks })}>Rule breaks only</button>
         {chipSel("mood", "Mood", [["low", "1–4"], ["mid", "5–7"], ["high", "8–10"]])}
         <span style={{ flex: 1 }} />
@@ -186,7 +188,7 @@ export default function Journal() {
             <div className="ch"><h3>{editId ? "Edit trade" : "Log trade"}</h3><span className="sp" /><span className="mono" style={{ fontSize: 12 }}>{preview.planned !== null ? `${num(preview.planned, 2)}R planned` : ""}{preview.realized !== null ? ` · ${preview.realized > 0 ? "+" : ""}${num(preview.realized, 2)}R` : ""}</span><button type="button" className="btn ghost sm" onClick={() => { setLog(false); setEditId(null); }}>Close</button></div>
             <div className="auto-s" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(150px, 100%), 1fr))" }}>
               <label className="fld"><span>Account</span><div className="inp"><select value={f.account_id} onChange={set("account_id")}><option value="">—</option>{(accounts.rows ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div></label>
-              <label className="fld"><span>Instrument</span><div className="inp"><select value={f.instrument} onChange={set("instrument")}>{[...new Set(["XAUUSD", "BTCUSDT.P", "GOLDM", "GOLD", f.instrument])].map((i) => <option key={i}>{i}</option>)}</select></div></label>
+              <label className="fld"><span>Instrument</span><div className="inp"><select value={f.instrument} onChange={set("instrument")}>{[...new Set([...JOURNAL_MARKETS, f.instrument])].map((i) => <option key={i}>{i}</option>)}</select></div></label>
               <label className="fld"><span>Side</span><div className="inp"><select value={f.side} onChange={set("side")}><option value="long">Long</option><option value="short">Short</option></select></div></label>
               <label className="fld"><span>Model</span><div className="inp"><select value={f.model} onChange={set("model")}>{MODEL_IDS.map((m) => <option key={m} value={m}>{ENTRY_MODELS[m].short} · {ENTRY_MODELS[m].name}</option>)}</select></div></label>
               <label className="fld"><span>Window</span><div className="inp"><select value={f.session} onChange={set("session")}><option value="london_q">London Q</option><option value="ny_q">NY Q</option><option value="other">Outside</option></select></div></label>

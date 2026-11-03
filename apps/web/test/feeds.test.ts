@@ -221,3 +221,28 @@ describe("macro", () => {
     expect(m.cot).toBeNull();
   });
 });
+
+describe("venue markets read only their own venue", () => {
+  it("reads Delta candles for the Delta market", async () => {
+    const b = bars(40, 60000);
+    routes.push([/api\.india\.delta\.exchange\/v2\/history\/candles/, { success: true, result: b.map((x) => ({ time: x.t / 1000, open: x.o, high: x.h, low: x.l, close: x.c, volume: 1 })) }]);
+    const { loadCandles } = await import("@/lib/server/feeds");
+    const r = await loadCandles("BTCUSD.DELTA", "5m", 30);
+    expect(r.source).toBe("Delta Exchange BTCUSD perp");
+    expect(r.candles).toHaveLength(30);
+  });
+  it("never falls back to another exchange when Delta is down", async () => {
+    // Binance, Bybit and OKX would all answer; the Delta market must still fail.
+    const b = bars(40, 60000);
+    routes.push([/binance|bybit|okx/, b.map((x) => [x.t, String(x.o), String(x.h), String(x.l), String(x.c), "0"])]);
+    const { loadCandles } = await import("@/lib/server/feeds");
+    await expect(loadCandles("BTCUSD.DELTA", "5m", 30)).rejects.toThrow(/Delta Exchange BTCUSD perp/);
+    expect(calls.some((u) => /binance|bybit|okx/.test(u))).toBe(false);
+  });
+  it("needs the engine host for CoinSwitch and Fyers, with no public fallback", async () => {
+    const { loadCandles } = await import("@/lib/server/feeds");
+    await expect(loadCandles("BTCUSDT.CS", "5m", 30)).rejects.toThrow();
+    await expect(loadCandles("NIFTY", "5m", 30)).rejects.toThrow();
+    expect(calls.some((u) => /upstox|yahoo|binance/.test(u))).toBe(false);
+  });
+});

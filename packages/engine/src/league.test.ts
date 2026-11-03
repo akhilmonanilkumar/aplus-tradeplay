@@ -8,13 +8,15 @@ const series = (n: number, win: number, loss: number, days = 30, start = 0): Lea
 
 describe('venues and costs', () => {
   it('maps markets to the venues that can trade them', () => {
-    expect(venuesFor('BTCUSDT.P')).toEqual(['delta', 'coinswitch']);
+    expect(venuesFor('BTCUSD.DELTA')).toEqual(['delta']);
+    expect(venuesFor('XAUTUSD.DELTA')).toEqual(['delta']);
+    expect(venuesFor('BTCUSDT.CS')).toEqual(['coinswitch']);
+    expect(venuesFor('BTCUSDT.P')).toEqual([]);
     expect(venuesFor('XAUUSD')).toEqual(['cfd']);
     expect(venuesFor('NIFTY')).toEqual(['fyers']);
   });
-  it('charges a venue its extra round-trip cost in R', () => {
-    // BTC at 100,000 with a 500 stop: Delta adds 2 × 0.02% × 100,000 / 500 = 0.08R
-    expect(venueNetR(1, 100_000, 99_500, 'delta')).toBeCloseTo(0.92);
+  it('adds no extra venue cost: venue markets carry their own fees', () => {
+    expect(venueNetR(1, 100_000, 99_500, 'delta')).toBe(1);
     expect(venueNetR(1, 100_000, 99_500, 'cfd')).toBe(1);
   });
   it('builds and parses venue keys', () => {

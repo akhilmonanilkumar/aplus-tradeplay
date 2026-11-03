@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  EDGE_RULES, INSTRUMENTS, INSTRUMENT_IDS, WINDOWS_BY_ID, tradeWindows, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, planSetup, runSessionModel,
+  EDGE_RULES, INSTRUMENTS, gateInstrument, INSTRUMENT_IDS, WINDOWS_BY_ID, tradeWindows, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, planSetup, runSessionModel,
   type Candle, type GateResult, type InstrumentId, type ModelSetup, type SetupAnalysis, type SetupPlan,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
@@ -20,8 +20,8 @@ export interface LedgerConfig { instrument: InstrumentId; mode: string; filters?
 export interface LedgerSettings { counter_trend_allowed?: boolean; advanced_models_allowed?: boolean; news_block_minutes?: number }
 export interface Tradeable { signalId: string; side: "long" | "short"; plan: { entry: number; stop: number; target: number } }
 
-/** Session strategies run on one instrument per underlying (the others read the same market). */
-const SESSION_INSTRUMENTS = new Set<InstrumentId>(["XAUUSD", "BTCUSDT.P"]);
+/** Session strategies run on every traded market: each venue reads its own prices, so each keeps its own record. */
+const SESSION_INSTRUMENTS = new Set<InstrumentId>(["XAUUSD", "BTCUSD", "BTCUSD.DELTA", "XAUTUSD.DELTA", "BTCUSDT.CS"]);
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
 
 function windowAt(id: InstrumentId, t: number) {
@@ -58,7 +58,7 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
       swept: !!s.sweep, shifted: s.shifted, modelChecks: s.checks,
       timing: { inWindow: !!win && !(def.fxHours && isFxWeekend(T)), newsClear: !releases.some((n) => Math.abs(n - T) <= blockMin * 60_000), windowId: win?.id ?? null, minutesSinceNews: last !== undefined ? (T - last) / 60_000 : null },
       plan: { entry: plan.entry, stop: plan.stop, target: plan.target, targetIsStructural: true, stopIsStructural: true },
-      minRR, minStopPct: def.minStopPct, model: s.model, instrument: id === "XAUUSDT.P" ? "XAUUSD" : id, config,
+      minRR, minStopPct: def.minStopPct, model: s.model, instrument: gateInstrument(id), config,
     });
   };
 

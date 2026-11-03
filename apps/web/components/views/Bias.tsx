@@ -121,7 +121,7 @@ function Report({ inst, m, saved, onSaved }: { inst: string; m: MarketData | nul
 
 export default function Bias() {
   const xau = useMarket("XAUUSD");
-  const btc = useMarket("BTCUSDT.P");
+  const btc = useMarket("BTCUSD");
   const saved = useRows<Saved>({ table: "bias_reports", eq: ["report_date", todayIst()] });
   const news = useRows<NewsEvent>({ table: "news_events", order: "at", ascending: true, limit: 60 });
   const signals = useRows<Signal>({ table: "signals", order: "created_at", limit: 20 });
@@ -130,7 +130,7 @@ export default function Bias() {
 
   const reads = [
     { i: "XAUUSD", r: compute("XAUUSD", xau.data, (saved.rows ?? []).find((s) => s.instrument === "XAUUSD") ?? null, { target: "", invalidation: "", narrative: "" }) },
-    { i: "BTCUSDT.P", r: compute("BTCUSDT.P", btc.data, (saved.rows ?? []).find((s) => s.instrument === "BTCUSDT.P") ?? null, { target: "", invalidation: "", narrative: "" }) },
+    { i: "BTCUSD", r: compute("BTCUSD", btc.data, (saved.rows ?? []).find((s) => s.instrument === "BTCUSD") ?? null, { target: "", invalidation: "", narrative: "" }) },
   ];
   const sentence = reads.map(({ i, r }) => {
     if (!r?.b) return null;

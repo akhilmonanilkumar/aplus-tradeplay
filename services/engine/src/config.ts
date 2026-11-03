@@ -52,6 +52,8 @@ export const config = {
     clientSecret: env("CTRADER_CLIENT_SECRET"),
     redirectUri: env("CTRADER_REDIRECT_URI"),
     tokenFile: env("CTRADER_TOKEN_FILE", "/data/ctrader-token.json"),
+    /** App symbol → broker symbol where the prop broker names it differently, e.g. "NAS100=USTEC,US500=SPX500". */
+    symbolMap: Object.fromEntries(list("CTRADER_SYMBOL_MAP", "").map((x) => x.split("=").map((y) => y.trim())).filter((x) => x.length === 2 && x[0] && x[1])) as Record<string, string>,
   },
 } as const;
 
