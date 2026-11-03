@@ -145,6 +145,20 @@ function oanda(instrumentName: string): Provider["load"] {
   };
 }
 
+/** Twelve Data (paid plans from $79/month; sign-up works from India). Forex, metals and crypto in "XAU/USD" form. */
+const TD_TF: Record<Tf, string> = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "1d": "1day" };
+const hasTwelve = () => !!env("TWELVEDATA_API_KEY");
+const tdTime = (x: string) => Date.parse(x.length <= 10 ? `${x}T00:00:00Z` : `${x.replace(" ", "T")}Z`);
+function twelve(symbol: string): Provider["load"] {
+  return async (tf, r) => {
+    const q = new URLSearchParams({ symbol, interval: TD_TF[tf], outputsize: String(Math.min(5000, r.limit)), timezone: "UTC", order: "asc", apikey: env("TWELVEDATA_API_KEY") });
+    if (r.endTime) q.set("end_date", new Date(r.endTime).toISOString().slice(0, 19).replace("T", " "));
+    const j = await getJson<{ status: string; message?: string; values?: { datetime: string; open: string; high: string; low: string; close: string; volume?: string }[] }>(`https://api.twelvedata.com/time_series?${q}`);
+    if (j.status !== "ok") throw new Error(`Twelve Data: ${j.message ?? j.status}`);
+    return (j.values ?? []).map((x) => ({ t: tdTime(x.datetime), o: num(x.open), h: num(x.high), l: num(x.low), c: num(x.close), v: num(x.volume ?? 0) })).sort((a, b) => a.t - b.t);
+  };
+}
+
 /* ---------------- Yahoo Finance (keyless) ---------------- */
 
 /**
@@ -248,8 +262,9 @@ const hasOanda = () => !!env("OANDA_API_KEY");
 export const CHAINS: Record<InstrumentId, Provider[]> = {
   XAUUSD: [
     hostProvider("ctrader", "XAUUSD", "cTrader prop broker XAUUSD"),
+    { name: "Twelve Data XAU/USD", approx: false, enabled: hasTwelve, load: twelve("XAU/USD") },
     { name: "OANDA XAU/USD", approx: false, enabled: hasOanda, load: oanda("XAU_USD") },
-    { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Add an OANDA key for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
+    { name: "Binance XAU index (spot-gold composite)", approx: true, note: "Connect cTrader (or add a Twelve Data key) for broker-grade XAU/USD", load: binanceFutures("indexPriceKlines", "XAUUSDT") },
     { name: "PAXG/USDT proxy", approx: true, note: "1 PAXG ≈ 1 oz; trades at a small premium to spot", load: binanceSpot("PAXGUSDT") },
   ],
   "XAUUSDT.P": [
@@ -270,12 +285,14 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   ],
   BTCUSD: [
     hostProvider("ctrader", "BTCUSD", "cTrader prop broker BTCUSD"),
+    { name: "Twelve Data BTC/USD", approx: false, enabled: hasTwelve, load: twelve("BTC/USD") },
     { name: "OANDA BTC/USD CFD", approx: false, enabled: hasOanda, load: oanda("BTC_USD") },
     { name: "Coinbase BTC-USD (CFD reference)", approx: true, note: "Broker CFD tracks USD spot plus its spread", load: coinbase("BTC-USD") },
     { name: "Kraken XBT/USD (CFD reference)", approx: true, load: kraken("XBTUSD") },
   ],
   EURUSD: [
     hostProvider("ctrader", "EURUSD", "cTrader prop broker EURUSD"),
+    { name: "Twelve Data EUR/USD", approx: false, enabled: hasTwelve, load: twelve("EUR/USD") },
     { name: "OANDA EUR/USD", approx: false, enabled: hasOanda, load: oanda("EUR_USD") },
     // Yahoo keeps 60 days of 5M; longer backtests fall through to Binance EUR/USDT.
     { name: "Yahoo EUR/USD", approx: false, load: yahoo("EURUSD=X") },
@@ -283,12 +300,14 @@ export const CHAINS: Record<InstrumentId, Provider[]> = {
   ],
   GBPUSD: [
     hostProvider("ctrader", "GBPUSD", "cTrader prop broker GBPUSD"),
+    { name: "Twelve Data GBP/USD", approx: false, enabled: hasTwelve, load: twelve("GBP/USD") },
     { name: "OANDA GBP/USD", approx: false, enabled: hasOanda, load: oanda("GBP_USD") },
     { name: "Yahoo GBP/USD", approx: false, load: yahoo("GBPUSD=X") },
     { name: "Binance GBP/USDT", approx: true, note: "USDT, not USD; thinner than the interbank market", load: binanceSpot("GBPUSDT") },
   ],
   USDJPY: [
     hostProvider("ctrader", "USDJPY", "cTrader prop broker USDJPY"),
+    { name: "Twelve Data USD/JPY", approx: false, enabled: hasTwelve, load: twelve("USD/JPY") },
     { name: "OANDA USD/JPY", approx: false, enabled: hasOanda, load: oanda("USD_JPY") },
     { name: "Yahoo USD/JPY", approx: false, load: yahoo("JPY=X") },
   ],
@@ -580,9 +599,20 @@ const deltaQuote = (symbol: string): QuoteProvider => ({
   },
 });
 
+const twelveQuote = (symbol: string): QuoteProvider => ({
+  name: `Twelve Data ${symbol}`,
+  enabled: hasTwelve,
+  load: async () => {
+    const j = await getJson<{ price?: string; status?: string; message?: string }>(`https://api.twelvedata.com/price?${new URLSearchParams({ symbol, apikey: env("TWELVEDATA_API_KEY") })}`);
+    if (!j.price) throw new Error(`Twelve Data: ${j.message ?? "no price"}`);
+    return { bid: null, ask: null, last: num(j.price), ts: Date.now(), source: `Twelve Data ${symbol}`, approx: false };
+  },
+});
+
 const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   XAUUSD: [
     hostQuote("ctrader", "XAUUSD", "cTrader prop broker XAUUSD"),
+    twelveQuote("XAU/USD"),
     {
       name: "OANDA XAU/USD",
       enabled: () => hasOanda() && !!env("OANDA_ACCOUNT_ID"),
@@ -608,10 +638,10 @@ const QUOTES: Record<InstrumentId, QuoteProvider[]> = {
   "XAUUSDT.P": [binanceFutQuote("XAUUSDT", "Binance XAUUSDT.P")],
   "BTCUSDT.P": [binanceFutQuote("BTCUSDT", "Binance BTCUSDT.P")],
   "BTCUSD.SPOT": [coinbaseQuote],
-  BTCUSD: [hostQuote("ctrader", "BTCUSD", "cTrader prop broker BTCUSD"), coinbaseQuote],
-  EURUSD: [hostQuote("ctrader", "EURUSD", "cTrader prop broker EURUSD"), swissquote("EUR", "USD")],
-  GBPUSD: [hostQuote("ctrader", "GBPUSD", "cTrader prop broker GBPUSD"), swissquote("GBP", "USD")],
-  USDJPY: [hostQuote("ctrader", "USDJPY", "cTrader prop broker USDJPY"), swissquote("USD", "JPY")],
+  BTCUSD: [hostQuote("ctrader", "BTCUSD", "cTrader prop broker BTCUSD"), twelveQuote("BTC/USD"), coinbaseQuote],
+  EURUSD: [hostQuote("ctrader", "EURUSD", "cTrader prop broker EURUSD"), twelveQuote("EUR/USD"), swissquote("EUR", "USD")],
+  GBPUSD: [hostQuote("ctrader", "GBPUSD", "cTrader prop broker GBPUSD"), twelveQuote("GBP/USD"), swissquote("GBP", "USD")],
+  USDJPY: [hostQuote("ctrader", "USDJPY", "cTrader prop broker USDJPY"), twelveQuote("USD/JPY"), swissquote("USD", "JPY")],
   NAS100: [hostQuote("ctrader", "NAS100", "cTrader prop broker NAS100"), binanceFutQuote("QQQUSDT", "Binance QQQUSDT.P (approx)")],
   SPX500: [hostQuote("ctrader", "US500", "cTrader prop broker US500"), binanceFutQuote("SPYUSDT", "Binance SPYUSDT.P (approx)")],
   "BTCUSD.DELTA": [deltaQuote("BTCUSD")],

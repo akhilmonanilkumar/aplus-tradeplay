@@ -114,15 +114,30 @@ export function parseTrendbars(payload: Record<string, unknown>): HostCandle[] {
 }
 
 /** Broker symbol for an app symbol: an explicit map first (CTRADER_SYMBOL_MAP), then an exact or suffixed match. */
+/** Names prop brokers commonly use for the same market. Tried in order after the app's own name. */
+export const SYMBOL_ALIASES: Record<string, string[]> = {
+  XAUUSD: ["GOLD", "XAUUSD"],
+  NAS100: ["USTEC", "US100", "NAS100", "NDX100", "NQ100", "USTECH"],
+  US500: ["US500", "SPX500", "SP500", "USA500", "US500CASH"],
+  SPX500: ["US500", "SPX500", "SP500", "USA500"],
+  BTCUSD: ["BTCUSD", "BITCOIN", "BTCUSDT"],
+  USDJPY: ["USDJPY"], EURUSD: ["EURUSD"], GBPUSD: ["GBPUSD"],
+};
+
+/**
+ * The broker's symbol id for an app symbol. Order: CTRADER_SYMBOL_MAP, the app name, then common aliases.
+ * Each name matches exactly first, then with a short broker suffix (XAUUSD.r, NAS100.cash, EURUSDm).
+ */
 export function matchSymbol(want: string, names: Map<number, string>, overrides: Record<string, string> = {}): number | null {
-  const target = (overrides[want] ?? want).toUpperCase();
   const norm = (x: string) => x.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  let best: number | null = null;
-  for (const [id, name] of names) {
-    if (name.toUpperCase() === target) return id;
-    if (best === null && norm(name).startsWith(norm(target)) && norm(name).length <= norm(target).length + 3) best = id;
+  const tries = overrides[want] ? [overrides[want]!] : [want, ...(SYMBOL_ALIASES[want.toUpperCase()] ?? [])];
+  for (const t of tries) {
+    const target = t.toUpperCase();
+    for (const [id, name] of names) if (name.toUpperCase() === target) return id;
+    const n = norm(t);
+    for (const [id, name] of names) if (norm(name).startsWith(n) && norm(name).length <= n.length + 5) return id;
   }
-  return best;
+  return null;
 }
 
 /** Positions from a reconcile response: volume arrives in hundredths of a unit, money in 10^-moneyDigits. */

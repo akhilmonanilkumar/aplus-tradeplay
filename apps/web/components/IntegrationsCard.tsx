@@ -11,8 +11,9 @@ type Status = { ai: { provider: string | null; model: string }; keys: Record<str
 const KEYS: { k: string; what: string; where: string }[] = [
   { k: "OPENROUTER_API_KEY", what: "AI desk analyst, briefs, news reads, trade reviews", where: "openrouter.ai → Keys" },
   { k: "TELEGRAM_BOT_TOKEN", what: "Send Telegram alerts", where: "@BotFather → /newbot" },
-  { k: "OANDA_API_KEY", what: "Broker-grade XAU/USD candles (free practice account works)", where: "OANDA → Manage API access" },
-  { k: "OANDA_ACCOUNT_ID", what: "Live XAU/USD bid/ask from OANDA", where: "OANDA account number" },
+  { k: "TWELVEDATA_API_KEY", what: "Backup CFD prices and long history for gold, forex and BTC when cTrader is offline", where: "twelvedata.com → API keys (Grow plan or higher)" },
+  { k: "OANDA_API_KEY", what: "Optional: OANDA candles, if you already have an OANDA account", where: "OANDA → Manage API access" },
+  { k: "OANDA_ACCOUNT_ID", what: "Optional: live bid/ask from OANDA", where: "OANDA account number" },
   { k: "FRED_API_KEY", what: "10Y real yield (TIPS) for the gold desk", where: "fred.stlouisfed.org → API keys (free)" },
   { k: "FINNHUB_API_KEY", what: "Extra news headlines", where: "finnhub.io (free tier)" },
   { k: "SUPABASE_SERVICE_ROLE_KEY", what: "Autopilot, selector, investor invites", where: "Supabase → Project settings → API" },

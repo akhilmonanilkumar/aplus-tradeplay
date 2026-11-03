@@ -152,8 +152,12 @@ describe("cTrader price feed", () => {
     const names = new Map([[1, "XAUUSD."], [2, "USTEC"], [3, "EURUSD"], [4, "US500"]]);
     expect(matchSymbol("EURUSD", names)).toBe(3);
     expect(matchSymbol("XAUUSD", names)).toBe(1);
-    expect(matchSymbol("NAS100", names)).toBeNull();
-    expect(matchSymbol("NAS100", names, { NAS100: "USTEC" })).toBe(2);
+    expect(matchSymbol("NAS100", names)).toBe(2);
+    expect(matchSymbol("NAS100", names, { NAS100: "US500" })).toBe(4);
+    expect(matchSymbol("NAS100", new Map([[7, "NAS100.cash"]]))).toBe(7);
+    expect(matchSymbol("XAUUSD", new Map([[8, "GOLD"]]))).toBe(8);
+    expect(matchSymbol("US500", new Map([[9, "SPX500_SB"]]))).toBe(9);
+    expect(matchSymbol("USDJPY", new Map([[5, "EURUSD"]]))).toBeNull();
   });
 });
 
