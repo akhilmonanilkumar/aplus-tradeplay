@@ -16,7 +16,7 @@ import { strategyLab, type Family } from "@/lib/server/strategyLab";
  */
 
 const MARKETS: InstrumentId[] = ["XAUUSD", "BTCUSD", "BTCUSD.DELTA", "XAUTUSD.DELTA", "BTCUSDT.CS", "EURUSD", "GBPUSD", "USDJPY", "NAS100", "SPX500", "NIFTY"];
-const FAMILIES: Family[] = ["session", "a5"];
+const FAMILIES: Family[] = ["session", "day", "a5"];
 export const JOBS = MARKETS.flatMap((m) => FAMILIES.map((f) => ({ instrument: m, family: f })));
 
 /** Today's slice of the rotation: every job comes round every few days. */
@@ -28,7 +28,7 @@ export function todaysJobs(now = Date.now(), perRun = 4) {
 
 /** League keys a lab row's result belongs to: session variants by id, the live A+ rules as model A. */
 export function keysForRow(instrument: string, family: Family, rowId: string): string[] {
-  const model = family === "session" ? "S" : rowId === "live" ? "A" : null;
+  const model = family === "session" || family === "day" ? "S" : rowId === "live" ? "A" : null;
   if (!model) return [];
   return venuesFor(instrument).map((v) => venueKey(v, instrument, model, model === "S" ? rowId : null));
 }

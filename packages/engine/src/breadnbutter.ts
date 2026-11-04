@@ -61,7 +61,7 @@ export interface BnbData {
   corr?: { ltf: readonly Candle[]; sign: 1 | -1 } | null;
 }
 
-export interface BnbTrade extends SessionTrade { protectedAt: number; smt: boolean }
+export interface BnbTrade extends SessionTrade { protectedAt: number; smt: boolean; filledAt: number }
 
 const HOUR = 3_600_000;
 const MORNING_NY: SessionWindow = { id: 'bnb_morning', name: 'Morning', start: { hour: 1, minute: 0 }, end: { hour: 12, minute: 0 }, tz: NY };
@@ -230,7 +230,7 @@ export function runBreadnButter(id: InstrumentId, data: BnbData, p: BnbParams): 
         if (!Number.isFinite(exitPx)) continue;
         const runner = ((long ? 1 : -1) * (exitPx - entry)) / risk;
         const rGross = banked ? 0.5 * banked + 0.5 * runner : runner;
-        trades.push({ side, signalAt: T, exitAt, entry, stop, target, plannedR, rGross, rNet: rGross - costR, exit, protectedAt: ltf[extAt]!.t, smt });
+        trades.push({ side, signalAt: T, exitAt, entry, stop, target, plannedR, rGross, rNet: rGross - costR, exit, protectedAt: ltf[extAt]!.t, smt, filledAt: ltf[filled]!.t });
         done = true;
         break;
       }

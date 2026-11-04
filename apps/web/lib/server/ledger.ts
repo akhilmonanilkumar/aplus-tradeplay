@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  EDGE_RULES, INSTRUMENTS, gateInstrument, INSTRUMENT_IDS, WINDOWS_BY_ID, tradeWindows, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, planSetup, runSessionModel,
+  DAY_VARIANTS, EDGE_RULES, INSTRUMENTS, SMT_PAIRS, gateInstrument, runDayVariant, venuesFor, INSTRUMENT_IDS, WINDOWS_BY_ID, tradeWindows, SESSION_VARIANTS, TF_MS, detectModels, evaluateGate, isFxWeekend, isInWindow, planSetup, runSessionModel,
   type Candle, type GateResult, type InstrumentId, type ModelSetup, type SetupAnalysis, type SetupPlan,
 } from "@aplus/engine";
 import { loadCandles, loadHistory } from "@/lib/server/feeds";
@@ -114,6 +114,34 @@ export async function modelLedger(db: SupabaseClient, cfg: LedgerConfig, ctx: { 
           entry: t.entry, stop: t.stop, target: t.target, rr: r3(t.plannedR), grade: "S", gate: [],
           state: "ARMED", edge_version: "3.1", source: "autopilot", outcome: "pending", created_at: new Date(t.signalAt).toISOString(),
           meta: { key, strategy: v.id, detail: v.label, entryType: "market", tradeable: true, mode: cfg.mode, partialAtR: v.params.partialAtR, dataSource: ses.source },
+        });
+        meta.push({ key, tradeable: true, side: t.side, plan: { entry: t.entry, stop: t.stop, target: t.target, targetLabel: "", stopAnchor: "", plannedR: t.plannedR, targets: [] } });
+      }
+    }
+  }
+
+  // Day strategies (BreadnButter, Range Theory) on every traded market, each on its own prices.
+  // They work pending orders, so a trade is logged at its fill as a market entry at the order price.
+  if (venuesFor(id).length) {
+    const [d5, d15] = await Promise.all([loadCandles(id, "5m", 1000), loadCandles(id, "15m", 1000)]);
+    const pair = SMT_PAIRS[id];
+    const corr = pair ? await loadCandles(pair.id, "5m", 1000).then((x) => x.candles).catch(() => [] as Candle[]) : null;
+    const htfMs = TF_MS[def.htf];
+    for (const v of DAY_VARIANTS) {
+      const r = runDayVariant(v, id, v.strategy === "rt"
+        ? { ltf: d15.candles, ltfMs: TF_MS["15m"], htf: htf.candles, htfMs }
+        : { ltf: d5.candles, ltfMs: TF_MS["5m"], htf: htf.candles, htfMs, corr, corrSign: pair?.sign });
+      if (!r) continue;
+      for (const t of r.trades.filter((x) => x.filledAt >= now - 20 * 60_000)) {
+        const key = `S:${v.id}:${t.side}:${t.filledAt}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const win = windowAt(id, t.filledAt);
+        rows.push({
+          instrument: id, side: t.side, model: "S", session_window: win?.id ?? null,
+          entry: t.entry, stop: t.stop, target: t.target, rr: r3(t.plannedR), grade: "S", gate: [],
+          state: "ARMED", edge_version: "3.1", source: "autopilot", outcome: "pending", created_at: new Date(t.filledAt).toISOString(),
+          meta: { key, strategy: v.id, detail: v.label, entryType: "market", tradeable: true, mode: cfg.mode, setupAt: t.signalAt, dataSource: v.strategy === "rt" ? d15.source : d5.source },
         });
         meta.push({ key, tradeable: true, side: t.side, plan: { entry: t.entry, stop: t.stop, target: t.target, targetLabel: "", stopAnchor: "", plannedR: t.plannedR, targets: [] } });
       }

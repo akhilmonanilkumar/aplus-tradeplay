@@ -1,6 +1,6 @@
 "use client";
 
-import { ENTRY_MODELS, MODEL_IDS, SESSION_STRATEGIES, SESSION_VARIANTS, strategyName, type EntryModel } from "@aplus/engine";
+import { DAY_STRATEGIES, DAY_VARIANTS, ENTRY_MODELS, MODEL_IDS, SESSION_STRATEGIES, SESSION_VARIANTS, strategyName, type EntryModel } from "@aplus/engine";
 import PlaybookChart from "@/components/PlaybookChart";
 import { Chip } from "@/components/ui";
 import { MODEL_SKETCH, STRATEGY_RULES, STRATEGY_SKETCH } from "@/lib/playbook";
@@ -102,6 +102,32 @@ export default function Playbook() {
             </section>
           );
         })}
+      </div>
+
+      <h2 className="lbl-u" style={{ margin: "6px 0 -4px" }}>Day strategies</h2>
+      <section className="card" style={{ padding: 14 }}>
+        <p style={{ fontSize: 13, margin: 0 }}>
+          Clock-built rule sets on every traded market, each on its own venue&apos;s prices. The plain version runs as taught; the A+
+          versions add the gates that held up in the backtest. Every variant skips trades whose fees exceed a quarter of the risk.
+        </p>
+      </section>
+      <div className="g12">
+        {DAY_STRATEGIES.map((st) => (
+          <section key={st.id} className="card s6 col" style={{ gap: 10 }}>
+            <div className="between">
+              <h3 style={{ margin: 0, fontSize: 16 }}>{st.name}</h3>
+              <div className="row" style={{ gap: 6 }}><Chip tone={st.kind === "breakout" ? "warn" : "info"}>{st.kind}</Chip><Chip>{st.range} range → {st.trade}</Chip></div>
+            </div>
+            <span className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>{st.summary}</span>
+            <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, lineHeight: 1.5 }}>{st.steps.map((x) => <li key={x}>{x}</li>)}</ol>
+            <div>
+              <Rule k="Entry" v={st.entry} />
+              <Rule k="Stop" v={st.stop} />
+              <Rule k="Target" v={st.target} />
+            </div>
+            <div className="col" style={{ gap: 4 }}>{DAY_VARIANTS.filter((v) => v.strategy === st.id).map((v) => <span key={v.id} className="faint" style={{ fontSize: 12 }}>• {v.label}</span>)}</div>
+          </section>
+        ))}
       </div>
     </>
   );
