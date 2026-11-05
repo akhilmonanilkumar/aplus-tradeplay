@@ -28,7 +28,7 @@ export async function GET(req: Request) {
   if (family === ("structure" as Family)) {
     try { return Response.json(await structureReport(i)); } catch (e) { return Response.json({ error: errMsg(e) }, { status: 500 }); }
   }
-  if (family !== "a5" && family !== "a15" && family !== "session" && family !== "models" && family !== "improve") return Response.json({ error: "family must be a5, a15, session, models or improve" }, { status: 400 });
+  if (family !== "a5" && family !== "a15" && family !== "session" && family !== "day" && family !== "models" && family !== "improve") return Response.json({ error: "family must be a5, a15, session, day, models or improve" }, { status: 400 });
   try {
     return Response.json(await strategyLab(i, family, Number(q.get("days")) || 180, { m1: q.get("m1") === "1", source: q.get("source") || undefined }));
   } catch (e) {

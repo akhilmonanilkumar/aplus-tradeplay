@@ -5,6 +5,7 @@ import { FRAME_BARS } from './backtest.js';
 import { ASIA_Q, LONDON_Q, NY, NY_Q, wallToUtc, windowOnDateOf, zonedParts, type SessionWindow } from './sessions.js';
 import { INSTRUMENTS, costInR, type InstrumentId } from './instruments.js';
 import { summarize, type RStats } from './stats.js';
+import { dayVariant } from './dayStrategies.js';
 
 /**
  * Session-range models: the range one session builds (Asia, London) traded in the next window.
@@ -189,6 +190,8 @@ export const SESSION_STRATEGIES = [
 /** Display name of a session variant id, e.g. "asia-fade-p-t" → "Tokyo Trap · ½ at 1R · trend". */
 export function strategyName(id: string | null | undefined): string {
   if (!id) return 'Session strategy';
+  const day = dayVariant(id);
+  if (day) return day.name;
   const base = SESSION_STRATEGIES.find((s) => id === s.id || id.startsWith(`${s.id}-`));
   if (!base) return id;
   const rest = id.slice(base.id.length).split('-').filter(Boolean);

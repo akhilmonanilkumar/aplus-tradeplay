@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, tradeWindows, NY, SESSION_VARIANTS, TF_MS, FRAME_BARS, lossDiagnostics, usHighImpactTimes, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
+  DAY_VARIANTS, SMT_PAIRS, runDayVariant, summarize, ENTRY_MODELS, INSTRUMENTS, MODEL_IDS, tradeWindows, NY, SESSION_VARIANTS, TF_MS, FRAME_BARS, lossDiagnostics, usHighImpactTimes, STRUCTURE, frameStructure, runSessionModel, scanSignals, simulate, smcStructure, swingStructure, zonedParts,
   type InstrumentId, type ScanTfs, type StrategyParams, type Tf,
 } from "@aplus/engine";
 import { historyEnd, loadFrames, loadHistory } from "@/lib/server/feeds";
@@ -11,7 +11,7 @@ import { historyEnd, loadFrames, loadHistory } from "@/lib/server/feeds";
  * positive in both the earlier and the later half of the period.
  */
 
-export type Family = "a5" | "a15" | "session" | "models" | "improve";
+export type Family = "a5" | "a15" | "session" | "day" | "models" | "improve";
 
 const WARM: Record<string, number> = { "1h": 32 * 86_400_000, "4h": 90 * 86_400_000, "15m": 8 * 86_400_000, "5m": 2 * 86_400_000 };
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -134,7 +134,7 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180, 
   const ltfMs = TF_MS[tfs.ltf];
   const to = historyEnd();
   const from = to - days * 86_400_000;
-  const frames = (family === "session" ? [tfs.ltf, tfs.htf] : [tfs.ltf, tfs.htf, tfs.poi]).map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) }));
+  const frames = (family === "session" ? [tfs.ltf, tfs.htf] : family === "day" ? [tfs.ltf, tfs.htf, "15m" as const] : [tfs.ltf, tfs.htf, tfs.poi]).map((tf) => ({ tf, from: from - (WARM[tf] ?? 0) }));
   const [ltf, htf, poi = null] = await loadFrames(id, frames, to, { source: opts.source });
   const m1 = withM1 ? (await loadFrames(id, [{ tf: "1m", from }], to, { source: ltf.source }))[0]!.candles : undefined;
   // NFP and FOMC releases (no historical calendar): box 6 news filter and model I.
@@ -143,7 +143,20 @@ export async function strategyLab(id: InstrumentId, family: Family, days = 180, 
   const mid = (from + to) / 2;
   let rows: Row[];
 
-  if (family === "session") {
+  if (family === "day") {
+    // BreadnButter on 5M, Range Theory on 15M; the SMT variant reads the correlated market on the same venue.
+    const pair = SMT_PAIRS[id];
+    const corr = pair ? (await loadFrames(pair.id, [{ tf: tfs.ltf, from: from - (WARM[tfs.ltf] ?? 0) }], to).catch(() => null))?.[0]?.candles ?? null : null;
+    const m15 = poi!.candles;
+    rows = DAY_VARIANTS.flatMap((v) => {
+      const r = runDayVariant(v, id, v.strategy === "rt"
+        ? { ltf: m15.filter((c) => c.t >= from - 10 * 86_400_000), ltfMs: TF_MS["15m"], htf: htf.candles, htfMs: TF_MS[tfs.htf] }
+        : { ltf: ltf.candles.filter((c) => c.t >= from - 86_400_000), ltfMs, htf: htf.candles, htfMs: TF_MS[tfs.htf], corr, corrSign: pair?.sign });
+      if (!r) return [];
+      const trades = r.trades.filter((t) => t.signalAt >= from);
+      return [row(v.id, v.label, trades, summarize(trades.map((t) => t.rNet)), mid)];
+    });
+  } else if (family === "session") {
     rows = SESSION_VARIANTS.map((v) => {
       const r = runSessionModel(id, { htf: htf.candles, ltf: ltf.candles.filter((c) => c.t >= from), htfMs: TF_MS[tfs.htf], ltfMs }, v.params);
       return row(v.id, v.label, r.trades, r.stats, mid);
