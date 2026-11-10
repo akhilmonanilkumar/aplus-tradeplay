@@ -10,6 +10,7 @@ import { instrumentOk, loadCandles, loadQuote } from "@/lib/server/feeds";
 import { loadCalendar } from "@/lib/server/news";
 import { chatsFrom, type Chat } from "@/lib/server/telegram";
 import { errMsg } from "@/lib/server/http";
+import { cfdSetups, type RankedSetup } from "@/lib/server/cfdSetups";
 
 /**
  * CFD live board, the server half. Every confirmed CFD alert is marked to the live price on each read:
@@ -38,7 +39,7 @@ export interface Forming {
   instrument: string; symbol: string; side: "long" | "short"; state: string; grade: string | null; at: string; digits: number;
   waitingFor: string[]; blockers: string[]; plan: { entry: number; stop: number; target: number } | null; price: number | null;
 }
-export interface LiveBoard { at: number; alerts: LiveAlert[]; forming: Forming[]; notes: string[]; execMode: "off" | "confirm" }
+export interface LiveBoard { at: number; alerts: LiveAlert[]; forming: Forming[]; setups: RankedSetup[]; notes: string[]; execMode: "off" | "confirm" }
 
 type Row = {
   id: string; signal_id: string | null; instrument: string; symbol: string; side: "long" | "short"; model: string | null; grade: string | null;
@@ -55,7 +56,8 @@ const OUTCOME_TEXT: Record<LiveOutcome, string> = {
 };
 
 /** Mark every open CFD alert to the market, re-check unfilled ones with the detector, and return the board. */
-export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean; now?: number } = {}): Promise<LiveBoard> {
+/** `setups`: also return the ranked paper setups (the dashboard; the autopilot pass does not need them). */
+export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean; now?: number; setups?: boolean } = {}): Promise<LiveBoard> {
   const now = opts.now ?? Date.now();
   const notes: string[] = [];
   const res = await db.from("cfd_alerts")
@@ -165,7 +167,12 @@ export async function syncCfdLive(db: SupabaseClient, opts: { detector?: boolean
     out.push(view(row, life, m ?? null, orders.filter((o) => o.alert_id === r.id)));
   }
 
-  return { at: now, alerts: out, forming: await forming(db, out, now).catch(() => []), notes, execMode };
+  const prices = new Map([...market].map(([k, v]) => [k, v.price]));
+  const [form, setups] = await Promise.all([
+    forming(db, out, now).catch(() => []),
+    opts.setups ? cfdSetups(db, now, prices).catch((e) => { notes.push(`setups: ${errMsg(e)}`); return []; }) : Promise.resolve([]),
+  ]);
+  return { at: now, alerts: out, forming: form, setups, notes, execMode };
 }
 
 async function context(db: SupabaseClient) {

@@ -8,13 +8,14 @@ export const maxDuration = 60;
 /**
  * GET /api/cfd/live → the CFD live board: every confirmed CFD alert marked to the live price (armed, at the
  * entry, in the trade, ended and why), plus setups still forming. Each read also moves the alerts on:
- * phases, expiries and detector re-checks are written back. Polled every few seconds by the dashboard.
+ * phases, expiries and detector re-checks are written back. Also every paper setup on the CFD markets today,
+ * ranked by its strategy's record, with live entry status, and the ones that failed. Polled every few seconds by the dashboard.
  */
 export async function GET(req: Request) {
   const db = await staffFromRequest(req);
   if (!db) return unauthorized();
   try {
-    return Response.json(await syncCfdLive(db), { headers: { "cache-control": "no-store" } });
+    return Response.json(await syncCfdLive(db, { setups: true }), { headers: { "cache-control": "no-store" } });
   } catch (e) {
     return Response.json({ error: errMsg(e) }, { status: 500 });
   }

@@ -8,7 +8,7 @@ import { matchesOwner, ownerOptions } from "@/lib/accounts";
 import { equitySeries, istDay, todayIst } from "@/lib/derive";
 import type { CalEvent } from "@/lib/server/news";
 import type { Investor, TelegramAlert, Trade, TradingAccount } from "@/lib/types";
-import { modelName, strategyName, type LeagueStats } from "@aplus/engine";
+import { INSTRUMENTS, modelName, strategyName, type LeagueStats } from "@aplus/engine";
 import { money, num, pct, timeShort } from "@/lib/fmt";
 import { Card, Chip, Empty, ErrorNote, Icon } from "@/components/ui";
 import { ICONS, sessionName, useMe } from "@/components/Shell";
@@ -22,11 +22,12 @@ const ARENAS: { id: ArenaId; name: string; ac: string }[] = [
   { id: "cfd", name: "CFD Arena", ac: "--cfd" }, { id: "delta", name: "Delta Arena", ac: "--delta" },
   { id: "coinswitch", name: "CoinSwitch Arena", ac: "--cs" }, { id: "fyers", name: "Fyers Arena", ac: "--fyers" },
 ];
+const dg = (id: string) => (INSTRUMENTS as Record<string, { digits: number } | undefined>)[id]?.digits ?? 2;
 const tone = (v: number) => (v > 0 ? "up" : v < 0 ? "down" : "");
 const signedMoney = (v: number, ccy = "USD") => `${v > 0 ? "+" : ""}${money(v, ccy, 0)}`;
 
 type Candidate = { key: string; instrument: string; model: string; strategy: string | null; venue: string | null; stage: string; status: "paper" | "live" | "benched"; stats: { paper?: Partial<LeagueStats> } | null };
-type Signal = { id: string; instrument: string; side: string | null; created_at: string };
+type Signal = { id: string; instrument: string; side: string | null; created_at: string; model: string | null; entry: number; stop: number; target: number; rr: number | null; outcome: string | null; meta: { strategy?: string } | null };
 
 /** Smooth area chart drawn to scale, one series, three faint gridlines. */
 function AreaChart({ vals, labels, h = 220 }: { vals: number[]; labels: string[]; h?: number }) {
@@ -71,7 +72,7 @@ export default function Dashboard() {
   const trades = useRows<Trade>({ table: "trades", order: "opened_at", limit: 5000 });
   const alerts = useRows<TelegramAlert>({ table: "telegram_alerts", order: "at", limit: 20 });
   const cands = useRows<Candidate>({ table: "strategy_candidates", select: "key,instrument,model,strategy,venue,stage,status,stats", notNull: "venue", order: "updated_at" });
-  const armed = useRows<Signal>({ table: "signals", select: "id,instrument,side,created_at", eq: ["state", "ARMED"], order: "created_at", limit: 10 });
+  const armed = useRows<Signal>({ table: "signals", select: "id,instrument,side,created_at,model,entry,stop,target,rr,outcome,meta", eq: ["state", "ARMED"], inList: ["outcome", ["pending", "filled"]], order: "created_at", limit: 10 });
   const cal = useApi<{ items: CalEvent[] }>("/api/calendar", 1_800_000);
   const open = useOpenTrades();
   const [owner, setOwner] = useState("all");
@@ -109,7 +110,12 @@ export default function Dashboard() {
   const benched = (cands.rows ?? []).filter((c) => c.stage === "benched").slice(0, 1);
   const attention: { c: string; i: string; t: string; s: string; b: string; h: string }[] = [
     ...(me.settings?.kill_switch ? [{ c: "--down", i: ICONS.power, t: "Kill switch is on", s: "No orders go to any account", b: "Review", h: "/risk" }] : []),
-    ...recentArmed.map((x) => ({ c: "--accent", i: ICONS.cfd, t: `${x.instrument} ${x.side ?? ""} is armed`.trim(), s: `Armed ${timeShort(Date.parse(x.created_at), "Asia/Kolkata")} IST`, b: "Open", h: "/arena/cfd" })),
+    ...recentArmed.slice(0, 3).map((x) => ({
+      c: "--accent", i: ICONS.cfd,
+      t: `${x.instrument} ${x.side ?? ""} · ${x.model === "S" ? strategyName(x.meta?.strategy) : `Model ${x.model}`}${x.outcome === "filled" ? " · filled" : ""}`,
+      s: `Entry ${num(Number(x.entry), dg(x.instrument))} · SL ${num(Number(x.stop), dg(x.instrument))} · TP ${num(Number(x.target), dg(x.instrument))}${x.rr ? ` · ${num(Number(x.rr), 1)}R` : ""} · ${timeShort(Date.parse(x.created_at), "Asia/Kolkata")} IST`,
+      b: "Open", h: "/#cfd-desk",
+    })),
     ...(nextHigh ? [{ c: "--warn", i: "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 7v5l3 2", t: `${nextHigh.currency} ${nextHigh.title}`, s: `${timeShort(nextHigh.at, "Asia/Kolkata")} IST · engines pause ±15 min`, b: "View", h: "/arena/cfd?tab=bias" }] : []),
     ...(failed.length ? [{ c: "--down", i: ICONS.send, t: `${failed.length} Telegram alert${failed.length > 1 ? "s" : ""} failed`, s: "In the last 24 hours", b: "Check", h: "/alerts" }] : []),
     ...benched.map((c) => ({ c: "--down", i: ICONS.league, t: `${c.strategy ?? c.model} benched`, s: `${c.instrument} · back on paper`, b: "Review", h: "/league" })),

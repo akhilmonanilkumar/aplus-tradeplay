@@ -4,6 +4,7 @@ import { errMsg, json } from "@/lib/server/http";
 import { syncCTrader } from "@/lib/server/ctraderSync";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 type CtAccount = { ctid: number; login: number | null; isLive: boolean; balance: number | null; positions: unknown[]; syncedAt: number | null; error: string | null };
 
@@ -28,9 +29,10 @@ export async function GET(req: Request) {
   }
 }
 
-/** POST → sync now: balances, closed trades and alert legs from cTrader. */
+/** POST { days? } → sync now: balances, closed trades and alert legs from cTrader; `days` backfills that far (90 at most). */
 export async function POST(req: Request) {
   const db = await staffFromRequest(req);
   if (!db) return unauthorized();
-  try { return json({ ok: true, note: (await syncCTrader(db)) || "Nothing new" }); } catch (e) { return json({ error: errMsg(e) }, 0, 502); }
+  const { days } = (await req.json().catch(() => ({}))) as { days?: number };
+  try { return json({ ok: true, note: (await syncCTrader(db, { days: Number(days) > 0 ? Number(days) : undefined })) || "Nothing new" }); } catch (e) { return json({ error: errMsg(e) }, 0, 502); }
 }

@@ -10,6 +10,7 @@ import type { AccountType, CashFlow, CopyPolicy, Investor, Order, Signal, Snapsh
 import { dateShort, money, num, pct, signed, toNum } from "@/lib/fmt";
 import { Chip, Empty, ErrorNote, Seg, Spark, Table, Toggle } from "@/components/ui";
 import { ConfirmDelete, EditDeleteButtons } from "@/components/Crud";
+import { HistoryImport } from "@/components/HistoryImport";
 
 const TYPES: AccountType[] = ["master", "sub", "eval", "demo", "investor"];
 const POLICIES: CopyPolicy[] = ["PAPER", "MANUAL", "CONFIRM", "AUTO", "BLOCKED"];
@@ -229,6 +230,7 @@ function Detail({ a, investors, flows, snaps, onSaved, onEdit, onDelete }: { a: 
           {flowEffect(delFlow.kind, Number(delFlow.amount)) !== 0 && <span>The balance and equity move by {money(-flowEffect(delFlow.kind, Number(delFlow.amount)), a.currency)} to match.</span>}
         </ConfirmDelete>
       )}
+      <HistoryImport accountId={a.id} linked={!!a.broker_account} onDone={onSaved} />
       {msg && <p className="faint" style={{ fontSize: 12, marginTop: 8 }}>{msg}</p>}
     </div>
   );
