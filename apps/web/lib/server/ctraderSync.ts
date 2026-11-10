@@ -1,6 +1,10 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { engineConfigured, engineFetch } from "@/lib/server/engineHost";
+import { fromCTraderSymbol, isSameTrade, matchSetup } from "@/lib/ctraderHistory";
+import { loggedSetups } from "@/lib/server/historyImport";
+
+export { fromCTraderSymbol };
 
 /**
  * cTrader → app, read-only. For every prop account matched by its login (the account's broker account
@@ -11,17 +15,6 @@ import { engineConfigured, engineFetch } from "@/lib/server/engineHost";
 
 type Closed = { dealId: number; positionId: number; symbol: string; side: "long" | "short"; units: number; entry: number; exit: number; sl: number | null; pnl: number; fees: number; openedAt: number | null; closedAt: number; balanceAfter: number | null; comment: string | null };
 type Snap = { accounts: { ctid: number; login: number | null; balance: number | null; positions: { id: number; symbol: string; comment: string | null; openedAt: number }[] }[] };
-
-/** Broker symbol → our market id (the reverse of the alert mapping). */
-export const fromCTraderSymbol = (s: string) => {
-  const u = s.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (u.startsWith("XAUUSD")) return "XAUUSD";
-  if (u.startsWith("BTCUSD")) return "BTCUSD";
-  if (u.startsWith("US500") || u.startsWith("SPX")) return "SPX500";
-  if (u.startsWith("NAS100") || u.startsWith("USTEC") || u.startsWith("NDX")) return "NAS100";
-  for (const id of ["EURUSD", "GBPUSD", "USDJPY"]) if (u.startsWith(id)) return id;
-  return s;
-};
 
 /** The alert an order came from: links put "APLUS <first 8 of the alert id>" in the order comment. */
 export const alertRef = (comment: string | null) => comment?.match(/APLUS ([0-9a-f]{8})/i)?.[1]?.toLowerCase() ?? null;
@@ -42,14 +35,17 @@ export function tradeRow(accountId: string, t: Closed, alert: { signal_id: strin
   };
 }
 
-export async function syncCTrader(db: SupabaseClient): Promise<string> {
+/** `days`: pull this far back instead of from the last sync (a backfill; cTrader serves up to 90 days). */
+export async function syncCTrader(db: SupabaseClient, opts: { days?: number } = {}): Promise<string> {
   if (!engineConfigured()) return "";
   const accs = await db.from("trading_accounts").select("id, name, broker_account, synced_at").not("broker_account", "is", null);
   const byLogin = new Map(((accs.data ?? []) as { id: string; name: string; broker_account: string; synced_at: string | null }[]).map((a) => [String(a.broker_account).trim(), a]));
   if (!byLogin.size) return "";
   const snap = await engineFetch<Snap>("GET", "/ctrader");
   if (!snap.accounts?.length) return "";
-  const oldest = Math.min(...[...byLogin.values()].map((a) => (a.synced_at ? Date.parse(a.synced_at) - 86_400_000 : Date.now() - 30 * 86_400_000)));
+  const oldest = opts.days
+    ? Date.now() - Math.min(90, Math.max(1, opts.days)) * 86_400_000
+    : Math.min(...[...byLogin.values()].map((a) => (a.synced_at ? Date.parse(a.synced_at) - 86_400_000 : Date.now() - 30 * 86_400_000)));
   const closed = await engineFetch<{ accounts: { ctid: number; login: number | null; balance: number | null; trades: Closed[]; error: string | null }[] }>("GET", `/ctrader/closed?from=${oldest}`, undefined, 60_000);
 
   // Alerts by their short reference, for linking trades and marking legs Taken.
@@ -63,7 +59,19 @@ export async function syncCTrader(db: SupabaseClient): Promise<string> {
     if (!acc) continue;
     if (c.error) errors.push(`${acc.name}: ${c.error}`);
     if (c.trades.length) {
-      const rows = c.trades.map((t) => tradeRow(acc.id, t, byRef.get(alertRef(t.comment) ?? "") ?? null));
+      // Trades already in the journal from a history file are not imported twice.
+      const ex = await db.from("trades").select("instrument, side, exit, closed_at").eq("account_id", acc.id).like("external_id", "cth:%").gte("closed_at", new Date(oldest - 86_400_000).toISOString());
+      const files = ((ex.data ?? []) as { instrument: string; side: string; exit: number; closed_at: string }[]).map((t) => ({ instrument: t.instrument, side: t.side, exit: Number(t.exit), closedAt: Date.parse(t.closed_at) }));
+      const fresh = c.trades.filter((t) => !files.some((f) => isSameTrade(f, { instrument: fromCTraderSymbol(t.symbol), side: t.side, exit: t.exit, closedAt: t.closedAt })));
+      // Trades placed by hand (no alert reference) are linked to the logged setup they match.
+      const setups = await loggedSetups(db, [...new Set(fresh.map((t) => fromCTraderSymbol(t.symbol)))], Math.min(...fresh.map((t) => t.openedAt ?? t.closedAt)), Date.now()).catch(() => []);
+      const rows = fresh.map((t) => {
+        const alert = byRef.get(alertRef(t.comment) ?? "") ?? null;
+        if (alert) return tradeRow(acc.id, t, alert);
+        const s = matchSetup({ instrument: fromCTraderSymbol(t.symbol), side: t.side, entry: t.entry, openedAt: t.openedAt ?? t.closedAt }, setups);
+        const row = tradeRow(acc.id, s && t.sl === null ? { ...t, sl: s.stop } : t, s ? { signal_id: s.id, model: s.model } : null);
+        return s && t.sl === null ? { ...row, review: "Imported from cTrader; stop from the matching setup" } : row;
+      });
       const up = await db.from("trades").upsert(rows, { onConflict: "account_id,external_id", ignoreDuplicates: true }).select("id");
       if (up.error) errors.push(`${acc.name}: ${up.error.message}`); else imported += up.data?.length ?? 0;
     }

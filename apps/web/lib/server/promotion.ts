@@ -64,15 +64,25 @@ export async function evaluateCandidates(db: SupabaseClient, rulesRaw: unknown):
       backtest: row?.backtest ?? null,
     };
   });
-  const up = await db.from("strategy_candidates").upsert(entries.map((e) => {
+  // Existing records get fresh stats; new ones are inserted on paper. Two writes, each with the same
+  // columns on every row: a mixed batch sends the new rows' missing columns as null.
+  const row = (e: Entry) => {
     const p = parseVenueKey(e.key)!;
     return {
       key: e.key, venue: e.venue, instrument: e.instrument, model: p.model, strategy: p.strategy, gate_version: g.version, updated_at: new Date(now).toISOString(),
       stats: { paper: e.paper, recent: e.recent, sinceLive: e.sinceLive, checks: paperChecks(e.paper, g, e.backtest) },
-      ...(rows.has(e.key) ? {} : { stage: "paper", status: "paper", stage_since: new Date(now).toISOString() }),
     };
-  }), { onConflict: "key" });
-  if (up.error) throw new Error(up.error.message);
+  };
+  const known = entries.filter((e) => rows.has(e.key)), fresh = entries.filter((e) => !rows.has(e.key));
+  for (let i = 0; i < known.length; i += 500) {
+    const up = await db.from("strategy_candidates").upsert(known.slice(i, i + 500).map(row), { onConflict: "key" });
+    if (up.error) throw new Error(up.error.message);
+  }
+  if (fresh.length) {
+    // ignoreDuplicates: a retired key (not loaded above) keeps its stage.
+    const ins = await db.from("strategy_candidates").upsert(fresh.map((e) => ({ ...row(e), stage: "paper", status: "paper", stage_since: new Date(now).toISOString() })), { onConflict: "key", ignoreDuplicates: true });
+    if (ins.error) throw new Error(ins.error.message);
+  }
   if (!r.enabled) return `${entries.length} venue strategies scored · League moves off`;
 
   const moves = leaguePass(entries, g, now).filter((m) => (r.autoPromote || !(m.to === "live_small" || m.to === "live")) && (r.autoDemote || !(isLiveStage(m.from) && m.to === "benched")));
