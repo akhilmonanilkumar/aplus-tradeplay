@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 /** @type {import('next').NextConfig} */
 
 // Content-Security-Policy (with a per-request nonce) is set in proxy.ts.
@@ -12,6 +14,10 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
+  // Self-hosted on the droplet: a standalone server with only the files it needs. The tracing root is the
+  // repository, so the workspace engine package is included.
+  output: "standalone",
+  outputFileTracingRoot: fileURLToPath(new URL("../..", import.meta.url)),
   reactStrictMode: true,
   poweredByHeader: false,
   transpilePackages: ["@aplus/engine"],

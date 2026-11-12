@@ -2,3 +2,19 @@
 	encode gzip
 	reverse_proxy engine:8787
 }
+
+# Dashboard. Scheduled passes (Supabase pg_cron) call the www host, so the apex redirects there.
+{$APP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:3000 {
+		# Long passes (autopilot, league agent) run up to five minutes.
+		transport http {
+			read_timeout 330s
+			write_timeout 330s
+		}
+	}
+}
+
+{$APEX_DOMAIN} {
+	redir https://{$APP_DOMAIN}{uri} permanent
+}

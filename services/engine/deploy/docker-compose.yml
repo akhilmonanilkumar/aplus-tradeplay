@@ -1,4 +1,5 @@
-# Engine host stack: engine (API + venue streams), TimescaleDB (tick store), Caddy (HTTPS).
+# The whole stack on one droplet: the dashboard (web), the engine (API + venue streams), TimescaleDB
+# (tick store) and Caddy (HTTPS for the dashboard and engine domains).
 services:
   engine:
     build: { context: ../../.., dockerfile: services/engine/deploy/Dockerfile }
@@ -10,6 +11,19 @@ services:
     volumes: [engine-data:/data]
     depends_on: [db]
     expose: ["8787"]
+  web:
+    build:
+      context: ../../..
+      dockerfile: apps/web/Dockerfile
+      secrets: [webenv]
+    restart: unless-stopped
+    env_file: web.env
+    environment:
+      # The dashboard reaches the engine inside the Docker network (still HMAC-signed).
+      ENGINE_URL: http://engine:8787
+    expose: ["3000"]
+    depends_on: [engine]
+    mem_limit: 1g
   db:
     image: timescale/timescaledb:2.17.2-pg16
     restart: unless-stopped
@@ -24,9 +38,12 @@ services:
     image: caddy:2.8.4
     restart: unless-stopped
     ports: ["80:80", "443:443"]
-    environment: { ENGINE_DOMAIN: "${ENGINE_DOMAIN}" }
+    environment: { ENGINE_DOMAIN: "${ENGINE_DOMAIN}", APP_DOMAIN: "${APP_DOMAIN:-www.tradeplay.cloud}", APEX_DOMAIN: "${APEX_DOMAIN:-tradeplay.cloud}" }
     volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddy-data:/data]
-    depends_on: [engine]
+    depends_on: [engine, web]
+secrets:
+  webenv:
+    file: ./web.env
 volumes:
   engine-data:
   caddy-data:

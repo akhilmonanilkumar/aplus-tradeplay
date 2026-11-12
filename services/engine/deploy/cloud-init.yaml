@@ -13,4 +13,6 @@ runcmd:
   - ufw allow 443/tcp
   - ufw --force enable
   - mkdir -p /mnt/ticks/pg
+  # 2 GB swap: the dashboard build needs headroom next to TimescaleDB.
+  - fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab
   - dpkg-reconfigure -f noninteractive unattended-upgrades

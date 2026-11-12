@@ -1,0 +1,34 @@
+name: Deploy
+
+# Every push to main redeploys the droplet (dashboard + engine) over SSH, after CI's checks pass on the same
+# commit. Repository secrets: DEPLOY_HOST (the droplet's IP), DEPLOY_USER (e.g. root) and DEPLOY_SSH_KEY
+# (a private key whose public half is in the droplet's ~/.ssh/authorized_keys). Without them the job is skipped.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: { group: deploy, cancel-in-progress: false }
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HOST: ${{ secrets.DEPLOY_HOST }}
+      USER_: ${{ secrets.DEPLOY_USER }}
+      KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+    steps:
+      - name: Deploy over SSH
+        if: ${{ env.HOST != '' && env.KEY != '' }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/id "${USER_:-root}@$HOST" 'cd ~/aplus-tradeplay && git checkout -q main && bash services/engine/deploy/deploy.sh'
+      - name: Not configured
+        if: ${{ env.HOST == '' || env.KEY == '' }}
+        run: echo "DEPLOY_HOST / DEPLOY_SSH_KEY not set; deploy by hand with services/engine/deploy/deploy.sh"

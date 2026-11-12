@@ -53,6 +53,8 @@ Every request except `/health` carries `x-engine-ts` (ms) and
    Venue keys (Delta, CoinSwitch, Fyers, cTrader) live only in this host's `.env`, never in Vercel.
    The Integrations page shows the host, its IP and each venue's clock.
 
+The dashboard runs on the same droplet (the `web` service); moving it from Vercel: `deploy/MIGRATION.md`.
+
 Updates: run `services/engine/deploy/deploy.sh` again. Logs: `cd services/engine/deploy && docker compose logs -f engine`.
 
 ## Develop
